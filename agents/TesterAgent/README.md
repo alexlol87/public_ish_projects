@@ -1,56 +1,63 @@
-# TesterAgent: a story testing agent for VS Code GitHub Copilot
+# TesterAgent: a Bruno API test writer for VS Code GitHub Copilot
 
-**Story Tester** is a custom agent for GitHub Copilot in Visual Studio Code. Give it a Jira key, tell it what to test,
-and it reads the story with your `jira-cli` skill, proposes a test plan for just that part, and after you approve it
-tests it against the running application with `curl`, the browser and other terminal tools. Secrets come only from
-environment variables you set; it never sees or shows their values. It never edits your code or files.
+**Story Tester** is a custom agent for GitHub Copilot in Visual Studio Code. Open your Bruno collection as the
+workspace, give the agent a Jira key, and it reads the story with your `jira-cli` skill, finds the test cases, and
+writes the Bruno requests into the collection: a folder for the story, a subfolder per scenario (positive, negative
+and boundary), one request file per call, in the order you should run them. It **creates** requests; it never runs
+them unless you ask. It never touches your authentication or secrets.
 
 Written for the same custom agent format as [ReviewAgent](../ReviewAgent/)
 ([custom agents](https://code.visualstudio.com/docs/agent-customization/custom-agents)).
 
 | File | What it is |
 |------|------------|
-| [`.github/agents/story-tester.agent.md`](.github/agents/story-tester.agent.md) | The agent: its tools and its testing instructions. |
+| [`.github/agents/story-tester.agent.md`](.github/agents/story-tester.agent.md) | The agent: its tools and its instructions. |
 
 CI checks it with ReviewAgent's [`scripts/check_agents.py`](../ReviewAgent/scripts/check_agents.py): name and
-description present, known front matter keys and tools, and no tool that edits files.
+description present, known front matter keys and tools, and no tool that edits existing files.
 
-## How it works
+## What it creates
 
-1. **Inputs.** It reads the Jira ticket (description, acceptance criteria, comments, subtasks, linked issues) with
-   `jira-cli`'s read-only commands, your indications of what to test, the files you attach (OpenAPI, Postman
-   collections, test data, notes) and, when useful, the code behind the tested part. Missing inputs (environment,
-   accounts, variable names) it asks for in one round.
-2. **Test plan.** It proposes a table of tests covering only what you asked for: which acceptance criterion, how
-   (curl command, browser steps), the expected result, and whether it changes data. Nothing runs against the
-   application until you approve.
-3. **Run.** It runs exactly the approved tests, compares actual with expected, records failures and goes on, and asks
-   before anything outside the plan: another endpoint, environment, write or tool.
-4. **Report.** Pass/fail per test, reproduction steps for each failure (secrets as `$VARIABLE` names, secret values in
-   responses replaced with `***`), the data the tests created or changed, and what was not tested.
+```
+PROJ-123 Cancel order/
+  RUN-ORDER.md                                   what was created, what to set up, the order to run
+  01 Positive - Cancel an unshipped order/
+    01 Create order.bru
+    02 Cancel order, expect 200.bru
+    03 Get order, status is CANCELLED.bru
+  03 Negative - Cancel a shipped order returns 409/
+  04 Negative - Quantity 0, -1 and -20 are rejected with 400/
+  05 Negative - No token returns 401/
+  06 Beyond the story - Cancel twice returns 409/
+```
 
-## Secrets
+- Folder names say what must happen. Positive scenarios come first, then negative, then **beyond the story**:
+  scenarios the story doesn't mention but the code shows are important (validation rules, permissions, state
+  checks). Delete the ones you don't want.
+- Negative flows are always covered: if the story says "positive numbers" with the example `5`, it also writes
+  requests with `100` (accepted) and `0`, `-1`, `-20`, `"abc"`, `null` (refused), and asserts the error.
+- A scenario that needs several calls gets one request file per call, chained with `vars:post-response`. Every
+  scenario sets up its own data, so any folder runs alone.
+- `seq` in the requests and folders follows the numbers in the names, so the sidebar and **Run folder** use the order
+  you should follow. Each request has `assert` blocks for the status code and key fields, and a `docs` block with the
+  story reference, the expected result and whether it changes data.
+- `RUN-ORDER.md` (also shown in the chat) lists the run order, what to set before running (environment, token,
+  test data the agent couldn't create), questions it couldn't answer, and what it didn't cover.
 
-Set them as environment variables; give the agent only their names ("the token is in `API_TOKEN`"). The agent uses them
-only inside commands (`-H "Authorization: Bearer $API_TOKEN"`), checks they are set without printing them, never runs
-`env`, `printenv`, `set -x` or `curl -v`/`--trace` (which print them), never puts them in URLs or files, redacts secrets
-found in responses, and never types a secret in the browser: when a page needs sign-in, it asks you to sign in.
+## Conventions and secrets
 
-Copilot runs commands in its own terminal, which only has the variables VS Code itself started with. Either:
+Before writing, the agent reads your collection and copies its conventions: the request file format, the base URL
+variable, the path style, the variable names (from requests, and from the *key names* of your environment files, never
+their values), the naming and `seq` style, and how authentication is done.
 
-- export them in a terminal and start VS Code from it:
+- Authentication: only variable references, such as `Authorization: Bearer {{token}}` and, if your requests send one,
+  `x-api-key: {{apiKey}}`, using your collection's own variable names. You provide the token in the environment.
+- It never opens or edits `.env` files, environment files or `collection.bru`, never prints variable values, and
+  writes only new files inside the new story folder.
+- If a request needs a variable your environment doesn't define, it declares it in the request's own
+  `vars:pre-request` and lists it in `RUN-ORDER.md`.
 
-  ```bash
-  read -rs API_TOKEN && export API_TOKEN   # typed without echo, kept out of shell history
-  export BASE_URL=https://staging.example.com
-  code .
-  ```
-
-- or keep them in a git-ignored file and tell the agent to load it in each command without reading it:
-  `set -a; . ./.env.test; set +a; curl ...`.
-
-Don't put secrets in `terminal.integrated.env.*` settings or in the chat. Instructions reduce the risk of a leak but
-can't rule it out: use test accounts and short-lived tokens, and keep terminal command approval on.
+Instructions reduce the risk of a leak but can't rule it out: use test tokens and keep terminal command approval on.
 
 ## Install
 
@@ -76,27 +83,26 @@ For every project, save it to `~/.copilot/agents/story-tester.agent.md` instead.
 
 ## Use
 
-Pick **Story Tester** in the agent picker, then:
+Open the Bruno collection folder in VS Code (add the API's source folder to the workspace if you want the agent to
+find uncovered scenarios in the code), pick **Story Tester** in the agent picker, then:
 
 ```text
-Test AC2 and AC3 of PROJ-123 on https://staging.example.com.
-Token in API_TOKEN, test customer password in CUSTOMER_PASSWORD. API spec: #file:docs/openapi.yaml
+PROJ-123
 ```
 
 ```text
-PROJ-456: only check that the export button is hidden for read-only users, in the browser. I'm signed in already.
+PROJ-456, only AC2 and AC3. The API code is in the api/ folder. Put it under the "Orders" folder.
 ```
 
-It answers with a test plan; reply "approved", or change it ("skip T3", "don't create orders, use order 42").
+Then, in Bruno, reload the collection, pick the environment, make sure your token is set, and run the story folder
+or one scenario. To have the agent run something, say so explicitly: "run `03 Negative - ...` against staging".
 
 ## Tools and permissions
 
-`tools: ['read', 'search', 'execute', 'web', 'browser', 'vscode/askQuestions']`
+`tools: ['read', 'search', 'execute', 'edit/createFile', 'vscode/askQuestions']`
 
-- `read` and `search` read the context files and the code.
-- `execute` runs `curl`, the `jira` read commands, and other test commands you approve. It is the risky one: it can
-  run any command, so keep VS Code's terminal approval on (manual approval shows each command before it runs) and
-  don't auto-approve `curl` with write methods.
-- `web` and `browser` read pages and test UI flows; it submits forms only when the approved plan says so.
-- `vscode/askQuestions` asks for missing inputs and plan approval; other harnesses ignore it and the agent asks in text.
-- No `edit` tool: it can't change your files.
+- `read` and `search` read the collection, the code and context files.
+- `edit/createFile` creates the new requests and `RUN-ORDER.md`. It can't edit or delete existing files.
+- `execute` is for `jira-cli` read commands and listing environment key names. The agent is told not to run `bru`,
+  `curl` or the app unless you ask; keep VS Code's terminal approval on to see every command.
+- `vscode/askQuestions` asks for missing inputs; other harnesses ignore it and the agent asks in text.
