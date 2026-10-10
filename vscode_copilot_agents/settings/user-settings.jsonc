@@ -1,0 +1,90 @@
+// Recommended VS Code USER settings for working with GitHub Copilot agents, subagents and skills.
+// Merge into your user settings: Command Palette > "Preferences: Open User Settings (JSON)".
+// Setting IDs and defaults checked against the VS Code docs approved on 2026-09-30.
+// Experimental/Preview settings can be renamed between releases; check the AI settings reference if one is greyed out:
+// https://code.visualstudio.com/docs/agents/reference/ai-settings
+{
+  // ---------- Harness ----------
+  // Start new editor chats on the Copilot harness (Agent Host) instead of the Local harness,
+  // which is deprecated and will be removed. (Experimental)
+  "chat.editor.preferCopilotHarness": true,
+
+  // ---------- Custom agents and subagents ----------
+  // Off by default: without it, Copilot sessions ignore your .agent.md files.
+  "github.copilot.chat.cli.customAgents.enabled": true,
+  // Let subagents delegate further (max depth 5). (Local harness; not documented for Copilot)
+  // None of the template agents recurse, so leave it off until one of yours does, and give that agent a stopping rule.
+  // "chat.subagents.allowInvocationsFromSubagents": true,
+  // Routes subagents without a pinned model to Auto instead of the main chat's model. Auto here is not limited to the
+  // main model's cost tier, so pin `model:` on worker agents when cost matters.
+  // (Local harness; not documented for Copilot)
+  "chat.subagents.defaultToAuto": true,
+  // Show what each subagent cost in AI credits.
+  "chat.subagents.showCreditUsage": true,
+
+  // ---------- Skills ----------
+  // Dedicated skill tool. Required for skills with `context: fork` (run in their own subagent). (Experimental)
+  "github.copilot.chat.skillTool.enabled": true,
+
+  // ---------- Instructions ----------
+  // AGENTS.md files in subfolders (monorepos). (Local harness; Copilot uses its own nested AGENTS.md rules)
+  "chat.useNestedAgentsMdFiles": true,
+  // Open a subfolder of a repo and still get the repo root's instructions, agents, skills and hooks.
+  "chat.useCustomizationsInParentRepositories": true,
+  // Follow Markdown links from one instructions file to another. (Local harness)
+  "chat.includeReferencedInstructions": true,
+  // Load ~/.bashrc (or your PowerShell profile) before each shell command in local Copilot sessions, so tools set up
+  // there (nvm, pyenv) are on PATH. Off by default.
+  "chat.agentHost.shellTool.initScript.enabled": true,
+
+  // ---------- Plugins (bundles of skills + agents + MCP + hooks) ----------
+  "chat.plugins.enabled": true,
+
+  // ---------- Context and cost ----------
+  // Compress large terminal output (diffs, lockfiles, install progress) before the model sees it. (Preview)
+  "chat.tools.compressOutput.enabled": true,
+
+  // ---------- Approvals ----------
+  // Commands the agent may run without asking. A `false` rule only asks; it never blocks.
+  // Keep this to read-only and test commands; add your project's own test/lint/build commands.
+  // Test and build commands run code from the repo, so an agent that edits package.json or conftest.py can then run
+  // anything without a prompt. Pair this list with the sandbox below.
+  // Rules end in (\s|$), not \b: \b also matches before "-" or ":", which would approve `npm run build-and-deploy`.
+  "chat.tools.terminal.autoApprove": {
+    "/^git (status|diff|log|show)(\\s|$)/": true,
+    "/^git branch(\\s+(--list|-a|-r|-v|-vv|--show-current))*\\s*$/": true,
+    "/^(npm|pnpm|yarn) (test|run (test|lint|typecheck|build))(\\s|$)/": true,
+    "/^(pytest|python -m pytest)(\\s|$)/": true,
+    "/^(go test|cargo test|swift test|dotnet test)(\\s|$)/": true,
+    "/^git .*--output/": false,
+    "/^git (push|reset|clean|rebase)(\\s|$)/": false
+  },
+  // Terminal sandbox (Preview on macOS, Linux and WSL2; Experimental for the Copilot built-in shell): file system
+  // limits that still apply under "Allow all" and Autopilot. Network stays open unless you also set allowNetwork to
+  // false; for the Copilot built-in shell that blocks all outbound access (domain lists aren't applied).
+  // Turn on once you've checked your build works inside it; `/sandbox-policy` shows what a Copilot session applies.
+  // "chat.agent.sandbox.enabled": "on",
+  // "chat.agent.sandbox.allowNetwork": false,
+
+  // ---------- Sessions and worktrees ----------
+  // Copy git-ignored files into each new agent worktree. (Experimental) Worktree sessions run with "Allow all",
+  // so only list files the agent can safely read: copying .env hands your secrets to an agent that never asks.
+  // A workspace value replaces this one. For node_modules, git.worktreeSymlinkFolders (Experimental) links the
+  // folder instead of copying it, but changes through the link affect your main checkout.
+  // "git.worktreeIncludeFiles": ["node_modules/**"],
+  // Tidy the sessions list: mark sessions with a merged PR done after 15 idle days, delete 15 days later.
+  "chat.agentSessions.autoMarkAsDoneMergedSessionsAfterDays": 15,
+  "chat.agentSessions.autoDeleteArchivedMergedSessionsAfterDays": 15,
+
+  // ---------- Search noise (also applies to agent grep/text search) ----------
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.next": true,
+    "**/coverage": true,
+    "**/*.min.js": true,
+    "**/*.lock": true,
+    "**/package-lock.json": true
+  }
+}

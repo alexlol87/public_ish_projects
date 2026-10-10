@@ -1,0 +1,123 @@
+name: window_borders
+
+# Window Borders, the macOS menu bar app in window_borders/: unit tests, an xcodebuild build that fails on any compiler
+# warning, the .app bundle, and a launch test of that bundle. Runs on an Apple Silicon runner, which is the only place
+# this Swift/AppKit code can be compiled (the dev sandboxes are Linux). Pushes to any branch run it, so a feature branch
+# gets a compile check before its PR.
+on:
+  pull_request:
+    paths:
+      - 'window_borders/**'
+      - '.github/workflows/window-borders.yml'
+  push:
+    paths:
+      - 'window_borders/**'
+      - '.github/workflows/window-borders.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: window-borders-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: window_borders
+
+jobs:
+  build:
+    name: build, test, launch
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: xcodebuild -version && swift --version && xcodebuild -list
+
+      - name: Unit tests (swift test, warnings are errors)
+        run: swift test -Xswiftc -warnings-as-errors
+
+      - name: xcodebuild build (warnings are errors)
+        run: |
+          set -o pipefail
+          xcodebuild build -scheme WindowBorders -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/dd" SWIFT_TREAT_WARNINGS_AS_ERRORS=YES 2>&1 | tee "$RUNNER_TEMP/build.log"
+          if grep -E ': warning: ' "$RUNNER_TEMP/build.log"; then
+            echo "::error::The build has compiler warnings"
+            exit 1
+          fi
+
+      - name: xcodebuild test
+        # Xcode names a package's schemes itself: "<Package>-Package" when there are several products, else the
+        # product's own scheme, which then includes the test targets.
+        run: |
+          set -o pipefail
+          schemes=$(xcodebuild -list -json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join((d.get("workspace") or d.get("project"))["schemes"]))')
+          echo "Schemes: $schemes"
+          scheme=WindowBorders
+          for s in $schemes; do [ "$s" = WindowBorders-Package ] && scheme=$s; done
+          xcodebuild test -scheme "$scheme" -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/dd" 2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E "Test Suite|Executed|error|failed" | tail -n 40
+
+      - name: Build the app bundle
+        run: scripts/build-app.sh
+
+      - name: Launch test
+        # The runner has no Accessibility permission, so the app should start, show its onboarding window and stay up.
+        run: |
+          app="build/Window Borders.app"
+          defaults read "$PWD/$app/Contents/Info" LSUIElement
+          test -s "$app/Contents/Resources/AppIcon.icns" || { echo "::error::The app icon is missing"; exit 1; }
+          "$app/Contents/MacOS/WindowBorders" > "$RUNNER_TEMP/launch.log" 2>&1 &
+          pid=$!
+          sleep 10
+          if ! kill -0 "$pid"; then
+            echo "::error::The app quit or crashed at launch"
+            cat "$RUNNER_TEMP/launch.log"
+            exit 1
+          fi
+          kill "$pid"
+          cat "$RUNNER_TEMP/launch.log"
+
+      - name: Zip the app
+        run: ditto -c -k --keepParent "build/Window Borders.app" "build/WindowBorders.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: window-borders-app
+          path: window_borders/build/WindowBorders.zip
+          if-no-files-found: error
+
+  release:
+    # Every green build of main replaces the "window-borders-latest" release, so anyone can download the current app
+    # without a GitHub login (Actions artifacts need one).
+    name: publish the latest build
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: window-borders-app
+      - name: Replace the window-borders-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md << EOF
+          The latest Window Borders build from \`main\` (commit ${GITHUB_SHA::7}), built and tested on macOS 15, Apple Silicon.
+
+          **Install:** unzip \`WindowBorders.zip\`, move \`Window Borders.app\` to /Applications, then run
+          \`xattr -dr com.apple.quarantine "/Applications/Window Borders.app"\` once (the app is ad-hoc signed, so macOS
+          quarantines the download). Open it and grant Accessibility when asked. See window_borders/README.md.
+          EOF
+          gh release delete window-borders-latest --cleanup-tag --yes || true
+          gh release create window-borders-latest WindowBorders.zip --target "$GITHUB_SHA" --latest \
+            --title "Window Borders (latest build)" --notes-file notes.md

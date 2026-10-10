@@ -1,0 +1,28 @@
+name: skills_updated
+
+# skills_updated/: every SKILL.md has a name and a description, and the README's skill list matches them.
+on:
+  pull_request:
+    paths:
+      - 'skills_updated/**'
+      - '.github/workflows/skills.yml'
+  push:
+    paths:
+      - 'skills_updated/**'
+      - '.github/workflows/skills.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: skills index
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: skills_updated
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/skills_index.py

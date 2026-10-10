@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Window Borders app icon: a screen showing overlapping windows, each with its own colored border. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#323B5E"/>
+      <stop offset="1" stop-color="#141830"/>
+    </linearGradient>
+    <linearGradient id="wallpaper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3A2F6B"/>
+      <stop offset="0.55" stop-color="#1E2A55"/>
+      <stop offset="1" stop-color="#0F3A4F"/>
+    </linearGradient>
+    <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E9ECF5"/>
+      <stop offset="1" stop-color="#B9BFD0"/>
+    </linearGradient>
+    <linearGradient id="stand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C9CEDC"/>
+      <stop offset="1" stop-color="#9097AC"/>
+    </linearGradient>
+  </defs>
+
+  <!-- macOS icon grid: 824 pt body with a 100 pt margin -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="4"/>
+
+  <!-- stand -->
+  <path d="M452 690 L572 690 L596 776 L428 776 Z" fill="url(#stand)"/>
+  <rect x="356" y="768" width="312" height="30" rx="15" fill="url(#stand)"/>
+
+  <!-- display -->
+  <rect x="166" y="226" width="692" height="474" rx="40" fill="url(#bezel)"/>
+  <rect x="190" y="250" width="644" height="400" rx="20" fill="url(#wallpaper)"/>
+
+  <!-- windows, back to front; each border is drawn last so the title bar never covers it -->
+  <g stroke-linejoin="round">
+    <rect x="232" y="292" width="330" height="222" rx="18" fill="#1B2036"/>
+    <path d="M232 332 V310 Q232 292 250 292 H544 Q562 292 562 310 V332 Z" fill="#262C47"/>
+    <circle cx="260" cy="312.0" r="7" fill="#FF5F57"/><circle cx="282" cy="312.0" r="7" fill="#FEBC2E"/><circle cx="304" cy="312.0" r="7" fill="#28C840"/>
+    <rect x="232" y="292" width="330" height="222" rx="18" fill="none" stroke="#34C759" stroke-width="12"/>
+    <rect x="452" y="348" width="340" height="250" rx="18" fill="#1B2036"/>
+    <path d="M452 388 V366 Q452 348 470 348 H774 Q792 348 792 366 V388 Z" fill="#262C47"/>
+    <circle cx="480" cy="368.0" r="7" fill="#FF5F57"/><circle cx="502" cy="368.0" r="7" fill="#FEBC2E"/><circle cx="524" cy="368.0" r="7" fill="#28C840"/>
+    <rect x="452" y="348" width="340" height="250" rx="18" fill="none" stroke="#0A84FF" stroke-width="12"/>
+    <rect x="290" y="452" width="250" height="168" rx="16" fill="#1B2036"/>
+    <path d="M290 490 V468 Q290 452 306 452 H524 Q540 452 540 468 V490 Z" fill="#262C47"/>
+    <circle cx="318" cy="471.0" r="6.5" fill="#FF5F57"/><circle cx="338" cy="471.0" r="6.5" fill="#FEBC2E"/><circle cx="358" cy="471.0" r="6.5" fill="#28C840"/>
+    <rect x="290" y="452" width="250" height="168" rx="16" fill="none" stroke="#FF9500" stroke-width="12"/>
+  </g>
+</svg>

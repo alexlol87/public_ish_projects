@@ -1,0 +1,82 @@
+{
+  "name": "window-colors",
+  "displayName": "Window Colors",
+  "description": "Gives every VS Code window its own color, also windows with no folder or workspace open.",
+  "version": "0.2.2",
+  "publisher": "alexlol87",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexlol87/public_ish_projects.git",
+    "directory": "window_colors"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other",
+    "Themes"
+  ],
+  "keywords": [
+    "color",
+    "window",
+    "peacock",
+    "workspace"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "windowColors.pick",
+        "title": "Change This Window's Color",
+        "category": "Window Colors"
+      }
+    ],
+    "configuration": {
+      "title": "Window Colors",
+      "properties": {
+        "windowColors.stripeWidth": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 0,
+          "maximum": 20,
+          "markdownDescription": "Width in pixels of the colored stripe on the left of every editor (and the matching mark in the scrollbar). `0` turns the stripe off."
+        },
+        "windowColors.tintFolderWindows": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "In windows with a folder or workspace open, color the window border, title bar, activity bar and status bar by writing `workbench.colorCustomizations` into that folder's `.vscode/settings.json` (like Peacock), replacing colors a folder still has from Peacock."
+        },
+        "windowColors.tintEmptyWindows": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "In windows with no folder open, color the window border, title bar, activity bar and status bar too. VS Code has no per-window settings, so this writes `workbench.colorCustomizations` into your user settings whenever such a window gets focus: folder windows keep their own colors, but other open windows without a folder show the color of the one focused last."
+        },
+        "windowColors.palette": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+          },
+          "default": [],
+          "markdownDescription": "Colors handed out to new windows, as `#rrggbb`. Empty uses the built-in ten."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/unit/*.test.js",
+    "test:vscode": "node test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.1.0"
+  }
+}
