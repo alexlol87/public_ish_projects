@@ -1,0 +1,53 @@
+name: window_colors
+
+# Window Colors, the VS Code extension in window_colors/: unit tests, the extension run inside a real VS Code (an
+# empty window and a folder window, on the oldest supported and the current stable release), and the .vsix to install.
+on:
+  pull_request:
+    paths:
+      - 'window_colors/**'
+      - '.github/workflows/window-colors.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'window_colors/**'
+      - '.github/workflows/window-colors.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: window-colors-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: window_colors
+
+jobs:
+  test:
+    name: tests in VS Code ${{ matrix.vscode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        vscode: ['1.75.0', stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: window_colors/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: run inside VS Code
+        env:
+          VSCODE_VERSION: ${{ matrix.vscode }}
+        run: xvfb-run -a npm run test:vscode
+      - if: matrix.vscode == 'stable'
+        run: npx vsce package
+      - if: matrix.vscode == 'stable'
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-colors-vsix
+          path: window_colors/*.vsix
