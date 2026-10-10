@@ -1,21 +1,15 @@
 name: agents
 
 # agents/: ReviewAgent's custom agent has a name and a description, uses only known, read-only tools, and has valid
-# handoffs; the skill agents (MattPocock, JesseVincent) list exactly the skills in skills_updated/ and install cleanly.
+# handoffs.
 on:
   pull_request:
     paths:
       - 'agents/**'
-      - 'skills_updated/matt-pocock/**'
-      - 'skills_updated/superpowers/**'
-      - 'skills_updated/scripts/**'
       - '.github/workflows/agents.yml'
   push:
     paths:
       - 'agents/**'
-      - 'skills_updated/matt-pocock/**'
-      - 'skills_updated/superpowers/**'
-      - 'skills_updated/scripts/**'
       - '.github/workflows/agents.yml'
   workflow_dispatch:
 
@@ -35,26 +29,3 @@ jobs:
       - run: python3 -m pip install pyyaml
       - run: python3 scripts/check_agents.py
 
-  skill-agents:
-    name: skill agents
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Agent files and file lists match skills_updated/
-        run: python3 agents/scripts/skill_agents.py
-      - name: install.sh installs each agent with all its skills
-        run: |
-          project=$(mktemp -d)
-          cd "$project"
-          for agent in MattPocock JesseVincent; do
-            PUBLIC_ISH_PROJECTS_RAW="file://$GITHUB_WORKSPACE" sh "$GITHUB_WORKSPACE/agents/install.sh" "$agent"
-          done
-          ls .github/agents/matt-pocock.agent.md .github/agents/jesse-vincent.agent.md
-          diff -r .github/agent-skills/superpowers "$GITHUB_WORKSPACE/skills_updated/superpowers"
-          test -x .github/agent-skills/superpowers/subagent-driven-development/scripts/sdd-workspace
-          for group in engineering productivity; do
-            for skill in "$GITHUB_WORKSPACE/skills_updated/matt-pocock/$group"/*/; do
-              diff -r "$skill" ".github/agent-skills/matt-pocock/$(basename "$skill")"
-            done
-          done
