@@ -32,7 +32,7 @@ KNOWN_TOOLS = {
     "agent", "agent/runSubagent", "todo", "todos", "vscode/askQuestions",
 }
 # Tools that edit files, run arbitrary commands or hand the work to an agent that can. "edit/createFile" is the one
-# write the reviewer needs (its report file), so it is not listed.
+# write the reviewer and the tester need (the report file, the new Bruno requests), so it is not listed.
 WRITE_TOOLS = {
     "edit", "Edit", "MultiEdit", "Write", "NotebookEdit", "*", "agent", "agent/runSubagent", "Task",
     "execute/createAndRunTask", "execute/runNotebookCell", "newWorkspace",
@@ -84,8 +84,8 @@ def problems(path):
             yield f"tool {tool!r} can edit files or delegate"
         elif name.lower() not in known and "/" not in name:
             yield f"unknown tool {tool!r} (VS Code would ignore it)"
-    if "edit/createFile" in tools and "REVIEW-" not in body:
-        yield "edit/createFile is only for the review report file; the body must describe it (REVIEW-...)"
+    if "edit/createFile" in tools and not any(marker in body for marker in ("REVIEW-", "RUN-ORDER")):
+        yield "edit/createFile is only for the agent's own output files; the body must describe them (REVIEW-..., RUN-ORDER.md)"
     for handoff in meta.get("handoffs") or []:
         if not isinstance(handoff, dict) or not handoff.get("label") or not handoff.get("agent"):
             yield f"handoff without a label or an agent: {handoff!r}"

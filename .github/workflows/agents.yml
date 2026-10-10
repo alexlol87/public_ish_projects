@@ -1,7 +1,7 @@
 name: agents
 
 # agents/: ReviewAgent's and TesterAgent's custom agents have a name and a description, use only known tools that
-# can't edit files, and have valid handoffs.
+# can't edit files (except creating them), and have valid handoffs.
 on:
   pull_request:
     paths:
