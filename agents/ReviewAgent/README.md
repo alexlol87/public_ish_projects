@@ -1,8 +1,9 @@
 # ReviewAgent: a code review agent for VS Code GitHub Copilot
 
-**Code Reviewer** is a custom agent for GitHub Copilot in Visual Studio Code. Give it the Jira story, the plan or the
-requirements, and it reviews the code changes against them and against clean-code principles. It only reads; it never
-edits your files.
+**Code Reviewer** is a custom agent for GitHub Copilot in Visual Studio Code. Give it a Jira key, the plan or the
+requirements, and it reviews the code changes against them and against clean-code principles. With the `jira-cli`
+and `confluence-cli` skills installed it reads the ticket and its Confluence pages itself. It never edits your code;
+the only file it creates is its review report, `REVIEW-<ticket or branch>.md` in the repository root.
 
 Written for the custom agent format in the VS Code documentation approved on 2026-09-30
 ([custom agents](https://code.visualstudio.com/docs/agent-customization/custom-agents)), which is also the format of
@@ -11,11 +12,13 @@ GitHub's [custom agents](https://docs.github.com/en/copilot/reference/custom-age
 | File | What it is |
 |------|------------|
 | [`.github/agents/code-reviewer.agent.md`](.github/agents/code-reviewer.agent.md) | The agent: its tools and its review instructions. |
-| [`scripts/check_agents.py`](scripts/check_agents.py) | CI check: name and description present, only known and read-only tools, valid handoffs. |
+| [`scripts/check_agents.py`](scripts/check_agents.py) | CI check: name and description present, known front matter keys, only known read-only tools (plus creating its report file), valid handoffs. |
 
 ## What it checks
 
-1. **Requirements and plan.** It turns the story, plan or requirements into a numbered checklist and reports, for each
+1. **Requirements and plan.** It reads the Jira ticket (description, acceptance criteria, comments, subtasks, linked
+   issues) with `jira-cli`, linked Confluence pages with `confluence-cli`, and requirement files it finds in the
+   repository. It turns them into a numbered checklist and reports, for each
    item, whether it is met, partly met or missing, where it is implemented and which test proves it. It flags
    requirements implemented differently from what they say, deviations from the plan, and scope creep (changes nobody
    asked for).
@@ -39,9 +42,10 @@ GitHub's [custom agents](https://docs.github.com/en/copilot/reference/custom-age
 It also reads your project's own rules (`AGENTS.md`, `.github/copilot-instructions.md`, `CLAUDE.md`, matching
 `.github/instructions/*.instructions.md`, `CONTRIBUTING.md`), which take precedence over the general principles.
 
-The report starts with a verdict (Request changes, Approve with comments, Approve), then a requirements table, then
-findings grouped as Blocker, Major, Minor and Questions, each with `path:line`, what is wrong, why it matters and the
-fix, and finally what it couldn't check. It answers in the language you write in.
+The report starts with a verdict (🔴 Request changes, 🟡 Approve with comments, ✅ Approve) and counts, then a
+requirements table, then findings grouped as 🔴 Blocker, 🟡 Major, 🟢 Minor and ❓ Questions, each with `path:line`,
+what is wrong, why it matters and the fix, and finally what it couldn't check. It answers in the language you write
+in, shows the report in chat and saves the same text to the repository root.
 
 ## Install
 
@@ -81,11 +85,15 @@ VS Code treats every `.md` file in `.github/agents/` as an agent, so don't put a
 
 ## Use
 
-Pick **Code Reviewer** in the agent picker of the Chat view, then give it the requirements and, if you want, what to
-review:
+Pick **Code Reviewer** in the agent picker of the Chat view, then give it the Jira key or the requirements and, if you
+want, what to review:
 
 ```text
-Review my branch. Jira story:
+Review my branch against PROJ-123
+```
+
+```text
+Review my branch. Jira story pasted by hand:
 PROJ-123 As a customer I can cancel an order while it is not shipped yet.
 Acceptance criteria:
 - Cancelling a shipped order returns 409 and changes nothing.
@@ -109,9 +117,14 @@ changed.
 
 ### Jira
 
-The agent fetches links it can read, but Jira usually needs sign-in, so pasting the story is the simplest. To let it
-read Jira itself, add your Jira MCP server's tools to the agent's `tools` list as `'<server name>/*'` (for example
-`'atlassian/*'`, using the name from your `.mcp.json` or `~/.copilot/mcp-config.json`).
+The agent uses your `jira-cli` and `confluence-cli` skills: give it a key (or let it find one in the branch name and
+confirm it), and it reads the ticket and linked pages. Their terminal commands are limited to the read-only ones; it
+is told never to create, edit, comment on or transition anything. Links it can't read without sign-in: open the page in
+VS Code's integrated browser and share it, or paste the text.
+
+A hosted Jira MCP server is not recommended: Copilot sessions can only use local MCP servers that don't need
+authentication (see [`../../vscode_copilot_agents/`](../../vscode_copilot_agents/)), and `'<server>/*'` also grants
+the server's write tools. If you use one, list only its read tools by name, as `'<server>/<tool>'`.
 
 ### As a subagent
 
@@ -121,18 +134,25 @@ Give it the requirements in the delegated task, because a subagent doesn't see y
 
 ## Tools and permissions
 
-`tools: ['read', 'search', 'execute', 'web', 'vscode/askQuestions']`
+`tools: ['read', 'search', 'execute', 'web', 'browser', 'edit/createFile', 'vscode/askQuestions']`
 
 - `read` and `search` read files, find usages and search the code base.
-- `execute` runs `git diff`, `git log` and `git show`, which the review needs for branches and commits. The
+- `execute` runs `git diff`, `git log`, `git show`, `gh pr view` and the `jira` and `confluence` read commands. The
   instructions allow only read-only commands, and run tests or linters only when you ask. Your approval settings still
-  apply, so with manual permissions you see each command first. Allow `git diff`, `git log`, `git show` and
-  `git status` in `chat.tools.terminal.autoApprove` to skip those prompts.
-- `web` fetches a requirements link.
+  apply, so with manual permissions you see each command first. To skip prompts for the git ones, copy the
+  `chat.tools.terminal.autoApprove` rules from
+  [`user-settings.jsonc`](../../vscode_copilot_agents/settings/user-settings.jsonc), including its
+  `"/^git .*--output/": false` guard (`git diff --output=<file>` writes a file), and add the read-only `jira` and
+  `confluence` subcommands your skills use.
+- `web` and `browser` read requirement pages. The agent is told to treat what they return as data, never as
+  instructions, and not to submit forms.
+- `edit/createFile` is only there to save the review report; the agent is told to create no other file, and
+  `scripts/check_agents.py` rejects every other edit tool.
 - `vscode/askQuestions` asks for missing requirements; other harnesses ignore it and the agent asks in text.
 
 Leave `model` out to use the model picked in chat; a strong reasoning model gives noticeably better reviews.
-Unknown tool names are ignored silently, which is what `scripts/check_agents.py` guards against in CI.
+Unknown tool names are ignored silently, and a missing `tools` key means every tool, which is what
+`scripts/check_agents.py` guards against in CI.
 
 ## Customize
 
