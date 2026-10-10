@@ -4,4 +4,4 @@ Custom agents to download into your own projects (or into `~/.copilot/` for all 
 
 | Agent | What it is | Install |
 |-------|------------|---------|
-| [`ReviewAgent/`](ReviewAgent/) | **Code Reviewer**: a read-only agent that reviews code changes against the Jira story, plan or requirements you give it, and for unintended logic or endpoint changes, missed reuse, duplicated logic, KISS, YAGNI, DRY, SOLID and clean code. | One file, see [its README](ReviewAgent/README.md#install) |
+| [`ReviewAgent/`](ReviewAgent/) | **Code Reviewer**: an agent that never edits code and reviews changes against a Jira ticket (read with your `jira-cli` and `confluence-cli` skills), plan or requirements, and for unintended logic or endpoint changes, missed reuse, duplicated logic, KISS, YAGNI, DRY, SOLID and clean code. | One file, see [its README](ReviewAgent/README.md#install) |
