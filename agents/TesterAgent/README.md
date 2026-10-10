@@ -1,10 +1,14 @@
-# TesterAgent: a Bruno API test writer for VS Code GitHub Copilot
+# TesterAgent: a story test writer for VS Code GitHub Copilot
 
-**Story Tester** is a custom agent for GitHub Copilot in Visual Studio Code. Open your Bruno collection as the
-workspace, give the agent a Jira key, and it reads the story with your `jira-cli` skill, finds the test cases, and
-writes the Bruno requests into the collection: a folder for the story, a subfolder per scenario (positive, negative
-and boundary), one request file per call, in the order you should run them. It **creates** requests; it never runs
-them unless you ask. It never touches your authentication or secrets.
+**Story Tester** is a custom agent for GitHub Copilot in Visual Studio Code. Give it a Jira key and it reads the story
+with your `jira-cli` skill, finds the test cases (positive, negative, boundary, plus important ones it finds in the
+code that the story misses) and **creates the test files**. It runs nothing until you ask, never runs anything
+against production, and deletes only data its own tests created.
+
+| Mode | When | What it creates |
+|------|------|-----------------|
+| **A. Bruno** | Your Bruno collection is open (or you say Bruno) | A folder for the story, a subfolder per scenario, one `.bru` request per call, in run order, plus `RUN-ORDER.md` |
+| **B. Other tests** | UI flows, curl without Bruno, mixed checks | `TEST-PLAN-<KEY>.md` with a table of tests and the exact curl or browser steps |
 
 Written for the same custom agent format as [ReviewAgent](../ReviewAgent/)
 ([custom agents](https://code.visualstudio.com/docs/agent-customization/custom-agents)).
@@ -46,18 +50,27 @@ PROJ-123 Cancel order/
 
 ## Conventions and secrets
 
-Before writing, the agent reads your collection and copies its conventions: the request file format, the base URL
-variable, the path style, the variable names (from requests, and from the *key names* of your environment files, never
-their values), the naming and `seq` style, and how authentication is done.
+Before writing (Mode A), the agent reads your collection, including `collection.bru`, `folder.bru` and environment
+files, and copies its conventions: the request file format, the base URL variable, the path style, the variable names,
+the naming and `seq` style, and how authentication is done.
 
 - Authentication: only variable references, such as `Authorization: Bearer {{token}}` and, if your requests send one,
   `x-api-key: {{apiKey}}`, using your collection's own variable names. You provide the token in the environment.
-- It never opens or edits `.env` files, environment files or `collection.bru`, never prints variable values, and
-  writes only new files inside the new story folder.
+- It never writes a secret value into a request, a doc, the summary or the chat; it uses variable names only.
+  It writes only new files and never overwrites: if the story folder exists, it asks.
 - If a request needs a variable your environment doesn't define, it declares it in the request's own
   `vars:pre-request` and lists it in `RUN-ORDER.md`.
 
-Instructions reduce the risk of a leak but can't rule it out: use test tokens and keep terminal command approval on.
+## Running, production, deleting
+
+- Nothing runs until you ask in your own message ("run `03 Negative - ...` on staging"). It then confirms the
+  requests and the environment first. It passes no secrets on the command line and writes no reports.
+- **Production is off limits**: it will not run anything against it, even if you ask, and it never writes a production
+  URL into a file. Run it yourself if you need to.
+- It deletes only records its own scenario created, by the id captured in that scenario, never by filter or in bulk.
+
+These limits are instructions to the model, not tool restrictions: `execute` and `edit/createFile` are not
+path-restricted. Use test tokens and keep terminal command approval on.
 
 ## Install
 
@@ -83,8 +96,8 @@ For every project, save it to `~/.copilot/agents/story-tester.agent.md` instead.
 
 ## Use
 
-Open the Bruno collection folder in VS Code (add the API's source folder to the workspace if you want the agent to
-find uncovered scenarios in the code), pick **Story Tester** in the agent picker, then:
+For Mode A open the Bruno collection folder in VS Code (add the API's source folder to the workspace if you want the
+agent to find uncovered scenarios in the code). Pick **Story Tester** in the agent picker, then:
 
 ```text
 PROJ-123
@@ -94,15 +107,20 @@ PROJ-123
 PROJ-456, only AC2 and AC3. The API code is in the api/ folder. Put it under the "Orders" folder.
 ```
 
+```text
+PROJ-789: the export button must be hidden for read-only users. UI test plan, not Bruno.
+```
+
 Then, in Bruno, reload the collection, pick the environment, make sure your token is set, and run the story folder
 or one scenario. To have the agent run something, say so explicitly: "run `03 Negative - ...` against staging".
 
 ## Tools and permissions
 
-`tools: ['read', 'search', 'execute', 'edit/createFile', 'vscode/askQuestions']`
+`tools: ['read', 'search', 'execute', 'edit/createFile', 'web', 'browser', 'vscode/askQuestions']`
 
 - `read` and `search` read the collection, the code and context files.
-- `edit/createFile` creates the new requests and `RUN-ORDER.md`. It can't edit or delete existing files.
-- `execute` is for `jira-cli` read commands and listing environment key names. The agent is told not to run `bru`,
-  `curl` or the app unless you ask; keep VS Code's terminal approval on to see every command.
+- `edit/createFile` creates the new requests, `RUN-ORDER.md` and test plans. The agent is told never to overwrite.
+- `execute` is for `jira-cli` read commands and, only when you ask, `bru` or `curl`. Keep VS Code's terminal approval
+  on to see every command.
+- `web` and `browser` read pages and run UI checks, only when you ask for a run.
 - `vscode/askQuestions` asks for missing inputs; other harnesses ignore it and the agent asks in text.
