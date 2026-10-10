@@ -63,8 +63,10 @@ the naming and `seq` style, and how authentication is done.
 
 ## Running, production, deleting
 
-- Nothing runs until you ask in your own message ("run `03 Negative - ...` on staging"). It then confirms the
+- Nothing runs until you ask in your own message ("run `03 Negative - ...` on dev"). It then confirms the
   requests and the environment first. It passes no secrets on the command line and writes no reports.
+- **Development only**: files target the development environment and runs happen only there. Any other
+  environment needs you to name it in your message for that run.
 - **Production is off limits**: it will not run anything against it, even if you ask, and it never writes a production
   URL into a file. Run it yourself if you need to.
 - It deletes only records its own scenario created, by the id captured in that scenario, never by filter or in bulk.
@@ -112,7 +114,7 @@ PROJ-789: the export button must be hidden for read-only users. UI test plan, no
 ```
 
 Then, in Bruno, reload the collection, pick the environment, make sure your token is set, and run the story folder
-or one scenario. To have the agent run something, say so explicitly: "run `03 Negative - ...` against staging".
+or one scenario. To have the agent run something, say so explicitly: "run `03 Negative - ...` against dev".
 
 ## Tools and permissions
 
