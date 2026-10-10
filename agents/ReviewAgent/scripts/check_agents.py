@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks the custom agents in agents/ReviewAgent/.github/agents/ before VS Code gets to ignore a mistake silently.
 
-    python3 scripts/check_agents.py
+    python3 scripts/check_agents.py [path/to/.github/agents]
 
 VS Code and Copilot skip an unknown tool name without a warning, and treat every .md file in .github/agents/ as an
 agent. So this checks that each file is an .agent.md with a name and a description, that every tool is a known tool
@@ -14,7 +14,9 @@ import sys
 
 import yaml
 
-AGENTS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "agents"
+# Another agent folder's .github/agents can be passed as the first argument (TesterAgent's CI does).
+AGENTS = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else (
+    pathlib.Path(__file__).resolve().parent.parent / ".github" / "agents")
 
 # VS Code's tools reference (docs/agents/reference/tools-reference.md, approved 2026-09-30) plus the primary aliases
 # of GitHub's custom agents configuration reference. MCP tools ("<server>/<tool>") are allowed too.
