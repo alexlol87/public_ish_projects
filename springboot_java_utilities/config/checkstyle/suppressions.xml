@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+  "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+<!-- Tests are held to a lighter standard than production code. -->
+<suppressions>
+  <suppress checks="MissingJavadocType|MagicNumber|VisibilityModifier|AbbreviationAsWordInName|AvoidStaticImport"
+    files="[\\/]src[\\/]test[\\/]"/>
+  <!-- Spring Boot's main class has a static main() and nothing else, by design. -->
+  <suppress checks="HideUtilityClassConstructor" files="CatalogApplication\.java"/>
+</suppressions>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Every exclusion needs a reason. An exclusion list without reasons is just muted alarms.
+-->
+<FindBugsFilter>
+  <!-- JPA entities: Hibernate sets fields reflectively, so SpotBugs thinks they are never written. -->
+  <Match>
+    <Class name="com.example.catalog.product.Product"/>
+    <Bug pattern="UWF_UNWRITTEN_FIELD,NP_UNWRITTEN_FIELD,UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR"/>
+  </Match>
+
+  <!-- Constructor injection of Spring beans is the pattern we want; the container owns their lifecycle. -->
+  <Match>
+    <Class name="~com\.example\.catalog\..*(Controller|Service|Client)"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+
+  <!-- Find Security Bugs "info" detector: lists every endpoint, which is inventory, not a defect. -->
+  <Match>
+    <Bug pattern="SPRING_ENDPOINT"/>
+  </Match>
+</FindBugsFilter>

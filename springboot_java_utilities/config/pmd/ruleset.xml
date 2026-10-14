@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<ruleset name="springboot-java-utilities"
+  xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+  <description>
+    PMD = "does the code contain patterns that usually hide bugs or rot?"
+    It works on the syntax tree. Strategy: enable whole categories, then switch off
+    the rules that are pure opinion or that fight Spring (each exclusion says why).
+  </description>
+
+  <rule ref="category/java/bestpractices.xml">
+    <!-- tests are not analysed (includeTests=false), so the test-only rules are noise -->
+    <exclude name="UnitTestShouldIncludeAssert"/>
+    <exclude name="UnitTestContainsTooManyAsserts"/>
+    <!-- we depend on Spring's own logging config, not on guarding every log call -->
+    <exclude name="GuardLogStatement"/>
+  </rule>
+
+  <rule ref="category/java/codestyle.xml">
+    <!-- opinion, not defects -->
+    <exclude name="OnlyOneReturn"/>
+    <exclude name="AtLeastOneConstructor"/>
+    <exclude name="LongVariable"/>
+    <exclude name="ShortVariable"/>
+    <exclude name="ShortClassName"/>
+    <exclude name="CommentDefaultAccessModifier"/>
+    <exclude name="MethodArgumentCouldBeFinal"/>
+    <exclude name="LocalVariableCouldBeFinal"/>
+    <exclude name="UnnecessaryConstructor"/>
+    <exclude name="LinguisticNaming"/>
+    <exclude name="PrematureDeclaration"/>
+    <exclude name="UseExplicitTypes"/>
+    <!-- Checkstyle and Spotless already own these; avoid reporting one problem three times -->
+    <exclude name="ControlStatementBraces"/>
+    <exclude name="FormalParameterNamingConventions"/>
+    <exclude name="UnnecessaryImport"/>
+    <exclude name="UnnecessaryFullyQualifiedName"/>
+    <exclude name="TooManyStaticImports"/>
+    <exclude name="UnnecessaryBoxing"/>
+  </rule>
+
+  <rule ref="category/java/design.xml">
+    <exclude name="LawOfDemeter"/>
+    <exclude name="LoosePackageCoupling"/>
+    <exclude name="DataClass"/>
+    <exclude name="AvoidThrowingRawExceptionTypes"/>
+    <exclude name="SignatureDeclareThrowsException"/>
+    <!-- Spring services legitimately collect collaborators -->
+    <exclude name="CouplingBetweenObjects"/>
+  </rule>
+  <rule ref="category/java/design.xml/CyclomaticComplexity">
+    <properties>
+      <property name="methodReportLevel" value="8"/>
+    </properties>
+  </rule>
+  <rule ref="category/java/design.xml/CognitiveComplexity">
+    <properties>
+      <property name="reportLevel" value="10"/>
+    </properties>
+  </rule>
+
+  <rule ref="category/java/errorprone.xml">
+    <exclude name="MissingSerialVersionUID"/>
+    <exclude name="AvoidFieldNameMatchingMethodName"/>
+    <exclude name="NullAssignment"/>
+  </rule>
+
+  <rule ref="category/java/multithreading.xml">
+    <exclude name="DoNotUseThreads"/>
+    <exclude name="AvoidSynchronizedStatement"/>
+  </rule>
+
+  <rule ref="category/java/performance.xml">
+    <exclude name="AvoidInstantiatingObjectsInLoops"/>
+  </rule>
+
+  <rule ref="category/java/security.xml"/>
+</ruleset>

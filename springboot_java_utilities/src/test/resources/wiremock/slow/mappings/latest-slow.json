@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/latest"
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 3000,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "rates-usd.json"
+  }
+}
