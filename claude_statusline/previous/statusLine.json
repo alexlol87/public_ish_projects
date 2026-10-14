@@ -1,0 +1,5 @@
+{
+  "type": "command",
+  "command": "bash ~/.claude/status_line_tokens.sh",
+  "refreshInterval": 10
+}
