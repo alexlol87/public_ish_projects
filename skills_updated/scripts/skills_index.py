@@ -26,7 +26,7 @@ GROUPS = [
     ("ponytail", "Ponytail"),
     ("shadcn", "shadcn"),
     ("cursor", "Cursor"),
-    ("humanlayer", "HumanLayer (visual-pr, show-me)"),
+    ("humanlayer", "HumanLayer"),
     ("popular/vercel", "New: Vercel (find-skills, agent-browser, React and web design)"),
     ("popular/anthropic", "New: Anthropic (official skills)"),
     ("popular/karpathy", "New: Karpathy guidelines"),

@@ -10,7 +10,7 @@ Agent skills for Claude Code (and other agents that read `SKILL.md`), copied at 
 | [`superpowers/`](superpowers/) | [obra/superpowers](https://github.com/obra/superpowers): Jesse Vincent's development methodology as 15 composable skills (brainstorm → plan → TDD → review → finish) | `bb92a77` (2026-10-09) | MIT ([LICENSE](superpowers/LICENSE)) |
 | [`shadcn/`](shadcn/) | [shadcn/improve](https://github.com/shadcn/improve): the `improve` skill (read-only codebase advisor that writes implementation plans) | `cac56e1` (2026-09-12) | MIT ([LICENSE](shadcn/LICENSE.md)) |
 | [`cursor/`](cursor/) | [cursor/plugins](https://github.com/cursor/plugins) (`cursor-team-kit`): the `thermo-nuclear-code-quality-review` skill | `e5136d8` (2026-10-14) | MIT ([LICENSE](cursor/LICENSE)) |
-| [`humanlayer/`](humanlayer/) | [humanlayer/skills](https://github.com/humanlayer/skills): the `visual-pr` and `show-me` plugins' skills (PR descriptions with a visual change outline; explain the current topic with diagrams and code-shape sketches) | `653b641` (2026-10-08) | MIT ([LICENSE](humanlayer/LICENSE)) |
+| [`humanlayer/`](humanlayer/) | [humanlayer/skills](https://github.com/humanlayer/skills): all 7 plugins' skills: `visual-pr`, `show-me`, `rpi` (research, plan, implement workflow), `build-iterated-agentic-loop`, `design-control-loop`, `improve-claude-md`, `narrow-react-prop-types` | `653b641` (2026-10-08) | MIT ([LICENSE](humanlayer/LICENSE)) |
 | [`popular/vercel/`](popular/vercel/) | [vercel-labs/skills](https://github.com/vercel-labs/skills) (`find-skills`), [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (`agent-browser`), [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (React best practices, composition patterns, web design guidelines) | `13e4063` (2026-10-09), `dac13bb` (2026-10-15), `063bee9` (2026-08-28) | `find-skills` MIT ([LICENSE](popular/vercel/find-skills/LICENSE)), `agent-browser` Apache-2.0 ([LICENSE](popular/vercel/agent-browser/LICENSE)), agent-skills MIT (stated in its README and front matter; the repo ships no LICENSE file) |
 | [`popular/anthropic/`](popular/anthropic/) | [anthropics/skills](https://github.com/anthropics/skills): `frontend-design`, `skill-creator`, `webapp-testing`, `mcp-builder` | `dbd4588` (2026-10-09) | Apache-2.0 (a `LICENSE.txt` in each skill) |
 | [`popular/karpathy/`](popular/karpathy/) | [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills): `karpathy-guidelines`, Andrej Karpathy's observations on LLM coding mistakes as one skill | `2c60614` (2026-04-20) | MIT (stated in its README and front matter; the repo ships no LICENSE file) |
@@ -78,7 +78,7 @@ cp -r skills_updated/matt-pocock/engineering/tdd ~/.claude/skills/
 cp -r skills_updated/caveman skills_updated/ponytail ~/.claude/skills/
 cp -r skills_updated/superpowers/* ~/.claude/skills/        # every superpowers skill (plus its LICENSE file)
 cp -r skills_updated/shadcn/improve skills_updated/cursor/thermo-nuclear-code-quality-review ~/.claude/skills/
-cp -r skills_updated/humanlayer/visual-pr skills_updated/humanlayer/show-me ~/.claude/skills/
+cp -r skills_updated/humanlayer/*/ ~/.claude/skills/
 cp -r skills_updated/popular/vercel/find-skills skills_updated/popular/anthropic/frontend-design ~/.claude/skills/
 ```
 
@@ -208,10 +208,15 @@ The names and descriptions below come from each skill's `SKILL.md`.
 |-------|-------------|
 | [`thermo-nuclear-code-quality-review`](cursor/thermo-nuclear-code-quality-review/SKILL.md) | Run an extremely strict maintainability review for abstraction quality, giant files, and spaghetti-condition growth. Use for a thermo-nuclear code quality review, thermonuclear review, deep code quality audit, or especially harsh maintainability review. |
 
-### HumanLayer (visual-pr, show-me)
+### HumanLayer
 
 | Skill | Description |
 |-------|-------------|
+| [`build-iterated-agentic-loop`](humanlayer/build-iterated-agentic-loop/SKILL.md) | build a repo-local skill and install a matching iterated coding-agent GitHub Actions workflow, prompt, memory file, and reference templates |
+| [`design-control-loop`](humanlayer/design-control-loop/SKILL.md) | interview the user to design an agentic control loop (sensor, controller, actuator under disturbances) tailored to their codebase, then build it as locally-runnable components plus a scheduled coding-agent workflow |
+| [`improve-claude-md`](humanlayer/improve-claude-md/SKILL.md) | improve a CLAUDE.md file using <important if> blocks to improve instruction adherence |
+| [`narrow-react-prop-types`](humanlayer/narrow-react-prop-types/SKILL.md) | narrow React component prop types to match live code paths |
+| [`rpi`](humanlayer/rpi/SKILL.md) | Only use when the user explicitly invokes this skill by name. |
 | [`show-me`](humanlayer/show-me/SKILL.md) | Help the user understand the current topic visually with concise diagrams, code-shape sketches, and focused HTML artifacts. |
 | [`visual-pr`](humanlayer/visual-pr/SKILL.md) | Only use when the user explicitly invokes this skill by name. |
 
