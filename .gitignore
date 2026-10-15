@@ -65,3 +65,6 @@ fastlane/test_output
 .DS_Store
 __pycache__/
 .claude/
+
+# Published only as an AES-256 zip
+local_memory_sqlite/

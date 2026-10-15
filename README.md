@@ -25,12 +25,13 @@ can get the same color back after an app restart.
 - **Details:** settings, permissions, limitations, architecture and how to build it yourself are in
   [window_borders/README.md](window_borders/README.md).
 
-## Extracting lm.zip
+## Extracting lm.zip and lms.zip
 
-`lm.zip` is encrypted with AES-256. The `unzip` that ships with macOS can't open it, but the built-in `bsdtar` can:
+`lm.zip` and `lms.zip` (`local_memory_sqlite/`, SQLite-backed agent memory for GitHub Copilot in VS Code) are
+encrypted with AES-256. The `unzip` that ships with macOS can't open them, but the built-in `bsdtar` can:
 
 ```sh
-bsdtar -xf lm.zip --passphrase 'PASSWORD'
+bsdtar -xf lms.zip --passphrase 'PASSWORD'
 ```
 
 ## CI
