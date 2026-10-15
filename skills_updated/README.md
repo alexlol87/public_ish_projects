@@ -4,20 +4,20 @@ Agent skills for Claude Code (and other agents that read `SKILL.md`), copied at 
 
 | Folder | Source | Version | License |
 |--------|--------|---------|---------|
-| [`matt-pocock/`](matt-pocock/) | [mattpocock/skills](https://github.com/mattpocock/skills): Matt Pocock's skills for real engineers | `6fd9479` (2026-10-06) | MIT ([LICENSE](matt-pocock/LICENSE)) |
-| [`caveman/`](caveman/) | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman): the core `caveman` skill | `6571943` (2026-10-04) | Apache-2.0 ([LICENSE](caveman/LICENSE), [NOTICE](caveman/NOTICE)) |
-| [`ponytail/`](ponytail/) | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail): the core `ponytail` skill | `e15862b` (2026-10-05) | MIT ([LICENSE](ponytail/LICENSE)) |
-| [`superpowers/`](superpowers/) | [obra/superpowers](https://github.com/obra/superpowers): Jesse Vincent's development methodology as 15 composable skills (brainstorm → plan → TDD → review → finish) | `8ca22db` (2026-09-25) | MIT ([LICENSE](superpowers/LICENSE)) |
+| [`matt-pocock/`](matt-pocock/) | [mattpocock/skills](https://github.com/mattpocock/skills): Matt Pocock's skills for real engineers | `49dd158` (2026-10-09) | MIT ([LICENSE](matt-pocock/LICENSE)) |
+| [`caveman/`](caveman/) | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman): the core `caveman` skill | `d262ab3` (2026-10-13) | Apache-2.0 ([LICENSE](caveman/LICENSE), [NOTICE](caveman/NOTICE)) |
+| [`ponytail/`](ponytail/) | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail): the core `ponytail` skill | `84740e3` (2026-10-15) | MIT ([LICENSE](ponytail/LICENSE)) |
+| [`superpowers/`](superpowers/) | [obra/superpowers](https://github.com/obra/superpowers): Jesse Vincent's development methodology as 15 composable skills (brainstorm → plan → TDD → review → finish) | `bb92a77` (2026-10-09) | MIT ([LICENSE](superpowers/LICENSE)) |
 | [`shadcn/`](shadcn/) | [shadcn/improve](https://github.com/shadcn/improve): the `improve` skill (read-only codebase advisor that writes implementation plans) | `cac56e1` (2026-09-12) | MIT ([LICENSE](shadcn/LICENSE.md)) |
-| [`cursor/`](cursor/) | [cursor/plugins](https://github.com/cursor/plugins) (`cursor-team-kit`): the `thermo-nuclear-code-quality-review` skill | `4e5b1cf` (2026-10-04) | MIT ([LICENSE](cursor/LICENSE)) |
-| [`humanlayer/`](humanlayer/) | [humanlayer/skills](https://github.com/humanlayer/skills): the `visual-pr` and `show-me` plugins' skills (PR descriptions with a visual change outline; explain the current topic with diagrams and code-shape sketches) | `ca7c808` (2026-09-17) | MIT ([LICENSE](humanlayer/LICENSE)) |
-| [`popular/vercel/`](popular/vercel/) | [vercel-labs/skills](https://github.com/vercel-labs/skills) (`find-skills`), [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (`agent-browser`), [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (React best practices, composition patterns, web design guidelines) | `18f96ea` (2026-10-02), `526157c` (2026-10-03), `063bee9` (2026-08-28) | `find-skills` MIT ([LICENSE](popular/vercel/find-skills/LICENSE)), `agent-browser` Apache-2.0 ([LICENSE](popular/vercel/agent-browser/LICENSE)), agent-skills MIT (stated in its README and front matter; the repo ships no LICENSE file) |
-| [`popular/anthropic/`](popular/anthropic/) | [anthropics/skills](https://github.com/anthropics/skills): `frontend-design`, `skill-creator`, `webapp-testing`, `mcp-builder` | `8a1541c` (2026-09-28) | Apache-2.0 (a `LICENSE.txt` in each skill) |
+| [`cursor/`](cursor/) | [cursor/plugins](https://github.com/cursor/plugins) (`cursor-team-kit`): the `thermo-nuclear-code-quality-review` skill | `e5136d8` (2026-10-14) | MIT ([LICENSE](cursor/LICENSE)) |
+| [`humanlayer/`](humanlayer/) | [humanlayer/skills](https://github.com/humanlayer/skills): the `visual-pr` and `show-me` plugins' skills (PR descriptions with a visual change outline; explain the current topic with diagrams and code-shape sketches) | `653b641` (2026-10-08) | MIT ([LICENSE](humanlayer/LICENSE)) |
+| [`popular/vercel/`](popular/vercel/) | [vercel-labs/skills](https://github.com/vercel-labs/skills) (`find-skills`), [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (`agent-browser`), [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (React best practices, composition patterns, web design guidelines) | `13e4063` (2026-10-09), `dac13bb` (2026-10-15), `063bee9` (2026-08-28) | `find-skills` MIT ([LICENSE](popular/vercel/find-skills/LICENSE)), `agent-browser` Apache-2.0 ([LICENSE](popular/vercel/agent-browser/LICENSE)), agent-skills MIT (stated in its README and front matter; the repo ships no LICENSE file) |
+| [`popular/anthropic/`](popular/anthropic/) | [anthropics/skills](https://github.com/anthropics/skills): `frontend-design`, `skill-creator`, `webapp-testing`, `mcp-builder` | `dbd4588` (2026-10-09) | Apache-2.0 (a `LICENSE.txt` in each skill) |
 | [`popular/karpathy/`](popular/karpathy/) | [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills): `karpathy-guidelines`, Andrej Karpathy's observations on LLM coding mistakes as one skill | `2c60614` (2026-04-20) | MIT (stated in its README and front matter; the repo ships no LICENSE file) |
-| [`popular/addy-osmani/`](popular/addy-osmani/) | [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills): Addy Osmani's 25 production engineering skills (spec → plan → build → test → review → ship) and their shared `references/` checklists | `1401c8b` (2026-10-03) | MIT ([LICENSE](popular/addy-osmani/LICENSE)) |
-| [`popular/ui-ux-pro-max/`](popular/ui-ux-pro-max/) | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill): the `ui-ux-pro-max` skill with its searchable design data | `477bcb2` (2026-10-03) | MIT ([LICENSE](popular/ui-ux-pro-max/LICENSE)) |
-| [`popular/taste-skill/`](popular/taste-skill/) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill): the main `taste-skill` (`design-taste-frontend`) | `ce26fc2` (2026-09-26) | MIT ([LICENSE](popular/taste-skill/LICENSE)) |
-| [`popular/impeccable/`](popular/impeccable/) | [pbakaus/impeccable](https://github.com/pbakaus/impeccable): the `impeccable` frontend design skill (v4.5.0) | `ece38d9` (2026-10-05) | Apache-2.0 ([LICENSE](popular/impeccable/LICENSE), [NOTICE](popular/impeccable/NOTICE.md)) |
+| [`popular/addy-osmani/`](popular/addy-osmani/) | [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills): Addy Osmani's 25 production engineering skills (spec → plan → build → test → review → ship) and their shared `references/` checklists | `aeac41d` (2026-10-13) | MIT ([LICENSE](popular/addy-osmani/LICENSE)) |
+| [`popular/ui-ux-pro-max/`](popular/ui-ux-pro-max/) | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill): the `ui-ux-pro-max` skill with its searchable design data | `56ea9cf` (2026-10-14) | MIT ([LICENSE](popular/ui-ux-pro-max/LICENSE)) |
+| [`popular/taste-skill/`](popular/taste-skill/) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill): the main `taste-skill` (`design-taste-frontend`, tasteskill v2 with its scripts, library and references) | `f624f37` (2026-10-14) | MIT ([LICENSE](popular/taste-skill/LICENSE)) |
+| [`popular/impeccable/`](popular/impeccable/) | [pbakaus/impeccable](https://github.com/pbakaus/impeccable): the `impeccable` frontend design skill (v4.5.2) | `abf5779` (2026-10-14) | Apache-2.0 ([LICENSE](popular/impeccable/LICENSE), [NOTICE](popular/impeccable/NOTICE.md)) |
 
 ## New in this update (2026-10-05)
 
@@ -51,6 +51,13 @@ redistributable); vendor-specific packs (Prisma, Supabase, Neon, Azure, Remotion
 ClawHub-only skills without a public repository (`self-improving-agent`, `proactive-agent`); and the
 `*/superpowers` image/video/Twitter skills trending on skills.sh, which are copies spread over several look-alike
 accounts with near-identical install counts, not obra's Superpowers.
+
+On 2026-10-15 all sources were re-checked. Updated: Matt Pocock's skills (engineering and productivity wording fixes),
+caveman, ponytail (rewritten core skill), Superpowers (`brainstorming`, `requesting-code-review`, `systematic-debugging`
+and three scripts; `spec-document-reviewer-prompt.md` became `builder-check-prompt.md`), seven Addy Osmani skills and
+`performance-checklist.md`, Impeccable 4.5.2, and taste-skill, which is now tasteskill v2 and ships its own scripts,
+library and references. Only the version moved for shadcn, Cursor, HumanLayer, Vercel, Anthropic, Karpathy and
+UI UX Pro Max (their skill files are unchanged).
 
 On 2026-10-06 Matt Pocock's skills moved to `6fd9479`: a new beta skill, `chief-of-staff` (run a long-running goal
 in one session by coordinating subagents), and small wording fixes in `implement`, `to-tickets`, `handoff`,
@@ -161,7 +168,7 @@ The names and descriptions below come from each skill's `SKILL.md`.
 
 | Skill | Description |
 |-------|-------------|
-| [`brainstorming`](superpowers/brainstorming/SKILL.md) | You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation. |
+| [`brainstorming`](superpowers/brainstorming/SKILL.md) | You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation). |
 | [`diagnosing-superpowers`](superpowers/diagnosing-superpowers/SKILL.md) | Use when a superpowers session went wrong and your human partner wants to know why — repeated work, ignored plans, stumbles, poor results, a skill that didn't fire, "it took too long", "why is it so expensive", "what is it doing" — or wants to build a bug report for the superpowers maintainers, for the current session or a past one identified by id or path, on any harness. |
 | [`dispatching-parallel-agents`](superpowers/dispatching-parallel-agents/SKILL.md) | Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies |
 | [`executing-plans`](superpowers/executing-plans/SKILL.md) | Use when executing an implementation plan in the current session as the implementer yourself — your human partner chose inline execution, or no subagent tool is available |
@@ -187,7 +194,7 @@ The names and descriptions below come from each skill's `SKILL.md`.
 
 | Skill | Description |
 |-------|-------------|
-| [`ponytail`](ponytail/SKILL.md) | Forces the laziest solution that actually works, simplest, shortest, most minimal. Channels a senior dev who has seen everything: question whether the task needs to exist at all (YAGNI), reach for the standard library before custom code, native platform features before dependencies, one line before fifty. Supports intensity levels: lite, full (default), ultra. Use on ANY coding task: writing, adding, refactoring, fixing, reviewing, or designing code, and choosing libraries or dependencies. Also use whenever the user says "ponytail", "be lazy", "lazy mode", "simplest solution", "minimal solution", "yagni", "do less", or "shortest path", or complains about over-engineering, bloat, boilerplate, or unnecessary dependencies. Do NOT use for non-coding requests (general knowledge, prose, translation, summaries, recipes). |
+| [`ponytail`](ponytail/SKILL.md) | Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands in one read. Use on any coding task (writing, fixing, refactoring, reviewing, choosing dependencies) and when the user says "ponytail", "be lazy", "simplest solution", "yagni", or complains about over-engineering or bloat. Levels: lite, full (default), ultra. |
 
 ### shadcn
 
@@ -260,7 +267,7 @@ The names and descriptions below come from each skill's `SKILL.md`.
 | [`shipping-and-launch`](popular/addy-osmani/skills/shipping-and-launch/SKILL.md) | Prepares production launches. Use when preparing to deploy to production, or when asking what needs to be in place before shipping. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy. |
 | [`source-driven-development`](popular/addy-osmani/skills/source-driven-development/SKILL.md) | Grounds every implementation decision in official documentation. Use when you want to verify an approach against the official docs before implementing it, or when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness matters. |
 | [`spec-driven-development`](popular/addy-osmani/skills/spec-driven-development/SKILL.md) | Creates specs before coding. Use when starting a new project, feature, or significant change and no specification exists yet. Use when drafting a PRD or requirements document with objectives and scope, or when requirements are unclear, ambiguous, or only exist as a vague idea. Use when a single requirement spans several independently testable capabilities and needs decomposing into a capability map of modules before specifying. |
-| [`test-driven-development`](popular/addy-osmani/skills/test-driven-development/SKILL.md) | Drives development with tests using the red-green-refactor loop. Use when implementing any logic, fixing any bug, or changing any behavior. Use when you need to prove that code works, when a bug report arrives, or when you're about to modify existing functionality. |
+| [`test-driven-development`](popular/addy-osmani/skills/test-driven-development/SKILL.md) | Drives development with tests using the red-green-refactor loop. Use when implementing any logic, fixing any bug, or changing any behavior. Use when you need to prove that code works, when a bug report arrives, or when you're about to modify existing functionality. Use when asked to add tests to a function, fix a bug in it or change its behavior, even when the code is pasted inline and the request does not mention tests. |
 | [`using-agent-skills`](popular/addy-osmani/skills/using-agent-skills/SKILL.md) | Discovers and invokes agent skills. Use when starting a session, or when you need to decide which skill or workflow applies to the piece of work at hand. This is the meta-skill that governs how all other skills are discovered and invoked. |
 
 ### New: UI UX Pro Max
@@ -273,7 +280,7 @@ The names and descriptions below come from each skill's `SKILL.md`.
 
 | Skill | Description |
 |-------|-------------|
-| [`design-taste-frontend`](popular/taste-skill/taste-skill/SKILL.md) | Anti-slop frontend skill for landing pages, portfolios, and redesigns. The agent reads the brief, infers the right design direction, and ships interfaces that do not look templated. Real design systems when applicable, audit-first on redesigns, strict pre-flight check. |
+| [`design-taste-frontend`](popular/taste-skill/taste-skill/SKILL.md) | tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, type, palette, photographs, section blueprints) from a library, enforces a strict no-slop house style with a real-browser inspector, and runs a look-and-fix loop on screenshots. Use this whenever you build, design, redesign, restyle, polish or review a landing page, marketing site, portfolio, product page, one-pager, hero or any public-facing web page, in any stack (HTML/CSS, React, Next.js, Vue, Svelte, Astro, Tailwind) — also when the user says a page looks generic, templated, "AI-made", sloppy, or asks to make it look designed, premium, award-level or less like every other site. Not for dashboards or app screens. |
 
 ### New: Impeccable
 
