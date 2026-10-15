@@ -32,6 +32,8 @@
     <pmd-plugin.version>3.28.0</pmd-plugin.version>
     <pmd.version>7.28.0</pmd.version>
     <jacoco.version>0.8.15</jacoco.version>
+    <pitest-plugin.version>1.30.1</pitest-plugin.version>
+    <pitest-junit5.version>1.2.3</pitest-junit5.version>
     <sonar-plugin.version>5.8.0.7211</sonar-plugin.version>
     <wiremock.version>3.13.2</wiremock.version>
 
@@ -323,6 +325,33 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+
+      <!-- Mutation testing: run on demand (mvn test-compile pitest:mutationCoverage), not bound to the lifecycle. -->
+      <plugin>
+        <groupId>org.pitest</groupId>
+        <artifactId>pitest-maven</artifactId>
+        <version>${pitest-plugin.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-junit5-plugin</artifactId>
+            <version>${pitest-junit5.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <targetClasses>
+            <param>com.example.catalog.*</param>
+          </targetClasses>
+          <excludedClasses>
+            <param>com.example.catalog.CatalogApplication</param>
+          </excludedClasses>
+          <outputFormats>
+            <param>HTML</param>
+            <param>XML</param>
+          </outputFormats>
+          <timestampedReports>false</timestampedReports>
+        </configuration>
       </plugin>
 
       <!-- 5. PLATFORM: SonarQube is run on demand (mvn sonar:sonar), not bound to the lifecycle. -->

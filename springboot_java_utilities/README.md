@@ -1,6 +1,6 @@
 # springboot_java_utilities
 
-A small Spring Boot 4.1 / Java 21 service whose real purpose is to show **what each Java quality tool catches, and what it cannot**: Spotless, Checkstyle, SpotBugs (+ Find Security Bugs), PMD (+ CPD) and SonarQube.
+A small Spring Boot 4.1 / Java 21 service whose real purpose is to show **what each Java quality tool catches, and what it cannot**: Spotless, Checkstyle, SpotBugs (+ Find Security Bugs), PMD (+ CPD) and SonarQube, plus PIT mutation testing.
 
 - `src/main`: product catalog REST API (controller, service, repository, an external-API client), H2 in-memory database.
 - `src/test`: 19 tests. The HTTP client is tested against **WireMock servers whose stubs are JSON files** in `src/test/resources/wiremock/<scenario>/{mappings,__files}`: success, missing currency, HTTP 500, slow upstream (timeout).
@@ -103,3 +103,13 @@ Sonar adds what the others do not: history, coverage, a pass/fail gate on *new* 
 1. Add Spotless, run `apply` once in its own commit (add that commit to `.git-blame-ignore-revs`).
 2. Add the others with `failOnViolation=false`, look at the reports, trim rules that are noise (exclusions with reasons).
 3. Turn the gates on one tool at a time. For legacy code let Sonar's "new code" gate block regressions while the old findings are paid down.
+
+## 6. Mutation testing (PIT)
+
+Coverage says a line *ran*; it does not say a test would *notice* if the line were wrong. PIT edits the bytecode (flips `>` to `>=`, removes a call, changes a returned value) and re-runs the tests: a mutant that no test fails on has **survived**, i.e. a real gap that 100% line coverage hid.
+
+```
+mvn test-compile pitest:mutationCoverage    # on demand, not part of `mvn verify`; report: target/pit-reports/index.html
+```
+
+What to show: line coverage (JaCoCo) vs mutation score for the same class, then open a class in the HTML report and read the red (survived) mutations. Fix one by adding an assertion and re-run to watch the score rise. Config: `pitest-maven` in `pom.xml` (excludes `CatalogApplication`, same as the coverage exclusion).
