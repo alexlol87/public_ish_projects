@@ -78,7 +78,13 @@ final class NoteController: NSObject, WKScriptMessageHandler, WKNavigationDelega
         panel.isReleasedWhenClosed = false
         container.wantsLayer = true
         panel.contentView = container
-        container.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        // Tracking areas don't fire reliably for a non-activating panel over WKWebView, so poll the cursor.
+        // shortcut: 0.15s timer wakes the app ~7x/s, switch to event monitors if battery use ever shows up.
+        Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let inside = self.panel.isVisible && self.panel.frame.contains(NSEvent.mouseLocation)
+            if self.bar.isHidden == inside { self.bar.isHidden = !inside }
+        }
     }
 
     func pin(_ v: NSView, in parent: NSView) {
@@ -260,9 +266,6 @@ final class NoteController: NSObject, WKScriptMessageHandler, WKNavigationDelega
         store.text = textView.string
         store.save()
     }
-
-    @objc func mouseEntered(with event: NSEvent) { bar.isHidden = false }
-    @objc func mouseExited(with event: NSEvent) { bar.isHidden = true }
 
     /// WKWebView ignores isMovableByWindowBackground, so view mode moves the window by hand.
     func dragWindow(_ e: NSEvent) {
