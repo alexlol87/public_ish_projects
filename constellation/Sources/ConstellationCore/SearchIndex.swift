@@ -15,6 +15,8 @@ public struct SearchIndex {
         public var folders: [String] = []   // relative paths
         public var notes: [String] = []     // relative paths
         public var matches: [TextMatch] = []
+        /// True for Notes in a Project's archive; the UI marks these "archived".
+        public func isArchived(_ path: String) -> Bool { Vault.isArchive(path) }
     }
 
     private struct Entry { let folded: [UInt16]; let text: [UInt16]; let aligned: Bool; let foldedName: String; let tags: Set<String> }

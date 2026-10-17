@@ -26,6 +26,8 @@ struct RootView: View {
     @State private var reveal: EditorView.Reveal?
     @State private var backlinks: [Backlink] = []
     @State private var query = ""
+    @State private var cursor = 0
+    @State private var relations: (title: String, rel: EndpointRelations)?
     @State private var search: SearchIndex?
     @State private var tags: TagIndex?
     @State private var sidebarTab = SidebarTab.files
@@ -75,7 +77,7 @@ struct RootView: View {
                     }
                     FormatToolbar()
                     Divider()
-                    EditorView(initialText: tabs.text(active) ?? "", root: root!, notePath: active, reveal: reveal,
+                    EditorView(initialText: tabs.text(active) ?? "", root: root!, notePath: active, reveal: reveal, onCursor: { cursor = $0; refreshRelations() },
                                onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) },
                                onTag: { tagFilter = $0.lowercased(); sidebarTab = .tags },
                                tagNames: { tags?.completions(for: $0) ?? [] })
@@ -86,7 +88,7 @@ struct RootView: View {
             }
         }
         .inspector(isPresented: .constant(tabs?.active != nil)) { inspector }
-        .onChange(of: tabs?.active) { _, _ in refreshBacklinks() }
+        .onChange(of: tabs?.active) { _, _ in refreshBacklinks(); cursor = 0; refreshRelations() }
         .frame(minWidth: 700, minHeight: 450)
         .onAppear {
             // Lets the CI launch test open a fixture Vault without the open panel.
@@ -139,12 +141,29 @@ struct RootView: View {
                     Button(b.path) { go(b.path, reveal: b.link.range) }.buttonStyle(.plain)
                 }
             }
+            if let (title, rel) = relations {
+                ForEach([("Calls out", rel.callsOut), ("Calls in", rel.callsIn), ("Used by", rel.usesIn)], id: \.0) { name, refs in
+                    Section("\(title): \(name)") {
+                        ForEach(Array(refs.enumerated()), id: \.offset) { _, r in
+                            Button(r.heading.map { "\(r.path)#\($0)" } ?? r.path) { go(r.path, reveal: nil) }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
             Section("Outline") {
                 ForEach(Array(NoteParser.parse(text).headings.enumerated()), id: \.offset) { _, h in
                     Button(h.title) { reveal = .init(range: h.range) }.buttonStyle(.plain).padding(.leading, CGFloat(h.level - 1) * 10)
                 }
             }
         }.inspectorColumnWidth(min: 160, ideal: 220, max: 320)
+    }
+
+    /// Inspector follows the cursor: shows relations for the Endpoint heading it sits under.
+    private func refreshRelations() {
+        guard let root, let active = tabs?.active, let text = tabs?.text(active),
+              let h = NoteParser.parse(text).endpointHeading(at: cursor),
+              let rel = try? Vault.endpointRelations(path: active, heading: h.title, in: root) else { relations = nil; return }
+        relations = (h.title, rel)
     }
 
     private func refreshBacklinks() {
@@ -200,7 +219,7 @@ private struct SearchResultsView: View {
             }
             if !results.notes.isEmpty {
                 Section("Notes") {
-                    ForEach(results.notes, id: \.self) { p in Button(p) { openNote(p) }.buttonStyle(.plain) }
+                    ForEach(results.notes, id: \.self) { p in Button(results.isArchived(p) ? "\(p)  (archived)" : p) { openNote(p) }.buttonStyle(.plain) }
                 }
             }
             if !results.matches.isEmpty {
@@ -209,7 +228,7 @@ private struct SearchResultsView: View {
                         Button { openMatch(m) } label: {
                             VStack(alignment: .leading) {
                                 Text(highlighted(m)).lineLimit(3)
-                                Text(m.path).font(.caption).foregroundStyle(.secondary)
+                                Text(results.isArchived(m.path) ? "\(m.path)  (archived)" : m.path).font(.caption).foregroundStyle(.secondary)
                             }
                         }.buttonStyle(.plain)
                     }
