@@ -3,7 +3,7 @@ import AppKit
 import ConstellationCore
 import SwiftUI
 
-/// Plain-text editor with live preview stage 1. MarkdownStyler decides formatting; this only maps roles to attributes.
+/// Plain-text editor with live preview stage 2. MarkdownStyler decides formatting; this only maps roles to attributes.
 /// Use `.id(notePath)` so each Note gets a fresh view (and undo stack).
 struct EditorView: NSViewRepresentable {
     let initialText: String
@@ -57,6 +57,13 @@ struct EditorView: NSViewRepresentable {
             self.root = root; self.onChange = onChange; self.onFollow = onFollow
         }
 
+        private var restyling = false
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !restyling, let tv = notification.object as? NSTextView else { return }
+            restyle(tv)
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             restyle(tv)
@@ -76,7 +83,10 @@ struct EditorView: NSViewRepresentable {
         /// Attribute-only edits: they never touch characters, selection or the undo stack.
         func restyle(_ tv: NSTextView) {
             guard let storage = tv.textStorage else { return }
-            let result = MarkdownStyler.style(storage.string)  // no cursorLine: stage 1 keeps every marker visible
+            restyling = true
+            defer { restyling = false }
+            let cursor = MarkdownStyler.lineRange(covering: tv.selectedRange(), in: storage.string)
+            let result = MarkdownStyler.style(storage.string, cursorLine: cursor)
             let all = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
             storage.setAttributes([.font: Self.baseFont, .foregroundColor: NSColor.textColor], range: all)
@@ -94,13 +104,16 @@ struct EditorView: NSViewRepresentable {
                     storage.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
                 }
             }
-            // Stage 1: markers dimmed, not hidden (ticket 14 hides them off the cursor line).
-            for h in result.hidden { storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: h) }
             // Broken Links (missing or ambiguous) are red. shortcut: resolves per Link on every restyle; cache when Vaults get big.
             for l in NoteParser.parse(storage.string).links {
                 if case .broken = (try? Vault.resolve(l.target, in: root)) ?? .broken(createPath: "") {
                     storage.addAttribute(.foregroundColor, value: NSColor.systemRed, range: l.range)
                 }
+            }
+            // Stage 2: markers off the cursor/selection lines are hidden (clear, ~0 width); the text itself is untouched.
+            // Fallback if this misbehaves on macOS: dim instead (.foregroundColor tertiaryLabelColor).
+            for h in result.hidden {
+                storage.addAttributes([.foregroundColor: NSColor.clear, .font: NSFont.systemFont(ofSize: 0.1)], range: h)
             }
             storage.endEditing()
         }

@@ -63,6 +63,15 @@ public enum MarkdownStyler {
         return ns.lineRange(for: NSRange(location: min(max(cursor, 0), ns.length), length: 0))
     }
 
+    /// The whole lines touched by a selection, so markers stay visible across a multi-line selection.
+    /// A selection ending exactly at a line start does not include that next line.
+    public static func lineRange(covering sel: NSRange, in text: String) -> NSRange {
+        let ns = text as NSString
+        let loc = min(max(sel.location, 0), ns.length)
+        let end = min(max(NSMaxRange(sel) - (sel.length > 0 ? 1 : 0), loc), ns.length)
+        return NSUnionRange(ns.lineRange(for: NSRange(location: loc, length: 0)), ns.lineRange(for: NSRange(location: end, length: 0)))
+    }
+
     private static func styleInline(_ s: String, offset: Int, into out: inout StyleResult, hidden: inout [NSRange]) {
         let ns = s as NSString
         func shift(_ r: NSRange) -> NSRange { NSRange(location: r.location + offset, length: r.length) }
@@ -71,6 +80,7 @@ public enum MarkdownStyler {
             let re = try! NSRegularExpression(pattern: pattern)
             return re.matches(in: s, range: NSRange(location: 0, length: ns.length))
         }
+        let wikilink = "\\[\\[([^\\[\\]|]+)(?:\\|([^\\[\\]]*))?\\]\\]"  // group 1 target[#heading], group 2 alias
         var taken: [NSRange] = []  // spans already claimed (code wins over everything)
         func free(_ r: NSRange) -> Bool { !taken.contains { NSIntersectionRange($0, r).length > 0 } }
 
@@ -82,6 +92,7 @@ public enum MarkdownStyler {
         // Delimited spans: pattern group 1 is the content; the rest of the match is markers.
         let spans: [(String, StyleRole)] = [
             ("`([^`]+)`", .inlineCode),
+            (wikilink, .link),
             ("\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*", .bold),
             ("(?<![*\\w])\\*(?=[^\\s*])([^*]+?)(?<=\\S)\\*(?![*\\w])", .italic),
             ("(?<![\\w])_(?=[^\\s_])([^_]+?)(?<=\\S)_(?![\\w])", .italic),
@@ -90,6 +101,15 @@ public enum MarkdownStyler {
         for (pattern, role) in spans {
             for m in matches(pattern) where free(m.range) {
                 taken.append(m.range)
+                if pattern == wikilink {
+                    // Visible part: the alias if given, else target and heading. Everything else is a marker.
+                    let alias = m.range(at: 2)
+                    let vis = alias.location == NSNotFound ? m.range(at: 1) : alias
+                    out.styled.append(StyledRange(range: shift(vis), role: .link))
+                    hidden.append(shift(NSRange(location: m.range.location, length: vis.location - m.range.location)))
+                    hidden.append(shift(NSRange(location: NSMaxRange(vis), length: NSMaxRange(m.range) - NSMaxRange(vis))))
+                    continue
+                }
                 let c = m.range(at: 1)
                 out.styled.append(StyledRange(range: shift(c), role: role))
                 hidden.append(shift(NSRange(location: m.range.location, length: c.location - m.range.location)))

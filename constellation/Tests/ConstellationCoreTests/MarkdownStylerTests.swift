@@ -63,4 +63,33 @@ final class MarkdownStylerTests: XCTestCase {
         let out = MarkdownStyler.style("**a**\n", cursorLine: MarkdownStyler.lineRange(containing: 3, in: "**a**\n"))
         XCTAssertEqual(out.hidden, [])
     }
+
+    func testSelectionSpanningLinesKeepsMarkersOnEveryTouchedLine() {
+        let text = "**a**\n**b**\n**c**"
+        let sel = MarkdownStyler.lineRange(covering: r(3, 5), in: text)  // from line 1 into line 2
+        XCTAssertEqual(sel, r(0, 12))
+        XCTAssertEqual(MarkdownStyler.style(text, cursorLine: sel).hidden, [r(12, 2), r(15, 2)])
+    }
+
+    func testSelectionEndingAtLineStartDoesNotTouchNextLine() {
+        let text = "**a**\n**b**"
+        XCTAssertEqual(MarkdownStyler.lineRange(covering: r(0, 6), in: text), r(0, 6))
+    }
+
+    func testWikilinkHidesBracketsOffCursorLine() {
+        let out = MarkdownStyler.style("a [[api]] b")
+        XCTAssertEqual(out.styled, [StyledRange(range: r(4, 3), role: .link)])
+        XCTAssertEqual(out.hidden, [r(2, 2), r(7, 2)])
+    }
+
+    func testWikilinkAliasShowsOnlyAlias() {
+        let out = MarkdownStyler.style("[[notes#H|the notes]]")
+        XCTAssertEqual(out.styled, [StyledRange(range: r(10, 9), role: .link)])
+        XCTAssertEqual(out.hidden, [r(0, 10), r(19, 2)])
+    }
+
+    func testWikilinkMarkersVisibleOnCursorLineAndIgnoredInCode() {
+        XCTAssertEqual(MarkdownStyler.style("[[a]]", cursorLine: r(0, 5)).hidden, [])
+        XCTAssertEqual(MarkdownStyler.style("`[[a]]`").styled.map(\.role), [.inlineCode])
+    }
 }
