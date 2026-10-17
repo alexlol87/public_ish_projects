@@ -135,7 +135,7 @@ struct EditorView: NSViewRepresentable {
             else if let tag = parsed.tags.first(where: { NSLocationInRange(offset, NSRange(location: $0.range.location, length: $0.range.length + 1)) }) { onTag(tag.name) }
         }
 
-        func textView(_ tv: NSTextView, completions words: [String], forPartialWordRange range: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+        func textView(_ tv: NSTextView, completions words: [String], forPartialWordRange range: NSRange, indexOfSelectedItem selected: UnsafeMutablePointer<Int>?) -> [String] {
             if LinkTextView.typedLinkPrefix(in: tv) == nil, let typedTag = LinkTextView.typedTagPrefix(in: tv) { return index.tagCompletions(for: typedTag.text) }
             guard let typed = LinkTextView.typedLinkPrefix(in: tv) else { return [] }
             return index.completions(for: typed.text)
