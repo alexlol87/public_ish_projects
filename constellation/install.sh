@@ -53,8 +53,8 @@ case "$os" in
     install -m 755 "$tmp/Constellation-linux-$arch.AppImage" "$BIN"
     # Icon: pull it out of the AppImage if possible, otherwise the entry just has no icon.
     icon=""
-    if (cd "$tmp" && APPIMAGE_EXTRACT_AND_RUN=1 "$BIN" --appimage-extract '*.png' >/dev/null 2>&1); then
-      png=$(find "$tmp/squashfs-root" -maxdepth 1 -name '*.png' 2>/dev/null | head -n1)
+    if (cd "$tmp" && APPIMAGE_EXTRACT_AND_RUN=1 "$BIN" --appimage-extract 'usr/share/icons/hicolor/128x128/apps/*.png' >/dev/null 2>&1); then
+      png=$(find "$tmp/squashfs-root" -name '*.png' -type f 2>/dev/null | head -n1)
       if [ -n "$png" ]; then
         mkdir -p "$(dirname "$ICON")"; cp "$png" "$ICON"; icon="$ICON"
       fi
