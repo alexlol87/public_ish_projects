@@ -128,6 +128,7 @@ function buildLayout(app: HTMLElement) {
       tabs.edit(tabs.active, doc);
       scheduleSoft();
     },
+    onSelection: () => scheduleInspector(),
     onTickTask: (offset) => void tickTask(offset),
     onOpenLink: (t, newTab) => void openLink(t, newTab),
     onTagClick: (tag) => { sideTab = "tags"; tagView = tag; void renderSide(); },
@@ -136,7 +137,6 @@ function buildLayout(app: HTMLElement) {
     tagCompletions: (prefix) => api.tagCompletions(prefix),
     isBrokenLink: (t) => broken.has(t.split("#")[0].trim()),
   });
-  for (const ev of ["keyup", "mouseup"]) P.editor.addEventListener(ev, () => void refreshInspector());
 }
 
 // ---------- notes and tabs ----------
@@ -258,6 +258,12 @@ async function tickTask(offset: number) {
 }
 
 // ---------- vault changes ----------
+
+let inspectTimer: number;
+function scheduleInspector() {
+  clearTimeout(inspectTimer);
+  inspectTimer = window.setTimeout(() => void refreshInspector(), 120);
+}
 
 let softTimer: number;
 function scheduleSoft() {

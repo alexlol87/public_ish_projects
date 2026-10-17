@@ -23,7 +23,17 @@ struct Open {
     undo: Vec<Vec<FileEdit>>,
     /// What this app last wrote per path (None = deleted); the watcher skips echoes of these.
     own: HashMap<String, Option<String>>,
+    /// Modified time and size per path as last reported. Reading a file also wakes the watcher (inotify access
+    /// events), which would make every refresh trigger another one; only a changed stamp is a change.
+    stamps: HashMap<String, Option<Stamp>>,
     _watcher: Debouncer<RecommendedWatcher>,
+}
+
+type Stamp = (std::time::SystemTime, u64);
+
+fn stamp(root: &Path, rel: &str) -> Option<Stamp> {
+    let m = std::fs::metadata(root.join(rel)).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 #[derive(Default)]
@@ -106,6 +116,7 @@ fn emit_changed(app: &AppHandle, paths: &[String], own: bool) {
 fn finish(app: &AppHandle, o: &mut Open, paths: Vec<String>, own: bool) -> Res<()> {
     for p in &paths {
         o.own.insert(p.clone(), std::fs::read_to_string(o.index.root().join(p)).ok());
+        o.stamps.insert(p.clone(), stamp(o.index.root(), p));
     }
     o.index.ingest(&paths)?;
     emit_changed(app, &paths, own);
@@ -131,6 +142,14 @@ fn watch(app: &AppHandle, root: &Path) -> Res<Debouncer<RecommendedWatcher>> {
         let Ok(mut g) = st.vault.lock() else { return };
         let Some(o) = g.as_mut().filter(|o| o.index.root() == base) else { return };
         paths.retain(|p| {
+            let now = stamp(&base, p);
+            // Same time and size as last time (and seen before): only a read woke the watcher.
+            (now.is_none() && !o.stamps.contains_key(p)) || o.stamps.get(p) != Some(&now)
+        });
+        for p in &paths {
+            o.stamps.insert(p.clone(), stamp(&base, p));
+        }
+        paths.retain(|p| {
             let now = std::fs::read_to_string(base.join(p)).ok();
             // An echo of our own write: same content as we left it.
             !(o.own.get(p).is_some_and(|w| *w == now) && o.own.remove(p).is_some())
@@ -149,7 +168,7 @@ fn open_at(app: &AppHandle, st: &AppState, path: &Path) -> Res<String> {
     let root = path.canonicalize()?;
     let index = VaultIndex::open(&root)?;
     let _watcher = watch(app, &root)?;
-    *st.vault.lock().map_err(err)? = Some(Open { index, undo: vec![], own: HashMap::new(), _watcher });
+    *st.vault.lock().map_err(err)? = Some(Open { index, undo: vec![], own: HashMap::new(), stamps: HashMap::new(), _watcher });
     let s = root.to_string_lossy().into_owned();
     let mut c = load_config(app);
     c.last_vault = Some(s.clone());

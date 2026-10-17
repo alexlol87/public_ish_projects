@@ -31,7 +31,8 @@ export async function graphView(app: HTMLElement) {
   const panel = h("div", { class: "gpanel" });
   app.replaceChildren(h("div", { class: "gwrap" }, panel, h("div", { class: "gcanvas" }, canvas)));
 
-  const save = () => { void api.saveGraphFilter(filter); void reload(); };
+  const reloads: string[] = []; // why each reload happened (e2e introspection)
+  const save = () => { void api.saveGraphFilter(filter); void reload("filter"); };
   const check = (label: string, on: boolean, set: (v: boolean) => void, id?: string) =>
     h("label", { class: "chk" }, h("input", { type: "checkbox", id, checked: on, onchange: (e: Event) => { set((e.target as HTMLInputElement).checked); save(); } }), label);
   // Empty set means "all" in the filter; the checkboxes show the full list ticked in that case.
@@ -62,7 +63,8 @@ export async function graphView(app: HTMLElement) {
           h("option", { value: "" }, "(any)"), ...tags.map((t) => h("option", { value: t, selected: t === filter.tag }, "#" + t)))));
   }
 
-  async function reload() {
+  async function reload(why = "?") {
+    reloads.push(why);
     try { g = await api.graph(filter, local ? current : null); } catch (e) { toast(String(e), true); return; }
     neighbours = new Map(g.nodes.map((n) => [n.id, new Set<string>()]));
     for (const e of g.edges) { neighbours.get(e.from)?.add(e.to); neighbours.get(e.to)?.add(e.from); }
@@ -140,7 +142,9 @@ export async function graphView(app: HTMLElement) {
 
   function frame() {
     queued = false;
-    if (heat > 0) { layout.step(); heat--; if (heat === 0 && refit) { refit = false; fit(); } }
+    // Several layout steps per frame (within a few ms) so the graph settles in a second or two.
+    for (let t0 = performance.now(), n = 0; heat > 0 && n < 8 && performance.now() - t0 < 6; n++) { layout.step(); heat--; }
+    if (heat === 0 && refit) { refit = false; fit(); }
     draw();
     if (heat > 0) { queued = true; requestAnimationFrame(frame); }
   }
@@ -160,12 +164,12 @@ export async function graphView(app: HTMLElement) {
   };
   // Read-only introspection for the e2e harness: where each node is drawn (canvas pixels) and the view transform.
   Object.assign(canvas, {
-    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, kind: n.kind, x, y }; }), edges: g.edges.length, hover, local }),
+    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, kind: n.kind, x, y }; }), edges: g.edges.length, hover, local, heat, reloads: [...reloads], drag: drag && { id: drag.id, moved: drag.moved } }),
   });
   const pos = (e: MouseEvent) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
   let drag: { id: string | null; moved: boolean; sx: number; sy: number } | null = null;
 
-  canvas.addEventListener("mousedown", (e) => { const [x, y] = pos(e); drag = { id: nodeAt(x, y), moved: false, sx: x, sy: y }; });
+  canvas.addEventListener("mousedown", (e) => { refit = false; const [x, y] = pos(e); drag = { id: nodeAt(x, y), moved: false, sx: x, sy: y }; });
   addEventListener("mousemove", (e) => {
     const [x, y] = pos(e);
     if (drag) {
@@ -183,11 +187,11 @@ export async function graphView(app: HTMLElement) {
   addEventListener("mouseup", () => {
     if (!drag) return;
     const d = drag; drag = null;
-    if (d.id) layout.unpin(d.id);
     if (!d.moved && d.id) void click(d.id);
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
+    refit = false; // the user took over the view
     const [x, y] = pos(e), k = Math.max(0.05, Math.min(8, view.k * Math.exp(-e.deltaY * 0.0015)));
     view.x = x - ((x - view.x) / view.k) * k; view.y = y - ((y - view.y) / view.k) * k; view.k = k;
     redraw();
@@ -211,12 +215,12 @@ export async function graphView(app: HTMLElement) {
 
   await listen<{ paths: string[] }>("vault-changed", (e) => {
     if (e.payload.paths.every((p) => p.startsWith(".constellation/"))) return; // our own filter save: don't rebuild the panel under the user's mouse
-    void reload(); void renderPanel();
+    void reload("vault " + e.payload.paths.join(",")); void renderPanel();
   });
-  await listen<string | null>("current-note", (e) => { current = e.payload; if (local) void reload(); else redraw(); });
+  await listen<string | null>("current-note", (e) => { current = e.payload; if (local) void reload("current-note"); else redraw(); });
   await listen("settings-changed", async () => { await loadTheme(); redraw(); });
 
   // Wrap `local` toggling so the panel's checkbox triggers a reload through save(); it only persists the filter too.
   await renderPanel();
-  await reload();
+  await reload("init");
 }

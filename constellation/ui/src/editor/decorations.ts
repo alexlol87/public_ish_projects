@@ -32,6 +32,8 @@ class ImageWidget extends WidgetType {
   constructor(private src: string, private alt: string) { super(); }
   eq(o: ImageWidget) { return o.src === this.src && o.alt === this.alt; }
   toDOM() {
+    // The widget's root node must stay: replacing it behind CodeMirror's back makes it read the change as typed text.
+    const root = document.createElement("span");
     const img = document.createElement("img");
     img.className = "cm-image";
     img.alt = this.alt;
@@ -44,7 +46,8 @@ class ImageWidget extends WidgetType {
     };
     img.addEventListener("error", missing);
     if (!this.src) queueMicrotask(missing);
-    return img;
+    root.append(img);
+    return root;
   }
 }
 

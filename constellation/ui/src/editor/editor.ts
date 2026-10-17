@@ -17,6 +17,8 @@ export interface EditorOptions {
   onOpenLink?(target: string, newTab: boolean): void;
   /** Mod-click on a `#tag`; `tag` has no `#`. */
   onTagClick?(tag: string): void;
+  /** The caret or selection moved (by the user or by code, e.g. an outline jump). */
+  onSelection?(): void;
   resolveImage?(path: string): string;
   /** Candidates for `[[typed`. */
   linkCompletions?(typed: string): Promise<string[]>;
@@ -124,7 +126,10 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions): Editor {
         return true;
       },
     }),
-    EditorView.updateListener.of((u) => u.docChanged && opts.onChange?.(u.state.doc.toString())),
+    EditorView.updateListener.of((u) => {
+      if (u.docChanged) opts.onChange?.(u.state.doc.toString());
+      if (u.selectionSet) opts.onSelection?.();
+    }),
   ];
 
   // One EditorState per tab keeps each tab's undo history while it is in the background.
