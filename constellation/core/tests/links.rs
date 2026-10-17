@@ -90,6 +90,9 @@ fn completions_for_notes_and_headings() {
     let v = make_vault(&FILES);
     let ix = VaultIndex::open(v.path()).unwrap();
     assert_eq!(ix.completions("ov"), ["overview"]);
+    // ambiguous names are offered as paths, and the typed text may match inside a path
+    assert_eq!(ix.completions("note"), ["acme-shop/notes", "clients/notes"]);
+    assert_eq!(ix.completions("shop/cart"), ["api"]);
     assert_eq!(ix.completions("overview#"), ["overview#Overview", "overview#Goals"]);
     assert_eq!(ix.completions("overview#go"), ["overview#Goals"]);
     assert!(ix.completions("nothing#").is_empty());

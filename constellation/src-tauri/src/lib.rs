@@ -79,7 +79,8 @@ fn staleness_days(root: &Path) -> i64 {
 
 #[tauri::command]
 fn get_settings(app: AppHandle, st: State<AppState>) -> Settings {
-    let days = st.vault.lock().ok().and_then(|g| g.as_ref().map(|o| staleness_days(o.index.root()))).unwrap_or(staleness::DEFAULT_THRESHOLD);
+    let days =
+        st.vault.lock().ok().and_then(|g| g.as_ref().map(|o| staleness_days(o.index.root()))).unwrap_or(staleness::DEFAULT_THRESHOLD);
     Settings { theme: load_config(&app).theme.unwrap_or_else(|| "System".into()), staleness_days: days }
 }
 
@@ -176,6 +177,10 @@ fn create_vault(app: AppHandle, st: State<AppState>, path: String) -> Res<String
 
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Option<String> {
+    // e2e harness only: a native dialog can't be driven by WebDriver, so it names the answer here.
+    if let Some(dir) = std::env::var("CONSTELLATION_E2E_PICK").ok().filter(|s| !s.is_empty()) {
+        return Some(dir);
+    }
     app.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.to_string_lossy().into_owned())
 }
 
@@ -266,18 +271,18 @@ fn inspect(st: State<AppState>, path: String, text: String, offset: usize) -> Re
         let note = parser::parse(&text);
         let endpoint = note.endpoint_heading(offset).map(|h| h.title.clone());
         let relations = endpoint.as_ref().map(|h| o.index.endpoint_relations(&path, h));
+        // A Repo is `<project>/<repo>/`: only Notes at least that deep belong to one.
         let folder = path.split('/').take(2).collect::<Vec<_>>().join("/");
-        let repo = agent_files::is_repo_folder(&folder)
-            .then(|| {
-                let s = o.index.repo_staleness(staleness::today()).get(&folder).copied();
-                let days = staleness_days(o.index.root());
-                RepoInfo {
-                    name: folder.rsplit('/').next().unwrap_or("").into(),
-                    label: s.map(|s| s.label()).unwrap_or_else(|| "no repo README".into()),
-                    stale: s.is_none_or(|s| s.is_stale(days)),
-                    folder,
-                }
-            });
+        let repo = (path.matches('/').count() >= 2 && agent_files::is_repo_folder(&folder)).then(|| {
+            let s = o.index.repo_staleness(staleness::today()).get(&folder).copied();
+            let days = staleness_days(o.index.root());
+            RepoInfo {
+                name: folder.rsplit('/').next().unwrap_or("").into(),
+                label: s.map(|s| s.label()).unwrap_or_else(|| "no repo README".into()),
+                stale: s.is_none_or(|s| s.is_stale(days)),
+                folder,
+            }
+        });
         Ok(Inspect { headings: note.headings, endpoint, relations, backlinks: o.index.backlinks(&path), repo })
     })
 }
@@ -290,7 +295,11 @@ fn log(msg: String) {
 
 #[tauri::command]
 fn prompt(kind: String, repo: String) -> String {
-    if kind == "ingest" { agent_files::ingest_prompt(&repo) } else { agent_files::refresh_prompt(&repo) }
+    if kind == "ingest" {
+        agent_files::ingest_prompt(&repo)
+    } else {
+        agent_files::refresh_prompt(&repo)
+    }
 }
 
 // ---- graph ----
@@ -465,19 +474,61 @@ fn image_response(app: &AppHandle, uri: &str) -> Option<tauri::http::Response<Ve
 }
 
 pub fn run() {
+    // Blank/black windows in VMs and on some GPUs come from WebKitGTK's DMABUF renderer.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::default())
+        // The graph window must not keep the app alive after the main window is gone.
+        .on_window_event(|w, ev| {
+            if w.label() == "main" && matches!(ev, tauri::WindowEvent::Destroyed) {
+                w.app_handle().exit(0);
+            }
+        })
         .register_uri_scheme_protocol("vaultimg", |ctx, req| {
             image_response(ctx.app_handle(), &req.uri().to_string())
                 .unwrap_or_else(|| tauri::http::Response::builder().status(404).body(vec![]).unwrap())
         })
         .invoke_handler(tauri::generate_handler![
-            log, get_settings, set_settings, startup, open_vault, create_vault, pick_folder, copy_text, tree, read_note,
-            write_note, search, tag_tree, tag_hits, tag_completions, link_completions, resolve, broken_targets,
-            inspect, prompt, graph, graph_filter, save_graph_filter, set_current, get_current, open_graph, show_note,
-            apply_edits, undo, undo_depth, create_note, rename_note, rename_heading, rename_tag, tick
+            log,
+            get_settings,
+            set_settings,
+            startup,
+            open_vault,
+            create_vault,
+            pick_folder,
+            copy_text,
+            tree,
+            read_note,
+            write_note,
+            search,
+            tag_tree,
+            tag_hits,
+            tag_completions,
+            link_completions,
+            resolve,
+            broken_targets,
+            inspect,
+            prompt,
+            graph,
+            graph_filter,
+            save_graph_filter,
+            set_current,
+            get_current,
+            open_graph,
+            show_note,
+            apply_edits,
+            undo,
+            undo_depth,
+            create_note,
+            rename_note,
+            rename_heading,
+            rename_tag,
+            tick
         ])
         .run(tauri::generate_context!())
         .expect("error while running Constellation");

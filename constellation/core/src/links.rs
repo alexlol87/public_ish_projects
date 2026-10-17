@@ -104,10 +104,18 @@ pub fn completions(parsed: &BTreeMap<String, ParsedNote>, paths: &PathIndex, typ
             .map(|h| format!("{target}#{}", h.title))
             .collect();
     }
+    // A unique name is enough to link to a Note; an ambiguous name would resolve to nothing, so offer its full path.
+    // Typed text matches the start of that label or anywhere in the path (`acme/cart` finds `acme-shop/cart-service/..`).
+    let name = |p: &str| strip_md(p.rsplit('/').next().unwrap_or("")).to_string();
+    let mut seen = std::collections::HashSet::new();
     parsed
         .keys()
-        .map(|p| strip_md(p.rsplit('/').next().unwrap_or("")).to_string())
-        .filter(|n| n.to_lowercase().starts_with(&lower))
+        .filter_map(|p| {
+            let n = name(p);
+            let label = if paths.resolve(&n) == LinkResolution::note(p) { n } else { strip_md(p).to_string() };
+            (label.to_lowercase().starts_with(&lower) || p.to_lowercase().contains(&lower)).then_some(label)
+        })
+        .filter(|l| seen.insert(l.clone()))
         .collect()
 }
 
