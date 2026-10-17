@@ -1,0 +1,12 @@
+{
+  // Workspace settings: keep generated and vendored files out of the agent's search results.
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/coverage": true,
+    "**/src/generated": true
+  },
+  // Copy these git-ignored files into each agent worktree so sessions can build and test right away. (Experimental)
+  // This replaces any user-level value. Worktree sessions run with "Allow all", so don't add .env or other secrets.
+  "git.worktreeIncludeFiles": ["node_modules/**"]
+}
