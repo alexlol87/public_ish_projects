@@ -81,7 +81,7 @@ export async function graphView(app: HTMLElement) {
   const toScreen = (x: number, y: number) => [x * view.k + view.x, y * view.k + view.y] as const;
   const toWorld = (sx: number, sy: number) => [(sx - view.x) / view.k, (sy - view.y) / view.k] as const;
   const radius = (id: string) => 4 + Math.min(10, Math.sqrt(neighbours.get(id)?.size ?? 0) * 1.6);
-  let queued = false;
+  let queued = false, fits = 0;
 
   function draw() {
     const pal = palette(theme);
@@ -98,28 +98,39 @@ export async function graphView(app: HTMLElement) {
       call: { c: pal.heading, w: 2, dash: [] },
       uses: { c: pal.tag, w: 1.6, dash: [7, 4] },
     };
+    // One path per edge kind and highlight state (thousands of separate strokes are slow); off-screen edges are skipped.
+    const paths = new Map<string, { kind: EdgeKind; on: boolean; line: Path2D; head: Path2D }>();
     for (const e of g.edges) {
       const a = layout.get(e.from), b = layout.get(e.to);
       if (!a || !b) continue;
-      const s = stroke[e.kind], on = !hover || e.from === hover || e.to === hover;
-      ctx.globalAlpha = on ? 0.85 : 0.1;
-      ctx.strokeStyle = s.c; ctx.fillStyle = s.c; ctx.lineWidth = s.w; ctx.setLineDash(s.dash);
       const [x1, y1] = toScreen(a.x, a.y), [x2, y2] = toScreen(b.x, b.y);
-      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      if ((x1 < 0 && x2 < 0) || (y1 < 0 && y2 < 0) || (x1 > w && x2 > w) || (y1 > hgt && y2 > hgt)) continue;
+      const on = !hover || e.from === hover || e.to === hover, key = e.kind + on;
+      let p = paths.get(key);
+      if (!p) paths.set(key, (p = { kind: e.kind, on, line: new Path2D(), head: new Path2D() }));
+      p.line.moveTo(x1, y1); p.line.lineTo(x2, y2);
       if (e.kind === "call" || e.kind === "uses") { // arrow head near the target
         const ang = Math.atan2(y2 - y1, x2 - x1), r = radius(e.to) * view.k + 3;
         const tx = x2 - Math.cos(ang) * r, ty = y2 - Math.sin(ang) * r;
-        ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(tx, ty);
-        ctx.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
-        ctx.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4)); ctx.fill();
+        p.head.moveTo(tx, ty);
+        p.head.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
+        p.head.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4)); p.head.closePath();
       }
+    }
+    for (const p of [...paths.values()].sort((a, b) => Number(a.on) - Number(b.on))) {
+      const s = stroke[p.kind];
+      ctx.globalAlpha = p.on ? 0.85 : 0.1;
+      // Lines wider than 1 px are slow to stroke in bulk (WebKitGTK/Cairo), so big graphs draw hairlines.
+      ctx.strokeStyle = s.c; ctx.fillStyle = s.c; ctx.lineWidth = g.edges.length > 2000 ? 1 : s.w; ctx.setLineDash(s.dash);
+      ctx.stroke(p.line);
+      ctx.setLineDash([]); ctx.fill(p.head);
     }
     ctx.setLineDash([]);
     ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "center";
     for (const n of g.nodes) {
       const p = layout.get(n.id);
       if (!p) continue;
-      const [x, y] = toScreen(p.x, p.y), r = radius(n.id) * Math.max(0.6, Math.min(view.k, 2));
+      const [x, y] = toScreen(p.x, p.y), r = radius(n.id) * Math.max(g.nodes.length > 1000 ? 0.25 : 0.6, Math.min(view.k, 2));
       if (x < -50 || y < -50 || x > w + 50 || y > hgt + 50) continue;
       ctx.globalAlpha = lit(n.id) ? 1 : 0.15;
       ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
@@ -148,9 +159,11 @@ export async function graphView(app: HTMLElement) {
 
   function frame() {
     queued = false;
-    // Several layout steps per frame (within a few ms) so the graph settles in a second or two.
-    for (let t0 = performance.now(), n = 0; heat > 0 && n < 8 && performance.now() - t0 < 6; n++) { layout.step(); heat--; }
-    if (heat === 0 && refit) { refit = false; fit(); }
+    // Several layout steps per frame so the graph settles in a second or two; big graphs take longer to draw, so they get
+    // a bigger step budget per drawn frame. Until the user takes over the view, it keeps fitting while it spreads out.
+    const budget = g.nodes.length > 1000 ? 40 : 6;
+    for (let t0 = performance.now(), n = 0; heat > 0 && n < 8 && performance.now() - t0 < budget; n++) { layout.step(); heat--; }
+    if (refit && (heat === 0 || ++fits % 10 === 0)) { fit(); if (heat === 0) refit = false; }
     draw();
     if (heat > 0) { queued = true; requestAnimationFrame(frame); }
   }

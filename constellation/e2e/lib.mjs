@@ -6,7 +6,9 @@ import path from "node:path";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BIN = path.join(process.env.CARGO_TARGET_DIR || path.resolve(import.meta.dirname, "../target"), "release/constellation");
-const BASE = "http://127.0.0.1:4444";
+// E2E_PORT runs a second harness alongside another one: its own ports, and no killing of the other's processes by name.
+const PORT = Number(process.env.E2E_PORT || 4444);
+const BASE = `http://127.0.0.1:${PORT}`;
 
 let xvfb;
 /** A private X display when Xvfb is installed (a real display may be locked or blanked, which stops WebKit painting
@@ -38,14 +40,14 @@ async function wd(method, p, body) {
 
 /** Starts tauri-driver (it passes its environment on to the app) and a session. */
 export async function launch({ vault, config, env = {} }) {
-  if (!process.env.E2E_EXTERNAL) for (const n of ["tauri-driver", "WebKitWebDriver", "constellation"]) spawnSync("pkill", ["-x", n]); // leftovers of a killed run
+  if (!process.env.E2E_EXTERNAL && !process.env.E2E_PORT) for (const n of ["tauri-driver", "WebKitWebDriver", "constellation"]) spawnSync("pkill", ["-x", n]); // leftovers of a killed run
   await sleep(300);
   display();
   await sleep(xvfb && !xvfb.ready ? 1500 : 0); if (xvfb) xvfb.ready = true;
   const e = { ...process.env, WEBKIT_DISABLE_DMABUF_RENDERER: "1", XDG_CONFIG_HOME: config, ...env };
   delete e.CONSTELLATION_VAULT;
   if (vault) e.CONSTELLATION_VAULT = vault;
-  const driver = process.env.E2E_EXTERNAL ? { pid: 0 } : spawn("tauri-driver", [], { env: e, stdio: process.env.E2E_STDIO ? "inherit" : "ignore", detached: !process.env.E2E_NODETACH });
+  const driver = process.env.E2E_EXTERNAL ? { pid: 0 } : spawn("tauri-driver", ["--port", String(PORT), "--native-port", String(PORT + 1)], { env: e, stdio: process.env.E2E_STDIO ? "inherit" : "ignore", detached: !process.env.E2E_NODETACH });
   for (let i = 0; i < 50; i++) { try { await fetch(BASE + "/status"); break; } catch { await sleep(100); } }
   const s = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: BIN } } } });
   await sleep(500);
@@ -142,7 +144,7 @@ export class App {
     try { await wd("DELETE", this.id); } catch {}
     try { process.kill(-this.driver.pid, "SIGKILL"); } catch {}
     await sleep(500);
-    for (const n of ["constellation", "WebKitWebDriver"]) spawnSync("pkill", ["-x", n]);
+    if (!process.env.E2E_PORT) for (const n of ["constellation", "WebKitWebDriver"]) spawnSync("pkill", ["-x", n]);
     await sleep(300);
   }
 }
