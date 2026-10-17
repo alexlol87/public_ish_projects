@@ -18,15 +18,18 @@ func promptText(_ title: String, initial: String = "") -> String? {
 }
 
 /// Applies a command's `[FileEdit]` and registers the inverse with the window's UndoManager, so one ⌘Z (and one redo,
-/// registered while undoing) covers every file touched. `after` runs after each application (refresh tree, indexes, tabs).
+/// registered while undoing) covers every file touched. `before` runs ahead of each application (flush unsaved editor text so
+/// it is not lost to the rewrite); `after` runs after each one (refresh tree, indexes, tabs).
 enum UndoableEdits {
     private final class Target {}
     private static let target = Target()
 
-    static func run(_ edits: [FileEdit], root: URL, undo: UndoManager?, name: String, after: @escaping ([FileEdit]) -> Void) throws {
+    static func run(_ edits: [FileEdit], root: URL, undo: UndoManager?, name: String,
+                    before: @escaping () throws -> Void, after: @escaping ([FileEdit]) -> Void) throws {
+        try before()
         let inverse = try FileEdit.apply(edits, root: root)
         after(edits)
-        undo?.registerUndo(withTarget: target) { _ in try? run(inverse, root: root, undo: undo, name: name, after: after) }
+        undo?.registerUndo(withTarget: target) { _ in try? run(inverse, root: root, undo: undo, name: name, before: before, after: after) }
         undo?.setActionName(name)
     }
 }

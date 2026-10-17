@@ -7,19 +7,20 @@ import SwiftUI
 /// Use `.id(notePath)` so each Note gets a fresh view (and undo stack).
 struct EditorView: NSViewRepresentable {
     let initialText: String
-    let root: URL
+    let index: VaultIndex
     var notePath = ""
     var reveal: Reveal?
+    var onRevealed: () -> Void = {}                     // called once `reveal` was applied, so the owner can clear it
     var onCursor: (Int) -> Void = { _ in }
     let onChange: (String) -> Void
     let onFollow: (WikiLink) -> Void
     var onTag: (String) -> Void = { _ in }              // ⌘-click on a #tag
-    var tagNames: (String) -> [String] = { _ in [] }    // `#` autocomplete source
 
-    /// Asks the editor to select and scroll to a range once (`id` makes repeats of the same range fire again).
-    struct Reveal: Equatable { let id = UUID(); let range: NSRange }
+    /// Asks the editor of Note `path` (and only that one) to select and scroll to a range once. `id` makes repeats of the
+    /// same range fire again; the owner clears it from `onRevealed`, so it cannot fire again on a tab switch.
+    struct Reveal: Equatable { let id = UUID(); let path: String; let range: NSRange }
 
-    func makeCoordinator() -> Coordinator { Coordinator(root: root, notePath: notePath, onChange: onChange, onFollow: onFollow) }
+    func makeCoordinator() -> Coordinator { Coordinator(index: index, notePath: notePath, onChange: onChange, onFollow: onFollow) }
 
     func makeNSView(context: Context) -> NSScrollView {
         // Default NSTextView is TextKit 2; never touch `.layoutManager` (drops to TextKit 1).
@@ -30,7 +31,7 @@ struct EditorView: NSViewRepresentable {
         tv.isVerticallyResizable = true
         tv.textContainer?.widthTracksTextView = true
         scroll.documentView = tv
-        tv.onPlainClick = { [weak c = context.coordinator] tv, offset in c?.tickIfBox(tv, at: offset) ?? false }
+        tv.onPlainClick = { [weak c = context.coordinator] tv, offset in c?.plainClick(tv, at: offset) ?? false }
         tv.onCommandClick = { [weak c = context.coordinator] tv, offset in c?.follow(tv, at: offset) }
         tv.delegate = context.coordinator
         tv.isRichText = false
@@ -48,42 +49,42 @@ struct EditorView: NSViewRepresentable {
         context.coordinator.onCursor = onCursor
         context.coordinator.onFollow = onFollow
         context.coordinator.onTag = onTag
-        context.coordinator.tagNames = tagNames
-        if let reveal, reveal.id != context.coordinator.lastReveal, let tv = nsView.documentView as? NSTextView {
+        if let reveal, reveal.path == notePath, reveal.id != context.coordinator.lastReveal, let tv = nsView.documentView as? NSTextView {
             context.coordinator.lastReveal = reveal.id
-            let r = NSIntersectionRange(reveal.range, NSRange(location: 0, length: (tv.string as NSString).length))
-            DispatchQueue.main.async { tv.setSelectedRange(r); tv.scrollRangeToVisible(r); tv.window?.makeFirstResponder(tv) }
+            let range = NSIntersectionRange(reveal.range, NSRange(location: 0, length: (tv.string as NSString).length))
+            let done = onRevealed
+            DispatchQueue.main.async { tv.setSelectedRange(range); tv.scrollRangeToVisible(range); tv.window?.makeFirstResponder(tv); done() }
         }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         static let baseFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
-        let root: URL
+        let index: VaultIndex
+        var root: URL { index.root }
         var onChange: (String) -> Void
         let notePath: String
         var onFollow: (WikiLink) -> Void
         var onTag: (String) -> Void = { _ in }
-        var tagNames: (String) -> [String] = { _ in [] }
         var lastReveal: UUID?
         var onCursor: (Int) -> Void = { _ in }
-        init(root: URL, notePath: String, onChange: @escaping (String) -> Void, onFollow: @escaping (WikiLink) -> Void) {
-            self.root = root; self.notePath = notePath; self.onChange = onChange; self.onFollow = onFollow
+        init(index: VaultIndex, notePath: String, onChange: @escaping (String) -> Void, onFollow: @escaping (WikiLink) -> Void) {
+            self.index = index; self.notePath = notePath; self.onChange = onChange; self.onFollow = onFollow
         }
 
         private var token: NSObjectProtocol?
         func observeFormatActions(_ tv: NSTextView) {
-            token = NotificationCenter.default.addObserver(forName: .formatAction, object: nil, queue: .main) { [weak tv] n in
-                guard let tv, tv.window?.firstResponder === tv, let a = n.object as? FormatAction else { return }
-                let e = MarkdownStyler.apply(a, to: tv.string, selection: tv.selectedRange())
+            token = NotificationCenter.default.addObserver(forName: .formatAction, object: nil, queue: .main) { [weak tv] note in
+                guard let tv, tv.window?.firstResponder === tv, let action = note.object as? FormatAction else { return }
+                let edit = MarkdownStyler.apply(action, to: tv.string, selection: tv.selectedRange())
                 // One replacement over the changed span = one undo step.
-                let old = tv.string as NSString, new = e.text as NSString
-                var p = 0
-                while p < min(old.length, new.length), old.character(at: p) == new.character(at: p) { p += 1 }
-                var q = 0
-                while q < min(old.length, new.length) - p, old.character(at: old.length - 1 - q) == new.character(at: new.length - 1 - q) { q += 1 }
-                tv.insertText(new.substring(with: NSRange(location: p, length: new.length - p - q)),
-                              replacementRange: NSRange(location: p, length: old.length - p - q))
-                tv.setSelectedRange(e.selection)
+                let old = tv.string as NSString, new = edit.text as NSString
+                var prefix = 0
+                while prefix < min(old.length, new.length), old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+                var suffix = 0
+                while suffix < min(old.length, new.length) - prefix, old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
+                tv.insertText(new.substring(with: NSRange(location: prefix, length: new.length - prefix - suffix)),
+                              replacementRange: NSRange(location: prefix, length: old.length - prefix - suffix))
+                tv.setSelectedRange(edit.selection)
             }
         }
         deinit { token.map(NotificationCenter.default.removeObserver) }
@@ -119,22 +120,29 @@ struct EditorView: NSViewRepresentable {
             return true
         }
 
+        /// Plain click: a task checkbox ticks; a broken Link creates its missing Note (spec 42). Anything else is a normal click.
+        func plainClick(_ tv: NSTextView, at offset: Int) -> Bool {
+            if tickIfBox(tv, at: offset) { return true }
+            guard let link = Vault.parse(tv.string).links.first(where: { NSLocationInRange(offset, $0.range) }),
+                  index.brokenLinks(in: tv.string).contains(link) else { return false }
+            onFollow(link)
+            return true
+        }
+
         func follow(_ tv: NSTextView, at offset: Int) {
-
-            let parsed = NoteParser.parse(tv.string)
-            if let l = parsed.links.first(where: { NSLocationInRange(offset, $0.range) }) { onFollow(l) }
-            else if let t = parsed.tags.first(where: { NSLocationInRange(offset, NSRange(location: $0.range.location, length: $0.range.length + 1)) }) { onTag(t.name) }
-
+            let parsed = Vault.parse(tv.string)
+            if let link = parsed.links.first(where: { NSLocationInRange(offset, $0.range) }) { onFollow(link) }
+            else if let tag = parsed.tags.first(where: { NSLocationInRange(offset, NSRange(location: $0.range.location, length: $0.range.length + 1)) }) { onTag(tag.name) }
         }
 
         func textView(_ tv: NSTextView, completions words: [String], forPartialWordRange range: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
-            if LinkTextView.typedLinkPrefix(in: tv) == nil, let t = LinkTextView.typedTagPrefix(in: tv) { return tagNames(t.text) }
+            if LinkTextView.typedLinkPrefix(in: tv) == nil, let typedTag = LinkTextView.typedTagPrefix(in: tv) { return index.tagCompletions(for: typedTag.text) }
             guard let typed = LinkTextView.typedLinkPrefix(in: tv) else { return [] }
-            return (try? Vault.completions(for: typed.text, in: root)) ?? []
+            return index.completions(for: typed.text)
         }
 
         static func attachment(image path: String, alt: String, root: URL?, note: String) -> NSTextAttachment {
-            if let root, let url = ImagePaths.resolve(path, note: note, root: root), let img = NSImage(contentsOf: url) {
+            if let root, let url = Vault.resolveImage(path, note: note, root: root), let img = NSImage(contentsOf: url) {
                 let a = NSTextAttachment()
                 let w = min(img.size.width, 480)
                 a.image = img
@@ -166,41 +174,39 @@ struct EditorView: NSViewRepresentable {
             let pal = AppSettings.shared.palette
             tv.backgroundColor = NSColor(hex: pal.background)
             storage.setAttributes([.font: Self.baseFont, .foregroundColor: NSColor(hex: pal.text)], range: all)
-            for s in result.styled {
-                switch s.role {
+            for span in result.styled {
+                switch span.role {
                 case .heading(let level):
-                    storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 26 - CGFloat(level) * 3, weight: .bold), range: s.range)
+                    storage.addAttributes([.font: NSFont.systemFont(ofSize: 26 - CGFloat(level) * 3, weight: .bold), .foregroundColor: NSColor(hex: pal.heading)], range: span.range)
                 case .bold:
-                    storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: Self.baseFont.pointSize, weight: .bold), range: s.range)
+                    storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: Self.baseFont.pointSize, weight: .bold), range: span.range)
                 case .italic:
-                    storage.addAttribute(.obliqueness, value: 0.2, range: s.range)
+                    storage.addAttribute(.obliqueness, value: 0.2, range: span.range)
                 case .inlineCode, .codeBlock:
-                    storage.addAttribute(.backgroundColor, value: NSColor.quaternaryLabelColor, range: s.range)
+                    storage.addAttributes([.backgroundColor: NSColor.quaternaryLabelColor, .foregroundColor: NSColor(hex: pal.code)], range: span.range)
                 case .image(let path, let alt):
                     // Widget: draw the image (or a placeholder) on the range's first character; the rest is hidden below.
                     // Unverified on macOS: .attachment on a non-U+FFFC character. Fallback: dim the raw text only.
-                    storage.addAttribute(.attachment, value: Self.attachment(image: path, alt: alt, root: root, note: notePath), range: NSRange(location: s.range.location, length: 1))
+                    storage.addAttribute(.attachment, value: Self.attachment(image: path, alt: alt, root: root, note: notePath), range: NSRange(location: span.range.location, length: 1))
                 case .table(let rendered):
-                    storage.addAttribute(.attachment, value: Self.attachment(text: rendered), range: NSRange(location: s.range.location, length: 1))
+                    storage.addAttribute(.attachment, value: Self.attachment(text: rendered), range: NSRange(location: span.range.location, length: 1))
                 case .taskBox(let checked):
                     // Checkbox widget on the `[ ]` range's first character (unverified on macOS; fallback: leave raw `[ ]`).
-                    storage.addAttribute(.attachment, value: Self.attachment(text: checked ? "☑" : "☐"), range: NSRange(location: s.range.location, length: 1))
+                    storage.addAttribute(.attachment, value: Self.attachment(text: checked ? "☑" : "☐"), range: NSRange(location: span.range.location, length: 1))
                 case .tag:
-                    storage.addAttributes([.foregroundColor: NSColor(hex: pal.tag), .backgroundColor: NSColor(hex: pal.tag).withAlphaComponent(0.12)], range: s.range)
+                    storage.addAttributes([.foregroundColor: NSColor(hex: pal.tag), .backgroundColor: NSColor(hex: pal.tag).withAlphaComponent(0.12)], range: span.range)
                 case .link:
-                    storage.addAttributes([.foregroundColor: NSColor(hex: pal.link), .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
+                    storage.addAttributes([.foregroundColor: NSColor(hex: pal.link), .underlineStyle: NSUnderlineStyle.single.rawValue], range: span.range)
                 }
             }
-            // Broken Links (missing or ambiguous) are red. shortcut: resolves per Link on every restyle; cache when Vaults get big.
-            for l in NoteParser.parse(storage.string).links {
-                if case .broken = (try? Vault.resolve(l.target, in: root)) ?? .broken(createPath: "") {
-                    storage.addAttribute(.foregroundColor, value: NSColor.systemRed, range: l.range)
-                }
+            // Broken Links (missing or ambiguous) are red.
+            for link in index.brokenLinks(in: storage.string) {
+                storage.addAttribute(.foregroundColor, value: NSColor.systemRed, range: link.range)
             }
             // Stage 2: markers off the cursor/selection lines are hidden (clear, ~0 width); the text itself is untouched.
             // Fallback if this misbehaves on macOS: dim instead (.foregroundColor tertiaryLabelColor).
-            for h in result.hidden {
-                storage.addAttributes([.foregroundColor: NSColor.clear, .font: NSFont.systemFont(ofSize: 0.1)], range: h)
+            for marker in result.hidden {
+                storage.addAttributes([.foregroundColor: NSColor.clear, .font: NSFont.systemFont(ofSize: 0.1)], range: marker)
             }
             storage.endEditing()
         }
@@ -233,17 +239,15 @@ final class LinkTextView: NSTextView {
         return (ns.substring(with: NSRange(location: start, length: cursor - start)), NSRange(location: start, length: cursor - start))
     }
 
-
     /// Text typed after a `#` that would start a Tag (excluding the `#`), with its range.
     static func typedTagPrefix(in tv: NSTextView) -> (text: String, range: NSRange)? {
         let ns = tv.string as NSString
         let cursor = tv.selectedRange().location
         let line = ns.lineRange(for: NSRange(location: min(cursor, ns.length), length: 0))
-        guard let text = TagIndex.typedPrefix(inLineBeforeCursor: ns.substring(with: NSRange(location: line.location, length: cursor - line.location))) else { return nil }
+        guard let text = Vault.typedTagPrefix(inLineBeforeCursor: ns.substring(with: NSRange(location: line.location, length: cursor - line.location))) else { return nil }
         return (text, NSRange(location: cursor - (text as NSString).length, length: (text as NSString).length))
     }
 
     override var rangeForUserCompletion: NSRange { Self.typedLinkPrefix(in: self)?.range ?? Self.typedTagPrefix(in: self)?.range ?? super.rangeForUserCompletion }
-
 }
 #endif

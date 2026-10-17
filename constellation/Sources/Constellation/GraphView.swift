@@ -2,27 +2,26 @@
 import ConstellationCore
 import SwiftUI
 
-/// Shared between the main window (sets `root`, `onOpen`, calls `reload`) and the graph window. Uncompiled on Linux.
+/// Shared between the main window (sets `index`, `repos`, `onOpen`, calls `reload`) and the graph window. Uncompiled on Linux.
 final class GraphModel: ObservableObject {
     static let shared = GraphModel()
-    var root: URL? { didSet { if let root { filter = GraphFilter.load(from: root) } } }  // filter's didSet reloads
+    var index: VaultIndex? { didSet { filter = index.map { GraphFilter.load(from: $0.root) } ?? GraphFilter() } }  // filter's didSet reloads
     var onOpen: (String) -> Void = { _ in }
     var currentNote: String?  // set by the main window; the Local toggle centres on it
     @Published var graph = VaultGraph(nodes: [], edges: [])
     @Published var tick = 0
-    /// Repo folder paths with their staleness (README `verified_on`).
+    /// Repo folder paths with their staleness (README `verified_on`); the main window computes it once per change.
     var repos: [String: Staleness] = [:]
     var layout = ForceLayout(ids: [], edges: [])
     /// Persisted per Vault (`.constellation/graph.json`); `localAround` = current Note when the local graph is on.
-    @Published var filter = GraphFilter() { didSet { if let root { try? filter.save(to: root) }; reload() } }
+    @Published var filter = GraphFilter() { didSet { if let index { try? filter.save(to: index.root) }; reload() } }
     @Published var localAround: String? { didSet { reload() } }
 
+    /// Rebuilds from the index's parsed Notes in memory; nothing is read from disk.
     func reload() {
-        guard let root else { return }
-        guard let g = try? Vault.graph(in: root, filter: filter, around: localAround) else { return }
-        graph = g
-        repos = (try? Vault.repoStaleness(in: root)) ?? [:]
-        layout.update(ids: g.nodes.map(\.id), edges: g.edges.map { ($0.from, $0.to) })
+        guard let index else { return }
+        graph = index.graph(filter: filter, around: localAround)
+        layout.update(ids: graph.nodes.map(\.id), edges: graph.edges.map { ($0.from, $0.to) })
     }
     func step() { layout.step(); tick &+= 1 }
 }
@@ -52,10 +51,8 @@ struct GraphView: View {
                         set: { if $0 { model.filter.edgeKinds.insert(k) } else { model.filter.edgeKinds.remove(k) } }))
                 }
             }
-            TextField("Project", text: Binding(get: { model.filter.projects.sorted().joined(separator: ",") },
-                set: { model.filter.projects = Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) }))
-            TextField("Type", text: Binding(get: { model.filter.types.sorted().joined(separator: ",") },
-                set: { model.filter.types = Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) }))
+            listField("Project", $model.filter.projects)
+            listField("Type", $model.filter.types)
             TextField("Tag", text: Binding(get: { model.filter.tag ?? "" },
                 set: { model.filter.tag = $0.isEmpty ? nil : $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ")) }))
             Toggle("Archive", isOn: $model.filter.includeArchive)
@@ -66,47 +63,56 @@ struct GraphView: View {
         .padding(6)
     }
 
+    /// Comma-separated text field editing a set of names.
+    private func listField(_ title: String, _ values: Binding<Set<String>>) -> some View {
+        TextField(title, text: Binding(
+            get: { values.wrappedValue.sorted().joined(separator: ",") },
+            set: { values.wrappedValue = Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) }))
+    }
+
     private var canvas: some View {
         GeometryReader { geo in
             let centre = CGPoint(x: geo.size.width / 2 + pan.width, y: geo.size.height / 2 + pan.height)
-            let to = { (p: ForceLayout.Point) in CGPoint(x: centre.x + p.x * zoom, y: centre.y + p.y * zoom) }
+            let toScreen = { (point: ForceLayout.Point) in CGPoint(x: centre.x + point.x * zoom, y: centre.y + point.y * zoom) }
             Canvas { ctx, _ in
                 _ = model.tick
                 let near = Set(hover.map { model.graph.neighbours(of: $0) + [$0] } ?? [])
-                let pos = model.layout.positions
-                for e in model.graph.edges {
-                    guard let a = pos[e.from], let b = pos[e.to] else { continue }
-                    var path = Path(); path.move(to: to(a)); path.addLine(to: to(b))
-                    let lit = hover == nil || (near.contains(e.from) && near.contains(e.to))
-                    let colour: Color = e.kind == .containment ? .gray.opacity(0.35) : e.kind == .call ? .green : e.kind == .uses ? .purple : .accentColor
-                    let dash: [CGFloat] = e.kind == .uses ? [4, 3] : []
-                    ctx.stroke(path, with: .color(lit ? colour : colour.opacity(0.1)),
-                               style: StrokeStyle(lineWidth: e.kind == .containment ? 0.5 : e.kind == .call ? 2.5 : 1.5, dash: dash))
+                let positions = model.layout.positions
+                let palette = settings.palette
+                for edge in model.graph.edges {
+                    guard let from = positions[edge.from], let to = positions[edge.to] else { continue }
+                    var line = Path(); line.move(to: toScreen(from)); line.addLine(to: toScreen(to))
+                    let style = Self.style(of: edge.kind)
+                    let lit = hover == nil || (near.contains(edge.from) && near.contains(edge.to))
+                    ctx.stroke(line, with: .color(lit ? style.colour : style.colour.opacity(0.1)),
+                               style: StrokeStyle(lineWidth: style.width, dash: style.dash))
                 }
-                for n in model.graph.nodes {
-                    guard let p = pos[n.id] else { continue }
-                    let c = to(p), r = n.kind == .folder ? 7.0 : 5.0
-                    let pal = settings.palette
+                for node in model.graph.nodes {
+                    guard let position = positions[node.id] else { continue }
+                    let screen = toScreen(position), radius = node.kind == .folder ? 7.0 : 5.0
                     // A Repo is its folder plus its README Node.
-                    let repoPath = n.kind == .folder ? n.id : n.id.hasSuffix("/README.md") ? String(n.id.dropLast(10)) : ""
+                    let repoPath = node.kind == .folder ? node.id : node.id.hasSuffix("/README.md") ? String(node.id.dropLast(10)) : ""
                     let stale = model.repos[repoPath]?.isStale(threshold: settings.thresholdDays) == true
-                    let base: Color = stale ? Color(hex: pal.stale) : n.kind == .folder ? Color(hex: pal.folderNode) : n.kind == .ghost ? .red : n.noteType == nil || n.noteType == "note" ? Color(hex: pal.noteNode) : Self.typeColour(n.noteType)
-                    let on = hover == nil || near.contains(n.id)
-                    let dot = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
-                    ctx.fill(dot, with: .color(on ? base.opacity(n.kind == .ghost ? 0.5 : 1) : base.opacity(0.15)))
-                    if on && (zoom > 0.8 || n.id == hover) {
-                        ctx.draw(Text(n.name).font(.caption2), at: CGPoint(x: c.x, y: c.y + r + 8))
+                    let base = Self.colour(of: node, stale: stale, palette: palette)
+                    let on = hover == nil || near.contains(node.id)
+                    let dot = Path(ellipseIn: CGRect(x: screen.x - radius, y: screen.y - radius, width: 2 * radius, height: 2 * radius))
+                    ctx.fill(dot, with: .color(on ? base.opacity(node.kind == .ghost ? 0.5 : 1) : base.opacity(0.15)))
+                    if on && (zoom > 0.8 || node.id == hover) {
+                        ctx.draw(Text(node.name).font(.caption2), at: CGPoint(x: screen.x, y: screen.y + radius + 8))
                     }
                 }
             }
             .onContinuousHover { phase in
-                if case .active(let l) = phase { hover = hit(l, to: to); tip = hover == nil ? edgeHit(l, to: to) : "" } else { hover = nil; tip = "" }
+                if case .active(let location) = phase {
+                    hover = nodeID(at: location, toScreen: toScreen)
+                    tip = hover == nil ? edgeTip(at: location, toScreen: toScreen) : ""
+                } else { hover = nil; tip = "" }
             }
             .help(tip)
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { v in
                     if dragging == nil && panStart == nil {
-                        if let id = hit(v.startLocation, to: to) { dragging = id } else { panStart = pan }
+                        if let id = nodeID(at: v.startLocation, toScreen: toScreen) { dragging = id } else { panStart = pan }
                     }
                     if let id = dragging {
                         model.layout.move(id, to: .init(x: (v.location.x - centre.x) / zoom, y: (v.location.y - centre.y) / zoom))
@@ -133,6 +139,27 @@ struct GraphView: View {
         .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in model.step() }
     }
 
+    private struct EdgeStyle { let colour: Color; let width: CGFloat; let dash: [CGFloat] }
+
+    /// How each kind of edge is drawn.
+    private static func style(of kind: GraphEdge.Kind) -> EdgeStyle {
+        switch kind {
+        case .containment: EdgeStyle(colour: Color.gray.opacity(0.35), width: 0.5, dash: [])
+        case .link: EdgeStyle(colour: Color.accentColor, width: 1.5, dash: [])
+        case .call: EdgeStyle(colour: Color.green, width: 2.5, dash: [])
+        case .uses: EdgeStyle(colour: Color.purple, width: 1.5, dash: [4, 3])
+        }
+    }
+
+    private static func colour(of node: GraphNode, stale: Bool, palette: Palette) -> Color {
+        if stale { return Color(hex: palette.stale) }
+        switch node.kind {
+        case .folder: return Color(hex: palette.folderNode)
+        case .ghost: return .red
+        case .note: return node.noteType == nil || node.noteType == "note" ? Color(hex: palette.noteNode) : typeColour(node.noteType)
+        }
+    }
+
     /// One colour per Note type; plain and unknown types stay blue.
     static func typeColour(_ type: String?) -> Color {
         switch type {
@@ -147,24 +174,25 @@ struct GraphView: View {
     }
 
     /// Hover on a call/uses edge lists the Endpoint pairs it folds.
-    private func edgeTip(_ e: GraphEdge) -> String {
-        e.pairs.map { $0.from.isEmpty ? "uses \($0.to)" : "\($0.from) -> \($0.to)" }.joined(separator: "\n")
+    private func pairsText(_ edge: GraphEdge) -> String {
+        edge.pairs.map { $0.from.isEmpty ? "uses \($0.to)" : "\($0.from) -> \($0.to)" }.joined(separator: "\n")
     }
 
-    private func edgeHit(_ p: CGPoint, to: (ForceLayout.Point) -> CGPoint) -> String {
-        for e in model.graph.edges where e.kind == .call || e.kind == .uses {
-            guard let a = model.layout.positions[e.from].map(to), let b = model.layout.positions[e.to].map(to) else { continue }
-            let len2 = max(1, pow(b.x - a.x, 2) + pow(b.y - a.y, 2))
-            let t = min(1, max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / len2))
-            if hypot(a.x + t * (b.x - a.x) - p.x, a.y + t * (b.y - a.y) - p.y) < 5 { return edgeTip(e) }
+    private func edgeTip(at point: CGPoint, toScreen: (ForceLayout.Point) -> CGPoint) -> String {
+        for edge in model.graph.edges where !edge.pairs.isEmpty {
+            guard let a = model.layout.positions[edge.from].map(toScreen), let b = model.layout.positions[edge.to].map(toScreen) else { continue }
+            let length2 = max(1, pow(b.x - a.x, 2) + pow(b.y - a.y, 2))
+            let along = min(1, max(0, ((point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y)) / length2))
+            if hypot(a.x + along * (b.x - a.x) - point.x, a.y + along * (b.y - a.y) - point.y) < 5 { return pairsText(edge) }
         }
         return ""
     }
 
-    private func hit(_ p: CGPoint, to: (ForceLayout.Point) -> CGPoint) -> String? {
-        model.graph.nodes.first { n in
-            guard let q = model.layout.positions[n.id] else { return false }
-            let c = to(q); return hypot(c.x - p.x, c.y - p.y) < 9
+    private func nodeID(at point: CGPoint, toScreen: (ForceLayout.Point) -> CGPoint) -> String? {
+        model.graph.nodes.first { node in
+            guard let position = model.layout.positions[node.id] else { return false }
+            let centre = toScreen(position)
+            return hypot(centre.x - point.x, centre.y - point.y) < 9
         }?.id
     }
 }

@@ -4,12 +4,19 @@ import ConstellationCore
 import SwiftUI
 
 struct ConstellationApp: App {
+    @ObservedObject private var settings = AppSettings.shared
+
     var body: some Scene {
-        WindowGroup { RootView().onAppear { AppSettings.shared.applyAppearance() } }
+        WindowGroup { RootView().tint(Color(hex: settings.palette.accent)).onAppear { AppSettings.shared.applyAppearance() } }
             .commands { CommandGroup(after: .sidebar) { OpenGraphButton() } }
-        Window("Graph", id: "graph") { GraphView() }
+        Window("Graph", id: "graph") { GraphView().tint(Color(hex: settings.palette.accent)) }
         Settings { SettingsView() }
     }
+}
+
+/// Raised instead of saving or applying edits while a Note's "changed on disk" choice is still open.
+private struct ConflictPending: Error, CustomStringConvertible {
+    var description: String { "A Note changed on disk: choose Reload from disk or Keep mine first." }
 }
 
 struct OpenGraphButton: View {
@@ -18,8 +25,9 @@ struct OpenGraphButton: View {
 }
 
 struct RootView: View {
-    @State private var root: URL?
+    @State private var index: VaultIndex?
     @State private var tree: VaultNode?
+    @State private var generation = 0  // bumped whenever the index changes, so views that read it redraw
     @State private var selection: String?
     @State private var tabs: NoteTabs?
     @State private var error: String?
@@ -29,42 +37,17 @@ struct RootView: View {
     @State private var query = ""
     @State private var cursor = 0
     @State private var relations: (title: String, rel: EndpointRelations)?
-    @State private var search: SearchIndex?
-    @State private var tags: TagIndex?
     @State private var sidebarTab = SidebarTab.files
     @State private var tagFilter: String?
     @ObservedObject private var settings = AppSettings.shared
     @State private var repos: [String: Staleness] = [:]
-    @State private var epoch = 0  // bumped after a rename so the editor reloads from the rewritten files
     @Environment(\.undoManager) private var undoManager
+    private var root: URL? { index?.root }
 
     var body: some View {
         NavigationSplitView {
             if let tree {
-                Picker("", selection: $sidebarTab) { ForEach(SidebarTab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal, 8)
-                if sidebarTab == .tags, let tags { TagsView(index: tags, selected: $tagFilter, rename: { old in
-                    if let new = promptText("Rename tag #\(old) to", initial: old) { perform("Rename Tag") { try Vault.renameTag(old, to: new.trimmingCharacters(in: CharacterSet(charactersIn: "#")), in: $0) } }
-                }) { hit in go(hit.path, reveal: NSRange(location: hit.offset, length: 0)) } } else {
-                TextField("Search", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal, 8)
-                if !query.isEmpty, let search { SearchResultsView(results: search.search(query)) { m in
-                    try? tabs?.open(m.path); reveal = .init(range: NSRange(location: m.offset, length: m.hit.length))
-                } openNote: { path in try? tabs?.open(path) } } else {
-                List(tree.children, children: \.optionalChildren, selection: $selection) { node in
-                    HStack {
-                        Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
-                        if let st = repos[node.relativePath] {
-                            Text(st.label).font(.caption2).foregroundStyle(st.isStale(threshold: settings.thresholdDays) ? Color(hex: settings.palette.stale) : .secondary)
-                        }
-                    }
-                        .contextMenu {
-                            if !node.isFolder { noteMenu(node.relativePath) }
-                            if node.isFolder && AgentFiles.isRepoFolder(node.relativePath) {
-                                Button("Copy ingest prompt") { copy(AgentFiles.ingestPrompt(repo: node.name)) }
-                                Button("Copy refresh prompt") { copy(AgentFiles.refreshPrompt(repo: node.name)) }
-                            }
-                        }
-                        .foregroundStyle(repos[node.relativePath]?.isStale(threshold: settings.thresholdDays) == true ? Color(hex: settings.palette.stale) : Color.primary)
-                } } }
+                sidebar(tree)
             } else {
                 VStack {
                     Button("Create vault…") { chooseFolder(create: true) }
@@ -97,11 +80,13 @@ struct RootView: View {
                     }
                     FormatToolbar()
                     Divider()
-                    EditorView(initialText: tabs.text(active) ?? "", root: root!, notePath: active, reveal: reveal, onCursor: { cursor = $0; refreshRelations() },
-                               onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) },
-                               onTag: { tagFilter = $0.lowercased(); sidebarTab = .tags },
-                               tagNames: { tags?.completions(for: $0) ?? [] })
-                        .id("\(active)#\(tabs.revision(active))#\(epoch)#\(settings.theme.rawValue)")
+                    if let index {
+                        EditorView(initialText: tabs.text(active) ?? "", index: index, notePath: active, reveal: reveal, onRevealed: { reveal = nil },
+                                   onCursor: { cursor = $0; refreshRelations() },
+                                   onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) },
+                                   onTag: { tagFilter = $0.lowercased(); sidebarTab = .tags })
+                            .id("\(active)#\(tabs.revision(active))#\(settings.theme.rawValue)")
+                    }
                 }
             } else {
                 Text("Select a Note").foregroundStyle(.secondary)
@@ -120,6 +105,47 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in try? tabs?.saveAll() }
     }
 
+    /// Files / Tags tabs of the sidebar: search box and results, or the Vault tree.
+    @ViewBuilder private func sidebar(_ tree: VaultNode) -> some View {
+        Picker("", selection: $sidebarTab) { ForEach(SidebarTab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal, 8)
+        if sidebarTab == .tags, let index {
+            TagsView(index: index, generation: generation, selected: $tagFilter, rename: { old in
+                if let new = promptText("Rename tag #\(old) to", initial: old) {
+                    perform("Rename Tag") { try Vault.renameTag(old, to: new.trimmingCharacters(in: CharacterSet(charactersIn: "#")), in: $0) }
+                }
+            }) { hit in go(hit.path, reveal: NSRange(location: hit.offset, length: 0)) }
+        } else {
+            TextField("Search", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal, 8)
+            if !query.isEmpty, let index {
+                SearchResultsView(results: index.search(query)) { match in
+                    go(match.path, reveal: NSRange(location: match.offset, length: match.hit.length))
+                } openNote: { path in go(path, reveal: nil) }
+            } else {
+                fileTree(tree)
+            }
+        }
+    }
+
+    private func fileTree(_ tree: VaultNode) -> some View {
+        List(tree.children, children: \.optionalChildren, selection: $selection) { node in
+            let stale = repos[node.relativePath]?.isStale(threshold: settings.thresholdDays) == true
+            HStack {
+                Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
+                if let status = repos[node.relativePath] {
+                    Text(status.label).font(.caption2).foregroundStyle(stale ? Color(hex: settings.palette.stale) : Color.secondary)
+                }
+            }
+            .contextMenu {
+                if !node.isFolder { noteMenu(node.relativePath) }
+                if node.isFolder && AgentFiles.isRepoFolder(node.relativePath) {
+                    Button("Copy ingest prompt") { copy(AgentFiles.ingestPrompt(repo: node.name)) }
+                    Button("Copy refresh prompt") { copy(AgentFiles.refreshPrompt(repo: node.name)) }
+                }
+            }
+            .foregroundStyle(stale ? Color(hex: settings.palette.stale) : Color.primary)
+        }
+    }
+
     private func chooseFolder(create: Bool) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -134,20 +160,29 @@ struct RootView: View {
 
     private func open(_ url: URL) {
         do {
-            tree = try Vault.load(root: url); search = try SearchIndex(root: url); tags = try TagIndex(root: url); root = url; tabs = NoteTabs(root: url); error = nil
+            let opened = try VaultIndex(root: url)
+            index = opened; tabs = NoteTabs(root: url); error = nil
             UserDefaults.standard.set(url.path, forKey: "lastVault")
             GraphModel.shared.onOpen = { go($0, reveal: nil) }
-            GraphModel.shared.root = url
-            repos = (try? Vault.repoStaleness(in: url)) ?? [:]
+            GraphModel.shared.index = opened
+            indexChanged()
             watcher = VaultWatcher(root: url) { paths in
-                GraphModel.shared.reload()
-                repos = (try? Vault.repoStaleness(in: url)) ?? [:]
-                if let t = tree, let fresh = try? t.refreshed(paths: paths, root: url) { tree = fresh }
-                try? search?.update(paths: paths)
-                try? tags?.update(paths: paths)
+                try? opened.ingest(paths: paths)
+                indexChanged()
                 tabs?.diskChanged(paths)
             }
         } catch { self.error = "\(error)" }
+    }
+
+    /// After the index changed (open, external edit, rename): redraw what reads it and refresh everything derived from it.
+    private func indexChanged() {
+        guard let index else { return }
+        tree = index.tree
+        generation += 1
+        repos = index.repoStaleness()
+        GraphModel.shared.repos = repos
+        GraphModel.shared.reload()
+        refreshBacklinks()
     }
 
     private func show(_ path: String?) {
@@ -156,7 +191,8 @@ struct RootView: View {
     }
 
     private var inspector: some View {
-        let text = tabs?.active.flatMap { tabs?.text($0) } ?? ""
+        let active = tabs?.active
+        let headings = Vault.parse(active.flatMap { tabs?.text($0) } ?? "").headings
         return List {
             Section("Backlinks") {
                 ForEach(Array(backlinks.enumerated()), id: \.offset) { _, b in
@@ -173,12 +209,13 @@ struct RootView: View {
                 }
             }
             Section("Outline") {
-                if let h = NoteParser.parse(text).headings.last(where: { $0.range.location <= cursor }) {
-                    Button("Rename heading at cursor…") { renameHeading(h.title) }
+                if let current = headings.last(where: { $0.range.location <= cursor }) {
+                    Button("Rename heading at cursor…") { renameHeading(current.title) }
                 }
-                ForEach(Array(NoteParser.parse(text).headings.enumerated()), id: \.offset) { _, h in
-                    Button(h.title) { reveal = .init(range: h.range) }.buttonStyle(.plain).padding(.leading, CGFloat(h.level - 1) * 10)
-                        .contextMenu { Button("Rename heading…") { renameHeading(h.title) } }
+                ForEach(Array(headings.enumerated()), id: \.offset) { _, heading in
+                    Button(heading.title) { if let active { reveal = .init(path: active, range: heading.range) } }
+                        .buttonStyle(.plain).padding(.leading, CGFloat(heading.level - 1) * 10)
+                        .contextMenu { Button("Rename heading…") { renameHeading(heading.title) } }
                 }
             }
         }.inspectorColumnWidth(min: 160, ideal: 220, max: 320)
@@ -187,34 +224,39 @@ struct RootView: View {
     /// Inspector follows the cursor: shows relations for the Endpoint heading it sits under.
     private func refreshRelations() {
         guard let root, let active = tabs?.active, let text = tabs?.text(active),
-              let h = NoteParser.parse(text).endpointHeading(at: cursor),
-              let rel = try? Vault.endpointRelations(path: active, heading: h.title, in: root) else { relations = nil; return }
-        relations = (h.title, rel)
+              let endpoint = Vault.parse(text).endpointHeading(at: cursor),
+              let rel = try? Vault.endpointRelations(path: active, heading: endpoint.title, in: root) else { relations = nil; return }
+        relations = (endpoint.title, rel)
     }
 
     private func refreshBacklinks() {
-        guard let root, let active = tabs?.active else { backlinks = []; return }
-        backlinks = (try? Vault.backlinks(to: active, in: root)) ?? []
+        guard let index, let active = tabs?.active else { backlinks = []; return }
+        backlinks = index.backlinks(to: active)
     }
 
     private func go(_ path: String, reveal range: NSRange?) {
         do {
             try tabs?.open(path)
-            reveal = range.map { .init(range: $0) }
+            reveal = range.map { .init(path: path, range: $0) }
             selection = path
         } catch { self.error = "\(error)" }
     }
 
-    /// ⌘-click: open the target (creating it first when the Link is broken) and jump to its heading.
+    /// Click on a Link: open the target (creating it first when the Link is broken) and jump to its heading.
     private func follow(_ link: WikiLink) {
-        guard let root else { return }
+        guard let index else { return }
         do {
-            let path = try Vault.createNote(forLink: link.target, in: root)
-            tree = try Vault.load(root: root)
+            let edits = try Vault.createNote(forLink: link.target, in: index.root)
+            if !edits.isEmpty {
+                try FileEdit.apply(edits, root: index.root)
+                try index.ingest(paths: edits.map(\.path))
+                indexChanged()
+            }
+            guard case .note(let path) = try Vault.resolve(link.target, in: index.root) else { return }
             try tabs?.open(path)
-            let headings = NoteParser.parse(tabs?.text(path) ?? "").headings
-            let range = link.heading.flatMap { h in headings.first { $0.title.caseInsensitiveCompare(h) == .orderedSame }?.range }
-            reveal = range.map { .init(range: $0) }
+            let headings = Vault.parse(tabs?.text(path) ?? "").headings
+            let range = link.heading.flatMap { wanted in headings.first { $0.title.caseInsensitiveCompare(wanted) == .orderedSame }?.range }
+            go(path, reveal: range)
         } catch { self.error = "\(error)" }
     }
 
@@ -239,26 +281,25 @@ struct RootView: View {
     private func perform(_ name: String, _ make: (URL) throws -> [FileEdit]) {
         guard let root else { return }
         do {
-            try tabs?.saveAll()
+            try flush()
             let edits = try make(root)
-            if !edits.isEmpty { try UndoableEdits.run(edits, root: root, undo: undoManager, name: name) { refreshAfter($0, root: root) } }
+            if !edits.isEmpty {
+                try UndoableEdits.run(edits, root: root, undo: undoManager, name: name, before: flush, after: refreshAfter)
+            }
         } catch { self.error = "\(error)" }
     }
 
-    /// Reloads tree, indexes and open tabs from disk (a moved Note's tab follows it to the new path).
-    private func refreshAfter(_ edits: [FileEdit], root: URL) {
-        let moved: [String: String] = Dictionary(uniqueKeysWithValues: zip(edits.filter(\.removesFile).map(\.path), edits.filter(\.createsFile).map(\.path)))
-        let paths = Array(Set(edits.map(\.path)))
-        tree = try? Vault.load(root: root)
-        try? search?.update(paths: paths)
-        try? tags?.update(paths: paths)
-        GraphModel.shared.reload()
-        var fresh = NoteTabs(root: root)
-        for p in tabs?.paths ?? [] { try? fresh.open(moved[p] ?? p) }
-        if let a = tabs?.active { try? fresh.open(moved[a] ?? a) }
-        tabs = fresh
-        epoch += 1
-        refreshBacklinks()
+    /// Writes unsaved editor text before files are rewritten (also before every undo and redo of a rewrite).
+    private func flush() throws {
+        guard tabs?.hasConflicts != true else { throw ConflictPending() }
+        try tabs?.saveAll()
+    }
+
+    /// Re-reads what the edits touched; open tabs are rebuilt from disk (a moved Note's tab follows it).
+    private func refreshAfter(_ edits: [FileEdit]) {
+        try? index?.ingest(paths: Array(Set(edits.map(\.path))))
+        tabs?.reloadAfter(edits)
+        indexChanged()
     }
 
     private func saveDue() {
