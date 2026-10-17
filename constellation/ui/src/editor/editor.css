@@ -1,0 +1,34 @@
+.cm-editor { height: 100%; background: var(--background); color: var(--text); font-size: 15px; }
+.cm-editor.cm-focused { outline: none; }
+.cm-editor .cm-scroller { font-family: system-ui, sans-serif; line-height: 1.6; padding: 8px 0; }
+.cm-content { caret-color: var(--text); max-width: 54rem; padding: 0 16px; }
+.cm-cursor { border-left-color: var(--text); }
+.cm-editor .cm-selectionBackground, .cm-editor.cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.cm-activeLine { background: transparent; }
+
+.cm-h { color: var(--heading); font-weight: 700; }
+.cm-h1 { font-size: 1.8em; } .cm-h2 { font-size: 1.5em; } .cm-h3 { font-size: 1.25em; }
+.cm-h4 { font-size: 1.1em; } .cm-h5, .cm-h6 { font-size: 1em; }
+.cm-bold { font-weight: 700; }
+.cm-italic { font-style: italic; }
+.cm-strike { text-decoration: line-through; }
+.cm-underline { text-decoration: underline; }
+.cm-code { font-family: ui-monospace, monospace; color: var(--code); background: color-mix(in srgb, var(--text) 10%, transparent); border-radius: 3px; padding: 0 3px; }
+.cm-codeblock { font-family: ui-monospace, monospace; color: var(--code); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.cm-fence { font-size: 0.85em; opacity: 0.7; }
+/* Off the cursor a fence line is only the thin top/bottom edge of its block. */
+.cm-fence-collapsed { font-size: 0; line-height: 6px; height: 6px; padding-top: 0; padding-bottom: 0; }
+.cm-frontmatter { font-family: ui-monospace, monospace; font-size: 0.85em; color: var(--text); opacity: 0.6; }
+.cm-frontmatter-summary { font-size: 0.8em; opacity: 0.55; padding: 2px 2px 6px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; border-bottom: 1px solid color-mix(in srgb, var(--text) 15%, transparent); }
+.cm-quote { border-left: 3px solid var(--accent); padding-left: 10px; opacity: 0.85; }
+.cm-link { color: var(--link); text-decoration: underline; cursor: pointer; }
+.cm-link.cm-broken { color: var(--stale); }
+.cm-tag { color: var(--tag); cursor: pointer; }
+
+.cm-task { margin: 0 4px 0 0; vertical-align: middle; cursor: pointer; }
+.cm-image { max-width: 100%; vertical-align: middle; }
+.cm-image-missing { color: var(--stale); font-style: italic; }
+.cm-table { margin: 4px 0; padding: 6px 8px; font-family: ui-monospace, monospace; background: color-mix(in srgb, var(--text) 8%, transparent); border-radius: 4px; overflow-x: auto; }
+
+.cm-tooltip { background: var(--background); color: var(--text); border: 1px solid color-mix(in srgb, var(--text) 25%, transparent); }
+.cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent); color: var(--background); }

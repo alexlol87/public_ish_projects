@@ -1,6 +1,6 @@
 # Constellation
 
-Native macOS app (Swift, Apple frameworks only) for a Vault of linked markdown Notes about Projects, Repos and
+Tauri 2 app for Linux and macOS (Rust core in `core/`, TypeScript + CodeMirror frontend in `ui/`, shell in `src-tauri/`) for a Vault of linked markdown Notes about Projects, Repos and
 Endpoints. Start with `PLAN.md`. This folder is public: no personal data in code, docs, fixtures or samples.
 
 ## Agent skills
