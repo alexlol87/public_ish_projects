@@ -23,7 +23,10 @@ struct RootView: View {
                     Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
                 }
             } else {
-                Button("Open Vault…", action: chooseFolder).padding()
+                VStack {
+                    Button("Create vault…") { chooseFolder(create: true) }
+                    Button("Open vault…") { chooseFolder(create: false) }
+                }.padding()
             }
         } detail: {
             if let error {
@@ -36,19 +39,25 @@ struct RootView: View {
         .onAppear {
             // Lets the CI launch test open a fixture Vault without the open panel.
             if let path = ProcessInfo.processInfo.environment["CONSTELLATION_VAULT"] { open(URL(fileURLWithPath: path)) }
+            else if let url = Vault.reopenable(UserDefaults.standard.string(forKey: "lastVault")) { open(url) }
         }
         .onChange(of: selection) { _, path in show(path) }
     }
 
-    private func chooseFolder() {
+    private func chooseFolder(create: Bool) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
-        if panel.runModal() == .OK, let url = panel.url { open(url) }
+        panel.canCreateDirectories = create
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if create {
+            do { try Vault.create(at: url) } catch { self.error = "Choose an empty folder: \(error)"; return }
+        }
+        open(url)
     }
 
     private func open(_ url: URL) {
-        do { tree = try Vault.load(root: url); root = url; error = nil } catch { self.error = "\(error)" }
+        do { tree = try Vault.load(root: url); root = url; error = nil; UserDefaults.standard.set(url.path, forKey: "lastVault") } catch { self.error = "\(error)" }
     }
 
     private func show(_ path: String?) {
