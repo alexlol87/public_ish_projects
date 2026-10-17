@@ -5,14 +5,19 @@ import SwiftUI
 /// Shared between the main window (sets `root`, `onOpen`, calls `reload`) and the graph window. Uncompiled on Linux.
 final class GraphModel: ObservableObject {
     static let shared = GraphModel()
-    var root: URL? { didSet { reload() } }
+    var root: URL? { didSet { if let root { filter = GraphFilter.load(from: root) } } }  // filter's didSet reloads
     var onOpen: (String) -> Void = { _ in }
+    var currentNote: String?  // set by the main window; the Local toggle centres on it
     @Published var graph = VaultGraph(nodes: [], edges: [])
     @Published var tick = 0
     var layout = ForceLayout(ids: [], edges: [])
+    /// Persisted per Vault (`.constellation/graph.json`); `localAround` = current Note when the local graph is on.
+    @Published var filter = GraphFilter() { didSet { if let root { try? filter.save(to: root) }; reload() } }
+    @Published var localAround: String? { didSet { reload() } }
 
     func reload() {
-        guard let root, let g = try? Vault.graph(in: root) else { return }
+        guard let root else { return }
+        guard let g = try? Vault.graph(in: root, filter: filter, around: localAround) else { return }
         graph = g
         layout.update(ids: g.nodes.map(\.id), edges: g.edges.map { ($0.from, $0.to) })
     }
@@ -30,6 +35,34 @@ struct GraphView: View {
     @State private var zoomStart: Double?
 
     var body: some View {
+        VStack(spacing: 0) { filterBar; canvas }
+    }
+
+    /// Filters (uncompiled): Project/Type menus, Edge kinds, Tag, Archive, Local depth.
+    private var filterBar: some View {
+        HStack {
+            Menu("Edges") {
+                ForEach(GraphEdge.Kind.allCases, id: \.self) { k in
+                    Toggle(k.rawValue.capitalized, isOn: Binding(
+                        get: { model.filter.edgeKinds.contains(k) },
+                        set: { if $0 { model.filter.edgeKinds.insert(k) } else { model.filter.edgeKinds.remove(k) } }))
+                }
+            }
+            TextField("Project", text: Binding(get: { model.filter.projects.sorted().joined(separator: ",") },
+                set: { model.filter.projects = Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) }))
+            TextField("Type", text: Binding(get: { model.filter.types.sorted().joined(separator: ",") },
+                set: { model.filter.types = Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) }))
+            TextField("Tag", text: Binding(get: { model.filter.tag ?? "" },
+                set: { model.filter.tag = $0.isEmpty ? nil : $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ")) }))
+            Toggle("Archive", isOn: $model.filter.includeArchive)
+            Toggle("Local", isOn: Binding(get: { model.localAround != nil }, set: { model.localAround = $0 ? model.currentNote : nil }))
+            Picker("Depth", selection: $model.filter.localDepth) { ForEach(1...3, id: \.self) { Text("\($0)").tag($0) } }
+                .frame(width: 90).disabled(model.localAround == nil)
+        }
+        .padding(6)
+    }
+
+    private var canvas: some View {
         GeometryReader { geo in
             let centre = CGPoint(x: geo.size.width / 2 + pan.width, y: geo.size.height / 2 + pan.height)
             let to = { (p: ForceLayout.Point) in CGPoint(x: centre.x + p.x * zoom, y: centre.y + p.y * zoom) }

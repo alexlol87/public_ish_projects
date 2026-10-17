@@ -31,6 +31,24 @@ extension Vault {
         return .broken(createPath: t + ".md")
     }
 
+    /// `resolve(_:among:)` with dictionary lookups, for resolving many Links against one path list (the graph).
+    struct PathIndex {
+        private var byPath: [String: String] = [:], byName: [String: [String]] = [:]
+        init(_ paths: [String]) {
+            for p in paths {
+                let key = p.dropLast(3).lowercased()
+                if byPath[key] == nil { byPath[key] = p }
+                byName[p.split(separator: "/").last.map { $0.dropLast(3).lowercased() } ?? "", default: []].append(p)
+            }
+        }
+        func resolve(_ target: String) -> LinkResolution {
+            let t = (target.lowercased().hasSuffix(".md") ? String(target.dropLast(3)) : target).lowercased()
+            if let p = byPath[t] { return .note(p) }
+            if let named = byName[t], named.count == 1, !t.contains("/") { return .note(named[0]) }
+            return .broken(createPath: (target.lowercased().hasSuffix(".md") ? String(target.dropLast(3)) : target) + ".md")
+        }
+    }
+
     /// Creates the missing Note for a broken Link (empty file; folders as needed) and returns its path.
     @discardableResult
     public static func createNote(forLink target: String, in root: URL) throws -> String {

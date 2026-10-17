@@ -88,7 +88,7 @@ struct RootView: View {
             }
         }
         .inspector(isPresented: .constant(tabs?.active != nil)) { inspector }
-        .onChange(of: tabs?.active) { _, _ in refreshBacklinks(); cursor = 0; refreshRelations() }
+        .onChange(of: tabs?.active) { _, _ in GraphModel.shared.currentNote = tabs?.active; refreshBacklinks(); cursor = 0; refreshRelations() }
         .frame(minWidth: 700, minHeight: 450)
         .onAppear {
             // Lets the CI launch test open a fixture Vault without the open panel.

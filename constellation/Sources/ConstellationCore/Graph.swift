@@ -6,6 +6,7 @@ public struct GraphNode: Equatable, Identifiable {
     public let name: String
     public let kind: Kind
     public var noteType: String? = nil  // frontmatter type for notes; nil for folders and ghosts
+    public var tags: [String] = []  // lowercased tag names of a Note
 }
 
 /// One Endpoint-level Call (or a Client Use, where `from` is "") folded into a Note-to-Note edge.
@@ -15,7 +16,7 @@ public struct EndpointPair: Equatable {
 }
 
 public struct GraphEdge: Equatable {
-    public enum Kind { case containment, link, call, uses }
+    public enum Kind: String, Codable, CaseIterable { case containment, link, call, uses }
     public let from: String
     public let to: String
     public let kind: Kind
@@ -50,8 +51,10 @@ extension Vault {
         let tree = try load(root: root)
         let paths = try notePaths(in: root).filter { includeArchive || !isArchive($0) }
         var nodes: [GraphNode] = [], edges: [GraphEdge] = []
+        var nodeIndex: [String: Int] = [:]
         func walk(_ n: VaultNode) {
             for c in n.children where !c.isAppOnly && (includeArchive || !isArchive(c.relativePath)) && (c.isFolder || c.relativePath.hasSuffix(".md")) {
+                nodeIndex[c.relativePath] = nodes.count
                 nodes.append(GraphNode(id: c.relativePath, name: c.name, kind: c.isFolder ? .folder : .note))
                 edges.append(GraphEdge(from: n.relativePath, to: c.relativePath, kind: .containment))
                 if c.isFolder { walk(c) }
@@ -59,10 +62,11 @@ extension Vault {
         }
         nodes.append(GraphNode(id: "", name: root.lastPathComponent, kind: .folder))
         walk(tree)
+        let index = PathIndex(paths)
         var ghosts = Set<String>(), seen = Set<String>()
         var folded: [String: Int] = [:]  // "kind from>to" -> index in edges
         func fold(_ kind: GraphEdge.Kind, _ from: String, _ target: String, _ pair: EndpointPair) {
-            guard case .note(let to) = resolve(target, among: paths), to != from else { return }
+            guard case .note(let to) = index.resolve(target), to != from else { return }
             let key = "\(kind) \(from)>\(to)"
             if let i = folded[key] { edges[i].pairs.append(pair) } else {
                 folded[key] = edges.count
@@ -72,12 +76,14 @@ extension Vault {
         for p in paths {
             let text = try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)
             let parsed = NoteParser.parse(text)
-            if let i = nodes.firstIndex(where: { $0.id == p }) { nodes[i].noteType = parsed.type }
+            if let i = nodeIndex[p] { nodes[i].noteType = parsed.type; nodes[i].tags = Set(parsed.tags.map { $0.name.lowercased() }).sorted() }
+            // A Call/Uses Link gets only its Call/Uses edge, not a plain Link edge too.
+            let sectioned = Set((parsed.calls + parsed.uses).flatMap { $0.links.map(\.range.location) })
             for s in parsed.calls { for l in s.links { fold(.call, p, l.target, EndpointPair(from: s.heading.title, to: l.heading ?? "")) } }
             for s in parsed.uses { for l in s.links { fold(.uses, p, l.target, EndpointPair(from: "", to: l.heading ?? "")) } }
-            for l in parsed.links {
+            for l in parsed.links where !sectioned.contains(l.range.location) {
                 var to: String
-                switch resolve(l.target, among: paths) {
+                switch index.resolve(l.target) {
                 case .note(let t): to = t
                 case .broken(let create):
                     to = "ghost:" + create.lowercased()
@@ -89,6 +95,70 @@ extension Vault {
             }
         }
         return VaultGraph(nodes: nodes, edges: edges)
+    }
+}
+
+/// Graph window filters; empty `projects`/`types` mean "all". Persisted per Vault in `.constellation/graph.json`.
+public struct GraphFilter: Codable, Equatable {
+    public var projects: Set<String> = []  // top-level folder names
+    public var types: Set<String> = []     // Note types
+    public var edgeKinds = Set(GraphEdge.Kind.allCases)
+    public var tag: String? = nil          // tagged Notes (and child tags) plus their neighbours
+    public var includeArchive = false
+    public var localDepth = 2              // 1...3, used when the graph is built `around:` a Note
+    public init() {}
+
+    static func file(_ root: URL) -> URL { root.appendingPathComponent(".constellation/graph.json") }
+    public static func load(from root: URL) -> GraphFilter {
+        (try? JSONDecoder().decode(GraphFilter.self, from: Data(contentsOf: file(root)))) ?? GraphFilter()
+    }
+    public func save(to root: URL) throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".constellation"), withIntermediateDirectories: true)
+        try JSONEncoder().encode(self).write(to: Self.file(root), options: .atomic)
+    }
+}
+
+extension VaultGraph {
+    /// Applies `f` (archive is handled when the graph is built). With `around`, keeps Nodes within `f.localDepth` (1...3) edges of it.
+    public func filtered(_ f: GraphFilter, around: String? = nil) -> VaultGraph {
+        var g = self
+        g.nodes = nodes.filter { n in
+            if n.kind == .note, !f.types.isEmpty, !f.types.contains(n.noteType ?? "note") { return false }
+            guard n.kind != .ghost, !n.id.isEmpty, !f.projects.isEmpty else { return true }
+            return f.projects.contains(String(n.id.split(separator: "/").first ?? ""))
+        }
+        func prune() {
+            let keep = Set(g.nodes.map(\.id))
+            g.edges = g.edges.filter { keep.contains($0.from) && keep.contains($0.to) }
+        }
+        g.edges = g.edges.filter { f.edgeKinds.contains($0.kind) }
+        prune()
+        func adjacency() -> [String: [String]] {
+            var adj: [String: [String]] = [:]
+            for e in g.edges { adj[e.from, default: []].append(e.to); adj[e.to, default: []].append(e.from) }
+            return adj
+        }
+        func restrict(to keep: Set<String>) { g.nodes = g.nodes.filter { keep.contains($0.id) }; prune() }
+        if let tag = f.tag?.lowercased(), !tag.isEmpty {
+            let hit = Set(g.nodes.filter { $0.tags.contains { $0 == tag || $0.hasPrefix(tag + "/") } }.map(\.id))
+            let adj = adjacency()
+            restrict(to: hit.union(hit.flatMap { adj[$0] ?? [] }))
+        }
+        if let start = around {
+            let adj = adjacency()
+            var seen: Set<String> = [start], frontier = [start]
+            for _ in 0..<min(3, max(1, f.localDepth)) {
+                frontier = frontier.flatMap { adj[$0] ?? [] }.filter { seen.insert($0).inserted }
+            }
+            restrict(to: seen)
+        }
+        return g
+    }
+}
+
+extension Vault {
+    public static func graph(in root: URL, filter: GraphFilter, around: String? = nil) throws -> VaultGraph {
+        try graph(in: root, includeArchive: filter.includeArchive).filtered(filter, around: around)
     }
 }
 
