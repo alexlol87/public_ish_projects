@@ -138,7 +138,9 @@ impl VaultNode {
 /// Writes the starter files into an empty (or missing) folder. Fails rather than touch existing files.
 pub fn create(root: &Path) -> Result<()> {
     if fs::read_dir(root).is_ok_and(|mut d| d.next().is_some()) {
-        return Err(Error("The folder is not empty".into()));
+        return Err(Error(
+            "That folder is not empty. Pick an empty folder for a new vault (the folder dialog can create one), or use Open vault.".into(),
+        ));
     }
     for d in ["templates", "external", "clients", ".constellation"] {
         fs::create_dir_all(root.join(d))?;

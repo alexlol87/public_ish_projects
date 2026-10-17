@@ -94,9 +94,29 @@ fn get_settings(app: AppHandle, st: State<AppState>) -> Settings {
     Settings { theme: load_config(&app).theme.unwrap_or_else(|| "System".into()), staleness_days: days }
 }
 
+/// Window chrome follows the theme's light or dark appearance; "System" follows the OS.
+fn window_theme(app: &AppHandle, theme: &str) {
+    let t = match theme {
+        "System" => None,
+        "Light" => Some(tauri::Theme::Light),
+        _ => Some(tauri::Theme::Dark),
+    };
+    for w in app.webview_windows().values() {
+        let _ = w.set_theme(t);
+        // Linux: None means "prefer light", not "system"; with no preference set, `theme()` asks the desktop portal.
+        #[cfg(target_os = "linux")]
+        if t.is_none() {
+            if let Ok(sys) = w.theme() {
+                let _ = w.set_theme(Some(sys));
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn set_settings(app: AppHandle, st: State<AppState>, settings: Settings) -> Res<()> {
     let mut c = load_config(&app);
+    window_theme(&app, &settings.theme);
     c.theme = Some(settings.theme);
     save_config(&app, &c)?;
     if let Some(o) = st.vault.lock().map_err(err)?.as_ref() {
@@ -359,6 +379,7 @@ async fn open_graph(app: AppHandle) -> Res<()> {
         .inner_size(1000.0, 750.0)
         .build()
         .map_err(err)?;
+    window_theme(&app, load_config(&app).theme.as_deref().unwrap_or("System"));
     Ok(())
 }
 
@@ -502,6 +523,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::default())
+        .setup(|app| {
+            window_theme(app.handle(), load_config(app.handle()).theme.as_deref().unwrap_or("System"));
+            Ok(())
+        })
         // The graph window must not keep the app alive after the main window is gone.
         .on_window_event(|w, ev| {
             if w.label() == "main" && matches!(ev, tauri::WindowEvent::Destroyed) {

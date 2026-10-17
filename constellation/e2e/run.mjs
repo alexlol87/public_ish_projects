@@ -62,6 +62,20 @@ fs.mkdirSync(OUT, { recursive: true });
 
 // ---------- first launch ----------
 {
+  const full = tmp("nonempty");
+  fs.writeFileSync(path.join(full, "keep.txt"), "mine\n");
+  app = await launch({ config: tmp("cfg-nonempty"), env: { CONSTELLATION_E2E_PICK: full } });
+  await test("create vault refuses a non-empty folder and writes nothing", async () => {
+    await app.until(() => document.querySelector("#create-vault"), "welcome");
+    await app.click("#create-vault");
+    const msg = await app.until(() => document.querySelector(".welcome .bad")?.textContent, "error message");
+    ok(/not empty/.test(msg) && /empty folder/.test(msg), "clear error, got: " + msg);
+    eq(fs.readdirSync(full), ["keep.txt"], "folder contents");
+    ok(await app.has("#create-vault"), "still on the welcome screen");
+  });
+  await app.close();
+}
+{
   const cfg = tmp("cfg-first"), target = tmp("newvault");
   app = await launch({ config: cfg, env: { CONSTELLATION_E2E_PICK: target } });
   await test("first launch: welcome offers create/open", async () => {
@@ -423,6 +437,14 @@ await test("settings: staleness days and theme persist", async () => {
   await app.until(() => document.querySelector("#staleness") && !document.querySelector("#staleness").classList.contains("stale"), "badge no longer stale at 200 days", 4000);
   ok(JSON.parse(disk(".constellation/settings.json")).stalenessDays === 200, "settings.json written");
   const PAL = { Light: "#FFFFFF", Dark: "#1E1E1E", Dracula: "#282A36", "One Dark": "#282C34" };
+  // System: the page palette follows the OS appearance (dark here if the desktop prefers dark).
+  await app.click("#open-settings");
+  await app.until(() => document.querySelector("#set-theme"), "settings");
+  await app.eval(() => { document.querySelector("#set-theme").value = "System"; });
+  await app.click("#set-save");
+  await sleep(300);
+  const sys = await app.eval(() => [matchMedia("(prefers-color-scheme: dark)").matches, getComputedStyle(document.documentElement).getPropertyValue("--background").trim().toUpperCase()]);
+  eq(sys[1], sys[0] ? PAL.Dark : PAL.Light, "System theme follows the OS (dark: " + sys[0] + ")");
   for (const [name, bg] of Object.entries(PAL)) {
     await app.click("#open-settings");
     await app.until(() => document.querySelector("#set-theme"), "settings");
@@ -435,6 +457,8 @@ await test("settings: staleness days and theme persist", async () => {
     const [r, g, b] = bg.slice(1).match(/../g).map((x) => parseInt(x, 16));
     eq(editorBg, `rgb(${r}, ${g}, ${b})`, "editor colour for " + name);
     await shot("theme-" + name.replace(" ", ""));
+    // Window chrome: on Linux the GTK dark preference follows the theme, and the page sees it as prefers-color-scheme.
+    eq(await app.eval(() => matchMedia("(prefers-color-scheme: dark)").matches), name !== "Light", "window appearance for " + name);
   }
 });
 
