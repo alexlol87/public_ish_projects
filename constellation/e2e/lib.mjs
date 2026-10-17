@@ -1,26 +1,33 @@
 // Tiny WebDriver client for tauri-driver (Linux only). No dependencies: plain fetch + child_process.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BIN = path.join(process.env.CARGO_TARGET_DIR || path.resolve(import.meta.dirname, "../target"), "release/constellation");
-// E2E_PORT runs a second harness alongside another one: its own ports, and no killing of the other's processes by name.
-const PORT = Number(process.env.E2E_PORT || 4444);
-const BASE = `http://127.0.0.1:${PORT}`;
+// Every launch gets free ports and stops only its own processes, so several harnesses can run at once.
+let BASE;
+const freePort = () => new Promise((ok) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); }); });
+/** Pids of every descendant of `pid` (tauri-driver → WebKitWebDriver → the app). */
+function descendants(pid) {
+  const kids = spawnSync("pgrep", ["-P", String(pid)]).stdout.toString().split("\n").filter(Boolean).map(Number);
+  return kids.flatMap((k) => [k, ...descendants(k)]);
+}
 
 let xvfb;
 /** A private X display when Xvfb is installed (a real display may be locked or blanked, which stops WebKit painting
  *  and makes screenshots hang); otherwise the current DISPLAY is used. Set E2E_REAL_DISPLAY=1 to force that. */
-function display() {
-  if (xvfb || process.env.E2E_REAL_DISPLAY || spawnSync("which", ["Xvfb"]).status !== 0) return process.env.DISPLAY;
-  const num = 90 + (process.pid % 9);
-  xvfb = spawn("Xvfb", [":" + num, "-screen", "0", "1600x1000x24", "-nolisten", "tcp"], { stdio: "ignore" });
-  xvfb.unref();
+async function display() {
+  if (xvfb || process.env.E2E_REAL_DISPLAY || spawnSync("which", ["Xvfb"]).status !== 0) return;
+  // -displayfd: Xvfb picks a free display number and writes it to fd 3 once it is ready.
+  xvfb = spawn("Xvfb", ["-displayfd", "3", "-screen", "0", "1600x1000x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "ignore", "pipe"] });
   process.on("exit", () => xvfb.kill());
+  const num = await new Promise((ok) => xvfb.stdio[3].once("data", (d) => ok(d.toString().trim())));
+  xvfb.stdio[3].destroy();
+  xvfb.unref();
   process.env.DISPLAY = ":" + num;
-  return process.env.DISPLAY;
 }
 
 /** Closes or focuses (`action`) the top-level X window titled `title` (see xwin.py). */
@@ -40,14 +47,13 @@ async function wd(method, p, body) {
 
 /** Starts tauri-driver (it passes its environment on to the app) and a session. */
 export async function launch({ vault, config, env = {} }) {
-  if (!process.env.E2E_EXTERNAL && !process.env.E2E_PORT) for (const n of ["tauri-driver", "WebKitWebDriver", "constellation"]) spawnSync("pkill", ["-x", n]); // leftovers of a killed run
-  await sleep(300);
-  display();
-  await sleep(xvfb && !xvfb.ready ? 1500 : 0); if (xvfb) xvfb.ready = true;
+  await display();
+  const port = process.env.E2E_EXTERNAL ? 4444 : await freePort(); // E2E_EXTERNAL: a tauri-driver you started yourself
+  BASE = `http://127.0.0.1:${port}`;
   const e = { ...process.env, WEBKIT_DISABLE_DMABUF_RENDERER: "1", XDG_CONFIG_HOME: config, ...env };
   delete e.CONSTELLATION_VAULT;
   if (vault) e.CONSTELLATION_VAULT = vault;
-  const driver = process.env.E2E_EXTERNAL ? { pid: 0 } : spawn("tauri-driver", ["--port", String(PORT), "--native-port", String(PORT + 1)], { env: e, stdio: process.env.E2E_STDIO ? "inherit" : "ignore", detached: !process.env.E2E_NODETACH });
+  const driver = process.env.E2E_EXTERNAL ? { pid: 0 } : spawn("tauri-driver", ["--port", String(port), "--native-port", String(await freePort())], { env: e, stdio: process.env.E2E_STDIO ? "inherit" : "ignore", detached: !process.env.E2E_NODETACH });
   for (let i = 0; i < 50; i++) { try { await fetch(BASE + "/status"); break; } catch { await sleep(100); } }
   const s = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: BIN } } } });
   await sleep(500);
@@ -142,9 +148,7 @@ export class App {
   }
   async close() {
     try { await wd("DELETE", this.id); } catch {}
-    try { process.kill(-this.driver.pid, "SIGKILL"); } catch {}
-    await sleep(500);
-    if (!process.env.E2E_PORT) for (const n of ["constellation", "WebKitWebDriver"]) spawnSync("pkill", ["-x", n]);
+    if (this.driver.pid) for (const pid of [...descendants(this.driver.pid), this.driver.pid]) try { process.kill(pid, "SIGKILL"); } catch {}
     await sleep(300);
   }
 }
