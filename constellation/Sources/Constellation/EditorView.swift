@@ -12,6 +12,8 @@ struct EditorView: NSViewRepresentable {
     var reveal: Reveal?
     let onChange: (String) -> Void
     let onFollow: (WikiLink) -> Void
+    var onTag: (String) -> Void = { _ in }              // ⌘-click on a #tag
+    var tagNames: (String) -> [String] = { _ in [] }    // `#` autocomplete source
 
     /// Asks the editor to select and scroll to a range once (`id` makes repeats of the same range fire again).
     struct Reveal: Equatable { let id = UUID(); let range: NSRange }
@@ -43,6 +45,8 @@ struct EditorView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.onChange = onChange
         context.coordinator.onFollow = onFollow
+        context.coordinator.onTag = onTag
+        context.coordinator.tagNames = tagNames
         if let reveal, reveal.id != context.coordinator.lastReveal, let tv = nsView.documentView as? NSTextView {
             context.coordinator.lastReveal = reveal.id
             let r = NSIntersectionRange(reveal.range, NSRange(location: 0, length: (tv.string as NSString).length))
@@ -56,6 +60,8 @@ struct EditorView: NSViewRepresentable {
         var onChange: (String) -> Void
         let notePath: String
         var onFollow: (WikiLink) -> Void
+        var onTag: (String) -> Void = { _ in }
+        var tagNames: (String) -> [String] = { _ in [] }
         var lastReveal: UUID?
         init(root: URL, notePath: String, onChange: @escaping (String) -> Void, onFollow: @escaping (WikiLink) -> Void) {
             self.root = root; self.notePath = notePath; self.onChange = onChange; self.onFollow = onFollow
@@ -90,7 +96,7 @@ struct EditorView: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             restyle(tv)
             onChange(tv.string)
-            if LinkTextView.typedLinkPrefix(in: tv) != nil { tv.complete(nil) }  // typing after `[[` opens autocomplete
+            if LinkTextView.typedLinkPrefix(in: tv) != nil || LinkTextView.typedTagPrefix(in: tv) != nil { tv.complete(nil) }  // typing after `[[` opens autocomplete
         }
 
         /// Click on a task checkbox: ask the Vault for the edits (archive move, or a plain toggle) and apply them as one undo step.
@@ -110,10 +116,15 @@ struct EditorView: NSViewRepresentable {
         }
 
         func follow(_ tv: NSTextView, at offset: Int) {
-            if let l = NoteParser.parse(tv.string).links.first(where: { NSLocationInRange(offset, $0.range) }) { onFollow(l) }
+
+            let parsed = NoteParser.parse(tv.string)
+            if let l = parsed.links.first(where: { NSLocationInRange(offset, $0.range) }) { onFollow(l) }
+            else if let t = parsed.tags.first(where: { NSLocationInRange(offset, NSRange(location: $0.range.location, length: $0.range.length + 1)) }) { onTag(t.name) }
+
         }
 
         func textView(_ tv: NSTextView, completions words: [String], forPartialWordRange range: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+            if LinkTextView.typedLinkPrefix(in: tv) == nil, let t = LinkTextView.typedTagPrefix(in: tv) { return tagNames(t.text) }
             guard let typed = LinkTextView.typedLinkPrefix(in: tv) else { return [] }
             return (try? Vault.completions(for: typed.text, in: root)) ?? []
         }
@@ -168,6 +179,8 @@ struct EditorView: NSViewRepresentable {
                 case .taskBox(let checked):
                     // Checkbox widget on the `[ ]` range's first character (unverified on macOS; fallback: leave raw `[ ]`).
                     storage.addAttribute(.attachment, value: Self.attachment(text: checked ? "☑" : "☐"), range: NSRange(location: s.range.location, length: 1))
+                case .tag:
+                    storage.addAttributes([.foregroundColor: NSColor.systemTeal, .backgroundColor: NSColor.systemTeal.withAlphaComponent(0.12)], range: s.range)
                 case .link:
                     storage.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
                 }
@@ -214,6 +227,17 @@ final class LinkTextView: NSTextView {
         return (ns.substring(with: NSRange(location: start, length: cursor - start)), NSRange(location: start, length: cursor - start))
     }
 
-    override var rangeForUserCompletion: NSRange { Self.typedLinkPrefix(in: self)?.range ?? super.rangeForUserCompletion }
+
+    /// Text typed after a `#` that would start a Tag (excluding the `#`), with its range.
+    static func typedTagPrefix(in tv: NSTextView) -> (text: String, range: NSRange)? {
+        let ns = tv.string as NSString
+        let cursor = tv.selectedRange().location
+        let line = ns.lineRange(for: NSRange(location: min(cursor, ns.length), length: 0))
+        guard let text = TagIndex.typedPrefix(inLineBeforeCursor: ns.substring(with: NSRange(location: line.location, length: cursor - line.location))) else { return nil }
+        return (text, NSRange(location: cursor - (text as NSString).length, length: (text as NSString).length))
+    }
+
+    override var rangeForUserCompletion: NSRange { Self.typedLinkPrefix(in: self)?.range ?? Self.typedTagPrefix(in: self)?.range ?? super.rangeForUserCompletion }
+
 }
 #endif

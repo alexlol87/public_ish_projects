@@ -19,7 +19,7 @@ public struct SearchIndex {
         public func isArchived(_ path: String) -> Bool { Vault.isArchive(path) }
     }
 
-    private struct Entry { let folded: [UInt16]; let text: [UInt16]; let aligned: Bool; let foldedName: String }
+    private struct Entry { let folded: [UInt16]; let text: [UInt16]; let aligned: Bool; let foldedName: String; let tags: Set<String> }
 
     public static let maxMatches = 200
     public let root: URL
@@ -44,7 +44,11 @@ public struct SearchIndex {
         let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
         let name = String(path.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
         let f = Array(Self.fold(text).utf16), t = Array(text.utf16)
-        notes[path] = Entry(folded: f, text: t, aligned: f.count == t.count, foldedName: Self.fold(name))
+        notes[path] = Entry(folded: f, text: t, aligned: f.count == t.count, foldedName: Self.fold(name),
+                           tags: Set(NoteParser.parse(text).tags.flatMap { t in
+                               let c = t.name.lowercased().split(separator: "/")
+                               return (1...c.count).map { c[..<$0].joined(separator: "/") }
+                           }))
     }
 
     /// Re-reads each touched path (create, edit, delete, move all arrive as paths). No full reload.
@@ -65,12 +69,20 @@ public struct SearchIndex {
     }
 
     public func search(_ query: String) -> Results {
-        let q = Self.fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        // `#tag` terms filter Notes (a parent Tag matches its children); the rest is the text query.
+        var words: [Substring] = [], wanted: [String] = []
+        for w in query.split(whereSeparator: \.isWhitespace) {
+            if w.hasPrefix("#"), w.dropFirst().range(of: "^" + NoteParser.tagName + "$", options: .regularExpression) != nil { wanted.append(w.dropFirst().lowercased()) }
+            else { words.append(w) }
+        }
+        let q = Self.fold(words.joined(separator: " "))
         var r = Results()
+        let notes = wanted.isEmpty ? self.notes : self.notes.filter { e in wanted.allSatisfy { e.value.tags.contains($0) } }
+        if !wanted.isEmpty, q.isEmpty { r.notes = notes.keys.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }; return r }
         guard !q.isEmpty else { return r }
         let byPath = { (a: String, b: String) in a.localizedCaseInsensitiveCompare(b) == .orderedAscending }
         let qU = Array(q.utf16)
-        r.folders = folders.filter { Self.fold(String($0.split(separator: "/").last ?? "")).contains(q) }.sorted(by: byPath)
+        r.folders = !wanted.isEmpty ? [] : folders.filter { Self.fold(String($0.split(separator: "/").last ?? "")).contains(q) }.sorted(by: byPath)
         r.notes = notes.filter { $0.value.foldedName.contains(q) }.keys.sorted(by: byPath)
         // Sort only the Notes that contain the query; sorting all of them dominates the cost at 5,000 Notes.
         let hits = notes.filter { Self.find(qU, in: $0.value.folded, from: 0) != nil }.keys.sorted(by: byPath)
