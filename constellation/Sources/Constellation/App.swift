@@ -13,7 +13,7 @@ struct RootView: View {
     @State private var root: URL?
     @State private var tree: VaultNode?
     @State private var selection: String?
-    @State private var text = ""
+    @State private var tabs: NoteTabs?
     @State private var error: String?
 
     var body: some View {
@@ -31,8 +31,24 @@ struct RootView: View {
         } detail: {
             if let error {
                 Text(error).foregroundStyle(.red).padding()
+            } else if let tabs, let active = tabs.active {
+                VStack(spacing: 0) {
+                    HStack {
+                        ForEach(tabs.paths, id: \.self) { path in
+                            HStack(spacing: 4) {
+                                Button(path.split(separator: "/").last.map(String.init) ?? path) { try? self.tabs?.open(path) }
+                                    .buttonStyle(.plain).fontWeight(path == active ? .bold : .regular)
+                                Button("x") { try? self.tabs?.close(path) }.buttonStyle(.plain)
+                            }
+                        }
+                        Spacer()
+                    }.padding(6)
+                    Divider()
+                    EditorView(initialText: tabs.text(active) ?? "") { self.tabs?.edit(active, text: $0) }
+                        .id(active)
+                }
             } else {
-                ScrollView { Text(text).font(.body.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding() }
+                Text("Select a Note").foregroundStyle(.secondary)
             }
         }
         .frame(minWidth: 700, minHeight: 450)
@@ -42,6 +58,8 @@ struct RootView: View {
             else if let url = Vault.reopenable(UserDefaults.standard.string(forKey: "lastVault")) { open(url) }
         }
         .onChange(of: selection) { _, path in show(path) }
+        .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in saveDue() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in try? tabs?.saveAll() }
     }
 
     private func chooseFolder(create: Bool) {
@@ -57,12 +75,16 @@ struct RootView: View {
     }
 
     private func open(_ url: URL) {
-        do { tree = try Vault.load(root: url); root = url; error = nil; UserDefaults.standard.set(url.path, forKey: "lastVault") } catch { self.error = "\(error)" }
+        do { tree = try Vault.load(root: url); root = url; tabs = NoteTabs(root: url); error = nil; UserDefaults.standard.set(url.path, forKey: "lastVault") } catch { self.error = "\(error)" }
     }
 
     private func show(_ path: String?) {
-        guard let root, let tree, let path, let node = find(path, in: tree), !node.isFolder else { return }
-        do { text = try Vault.readNote(node, in: root); error = nil } catch { self.error = "\(error)" }
+        guard let tree, let path, let node = find(path, in: tree), !node.isFolder else { return }
+        do { try tabs?.open(path); error = nil } catch { self.error = "\(error)" }
+    }
+
+    private func saveDue() {
+        do { try tabs?.saveDue() } catch { self.error = "Could not save: \(error)" }
     }
 
     private func find(_ path: String, in node: VaultNode) -> VaultNode? {
