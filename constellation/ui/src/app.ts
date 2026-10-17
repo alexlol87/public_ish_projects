@@ -1,4 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, baseName, errText, type Inspect, type SearchResults, type TagNode, type VaultNode } from "./api";
 import { createEditor, type Editor } from "./editor/editor";
 import type { FormatAction } from "./lib/formatActions";
@@ -69,6 +70,8 @@ async function start(app: HTMLElement, root: string) {
   await listen<string>("open-note", (e) => void openNote(e.payload));
   await listen("settings-changed", () => void reloadSettings());
   setInterval(autosave, 250);
+  // Unsaved edits are written before the window goes away (the close proceeds once this resolves).
+  await getCurrentWindow().onCloseRequested(async () => { await flushAll(); });
   addEventListener("blur", () => void flushAll());
   document.addEventListener("visibilitychange", () => document.hidden && void flushAll());
   document.addEventListener("keydown", onKey, true);
@@ -133,10 +136,6 @@ function buildLayout(app: HTMLElement) {
     tagCompletions: (prefix) => api.tagCompletions(prefix),
     isBrokenLink: (t) => broken.has(t.split("#")[0].trim()),
   });
-  P.editor.addEventListener("click", (e) => {
-    const el = (e.target as Element).closest(".cm-broken[data-link]");
-    if (el) void openLink(el.getAttribute("data-link")!, false);
-  });
   for (const ev of ["keyup", "mouseup"]) P.editor.addEventListener(ev, () => void refreshInspector());
 }
 
@@ -178,7 +177,7 @@ function showActive() {
   if (!p) { shown = null; renderBanner(); return; }
   const rev = tabs.revision(p);
   if (!shown || shown.path !== p || shown.revision !== rev) {
-    editor.setDoc(tabs.text(p) ?? "");
+    editor.setDoc(tabs.text(p) ?? "", p);
     shown = { path: p, revision: rev };
   }
   renderBanner();
@@ -199,6 +198,7 @@ async function closeTab(p: string) {
   if (!r.closed) { toast("Resolve the conflict first (Reload from disk or Keep mine)", true); return; }
   if (r.flush !== undefined) await api.writeNote(p, r.flush).catch((e) => toast(errText(e), true));
   showActive();
+  editor.forget(p);
   void refreshInspector();
 }
 

@@ -23,6 +23,7 @@ export async function graphView(app: HTMLElement) {
   let hover: string | null = null;
   let neighbours = new Map<string, Set<string>>();
   let heat = 0;
+  let refit = false;
   const view = { x: 0, y: 0, k: 1 };
 
   const canvas = h("canvas", { id: "graph-canvas" });
@@ -67,6 +68,7 @@ export async function graphView(app: HTMLElement) {
     for (const e of g.edges) { neighbours.get(e.from)?.add(e.to); neighbours.get(e.to)?.add(e.from); }
     layout.update(g.nodes.map((n) => n.id), g.edges.map((e) => [e.from, e.to]));
     heat = 400;
+    refit = true;
     requestAnimationFrame(frame);
   }
 
@@ -124,9 +126,21 @@ export async function graphView(app: HTMLElement) {
     ctx.globalAlpha = 1;
   }
 
+  /** Zooms and pans so the whole graph is in view (after each reload, once the layout has settled). */
+  function fit() {
+    const pts = g.nodes.map((n) => layout.get(n.id)).filter((p): p is { x: number; y: number } => !!p);
+    const w = canvas.clientWidth, hgt = canvas.clientHeight;
+    if (!pts.length || !w || !hgt) return;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    view.k = Math.max(0.05, Math.min(2, (w - 120) / Math.max(1, x1 - x0), (hgt - 120) / Math.max(1, y1 - y0)));
+    view.x = w / 2 - ((x0 + x1) / 2) * view.k;
+    view.y = hgt / 2 - ((y0 + y1) / 2) * view.k;
+  }
+
   function frame() {
     queued = false;
-    if (heat > 0) { layout.step(); heat--; }
+    if (heat > 0) { layout.step(); heat--; if (heat === 0 && refit) { refit = false; fit(); } }
     draw();
     if (heat > 0) { queued = true; requestAnimationFrame(frame); }
   }
@@ -144,6 +158,10 @@ export async function graphView(app: HTMLElement) {
     }
     return best;
   };
+  // Read-only introspection for the e2e harness: where each node is drawn (canvas pixels) and the view transform.
+  Object.assign(canvas, {
+    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, kind: n.kind, x, y }; }), edges: g.edges.length, hover, local }),
+  });
   const pos = (e: MouseEvent) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
   let drag: { id: string | null; moved: boolean; sx: number; sy: number } | null = null;
 
@@ -191,7 +209,10 @@ export async function graphView(app: HTMLElement) {
     } catch (e) { toast(String(e), true); }
   }
 
-  await listen("vault-changed", () => { void reload(); void renderPanel(); });
+  await listen<{ paths: string[] }>("vault-changed", (e) => {
+    if (e.payload.paths.every((p) => p.startsWith(".constellation/"))) return; // our own filter save: don't rebuild the panel under the user's mouse
+    void reload(); void renderPanel();
+  });
   await listen<string | null>("current-note", (e) => { current = e.payload; if (local) void reload(); else redraw(); });
   await listen("settings-changed", async () => { await loadTheme(); redraw(); });
 

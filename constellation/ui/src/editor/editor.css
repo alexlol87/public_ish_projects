@@ -1,6 +1,6 @@
 .cm-editor { height: 100%; background: var(--background); color: var(--text); font-size: 15px; }
 .cm-editor.cm-focused { outline: none; }
-.cm-scroller { font-family: system-ui, sans-serif; line-height: 1.6; padding: 8px 0; }
+.cm-editor .cm-scroller { font-family: system-ui, sans-serif; line-height: 1.6; padding: 8px 0; }
 .cm-content { caret-color: var(--text); max-width: 54rem; padding: 0 16px; }
 .cm-cursor { border-left-color: var(--text); }
 .cm-editor .cm-selectionBackground, .cm-editor.cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--accent) 30%, transparent); }

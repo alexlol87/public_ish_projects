@@ -27,8 +27,10 @@ export interface EditorOptions {
 
 export interface Editor {
   view: EditorView;
-  /** Replaces the document and resets undo history (opening a Note, reloading from disk). Keeps the cursor if possible. */
-  setDoc(doc: string): void;
+  /** Shows `doc` for tab `key`. A tab shown before with the same text gets its state (undo history, cursor) back;
+   *  re-showing the current key (reload from disk) resets history and keeps the cursor if possible. */
+  setDoc(doc: string, key?: string): void;
+  forget(key: string): void;
   getDoc(): string;
   applyFormat(action: FormatAction): void;
   focus(): void;
@@ -59,6 +61,12 @@ export function formatTransaction(state: EditorState, action: FormatAction): Tra
     userEvent: "input.format",
     scrollIntoView: true,
   };
+}
+
+function onCursorLine(view: EditorView, el: Element): boolean {
+  const { from, to } = view.state.selection.main, doc = view.state.doc;
+  const n = doc.lineAt(Math.min(view.posAtDOM(el), doc.length)).number;
+  return n >= doc.lineAt(from).number && n <= doc.lineAt(to).number;
 }
 
 export function createEditor(parent: HTMLElement, opts: EditorOptions): Editor {
@@ -102,9 +110,13 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions): Editor {
     })))),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     EditorView.domEventHandlers({
-      mousedown(e) {
-        if (!(isMac ? e.metaKey : e.ctrlKey) || !(e.target instanceof Element)) return false;
+      mousedown(e, view) {
+        if (!(e.target instanceof Element)) return false;
+        const mod = isMac ? e.metaKey : e.ctrlKey;
         const link = e.target.closest("[data-link]"), tag = e.target.closest("[data-tag]");
+        // Links off the cursor lines open on a plain click; on a cursor line the click moves the caret (Mod-click opens).
+        if (!mod && link && onCursorLine(view, link)) return false;
+        if (!mod && !link) return false;
         if (link) opts.onOpenLink?.(link.getAttribute("data-link")!, e.shiftKey);
         else if (tag) opts.onTagClick?.(tag.getAttribute("data-tag")!);
         else return false;
@@ -115,13 +127,21 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions): Editor {
     EditorView.updateListener.of((u) => u.docChanged && opts.onChange?.(u.state.doc.toString())),
   ];
 
+  // One EditorState per tab keeps each tab's undo history while it is in the background.
+  const states = new Map<string, EditorState>();
+  let current = "";
   const view = new EditorView({ parent, state: EditorState.create({ doc: opts.doc, extensions }) });
   return {
     view,
-    setDoc(doc) {
-      const anchor = Math.min(view.state.selection.main.anchor, doc.length);
-      view.setState(EditorState.create({ doc, selection: { anchor }, extensions }));
+    setDoc(doc, key = "") {
+      const sameTab = key === current;
+      if (!sameTab) states.set(current, view.state);
+      const saved = sameTab ? undefined : states.get(key);
+      const anchor = sameTab ? Math.min(view.state.selection.main.anchor, doc.length) : 0;
+      current = key;
+      view.setState(saved && saved.doc.toString() === doc ? saved : EditorState.create({ doc, selection: { anchor }, extensions }));
     },
+    forget: (key) => void states.delete(key),
     getDoc: () => view.state.doc.toString(),
     applyFormat: (action) => view.dispatch(formatTransaction(view.state, action)),
     focus: () => view.focus(),

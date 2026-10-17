@@ -52,6 +52,7 @@ export function contextMenu(e: MouseEvent, items: [string, () => void][]) {
   const m = h("div", { class: "ctx", style: `left:${e.clientX}px;top:${e.clientY}px` },
     ...items.map(([label, run]) => h("div", { class: "ctx-item", onclick: () => { m.remove(); run(); } }, label)));
   document.body.append(m);
-  const off = () => { m.remove(); removeEventListener("mousedown", off, true); };
+  // A press on the menu itself must not remove it before the click lands.
+  const off = (ev: Event) => { if (m.contains(ev.target as Node)) return; m.remove(); removeEventListener("mousedown", off, true); };
   setTimeout(() => addEventListener("mousedown", off, true));
 }
