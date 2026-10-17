@@ -44,6 +44,12 @@ struct RootView: View {
                 } openNote: { path in try? tabs?.open(path) } } else {
                 List(tree.children, children: \.optionalChildren, selection: $selection) { node in
                     Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
+                        .contextMenu {
+                            if node.isFolder && AgentFiles.isRepoFolder(node.relativePath) {
+                                Button("Copy ingest prompt") { copy(AgentFiles.ingestPrompt(repo: node.name)) }
+                                Button("Copy refresh prompt") { copy(AgentFiles.refreshPrompt(repo: node.name)) }
+                            }
+                        }
                 } } }
             } else {
                 VStack {
@@ -207,6 +213,11 @@ private extension VaultNode {
 }
 
 /// Folders / Notes / Text matches; clicking a text match opens the Note at the hit.
+private func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+}
+
 private struct SearchResultsView: View {
     let results: SearchIndex.Results
     let openMatch: (SearchIndex.TextMatch) -> Void
