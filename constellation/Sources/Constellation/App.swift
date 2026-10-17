@@ -15,6 +15,7 @@ struct RootView: View {
     @State private var selection: String?
     @State private var tabs: NoteTabs?
     @State private var error: String?
+    @State private var watcher: VaultWatcher?
 
     var body: some View {
         NavigationSplitView {
@@ -44,8 +45,16 @@ struct RootView: View {
                         Spacer()
                     }.padding(6)
                     Divider()
+                    if tabs.conflict(active) != nil {
+                        HStack {
+                            Text("This Note changed on disk.")
+                            Button("Reload from disk") { try? self.tabs?.resolveConflict(active, reload: true) }
+                            Button("Keep mine") { try? self.tabs?.resolveConflict(active, reload: false) }
+                            Spacer()
+                        }.padding(6).background(Color.yellow.opacity(0.25))
+                    }
                     EditorView(initialText: tabs.text(active) ?? "") { self.tabs?.edit(active, text: $0) }
-                        .id(active)
+                        .id("\(active)#\(tabs.revision(active))")
                 }
             } else {
                 Text("Select a Note").foregroundStyle(.secondary)
@@ -75,7 +84,14 @@ struct RootView: View {
     }
 
     private func open(_ url: URL) {
-        do { tree = try Vault.load(root: url); root = url; tabs = NoteTabs(root: url); error = nil; UserDefaults.standard.set(url.path, forKey: "lastVault") } catch { self.error = "\(error)" }
+        do {
+            tree = try Vault.load(root: url); root = url; tabs = NoteTabs(root: url); error = nil
+            UserDefaults.standard.set(url.path, forKey: "lastVault")
+            watcher = VaultWatcher(root: url) { paths in
+                if let t = tree, let fresh = try? t.refreshed(paths: paths, root: url) { tree = fresh }
+                tabs?.diskChanged(paths)
+            }
+        } catch { self.error = "\(error)" }
     }
 
     private func show(_ path: String?) {

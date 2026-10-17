@@ -20,6 +20,16 @@ public enum Vault {
                   children: try children(of: root, prefix: ""))
     }
 
+    static func load(folderAt dir: URL, relativePath: String) throws -> VaultNode {
+        VaultNode(name: dir.lastPathComponent, relativePath: relativePath, isFolder: true,
+                  children: try children(of: dir, prefix: relativePath.isEmpty ? "" : relativePath + "/"))
+    }
+
+    static func sorted(_ nodes: [VaultNode]) -> [VaultNode] {
+        let byName = { (a: VaultNode, b: VaultNode) in a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending }
+        return nodes.filter(\.isFolder).sorted(by: byName) + nodes.filter { !$0.isFolder }.sorted(by: byName)
+    }
+
     public struct NotEmpty: Error {}
 
     private static let appOnlyTop: Set<String> = ["AGENTS.md", "repos.txt", "tags.md", "templates", ".constellation"]
@@ -73,5 +83,41 @@ public enum Vault {
         }
         let byName = { (a: VaultNode, b: VaultNode) in a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending }
         return folders.sorted(by: byName) + notes.sorted(by: byName)
+    }
+}
+
+extension VaultNode {
+    /// Applies external file-system changes (create, modify, delete, move all arrive as touched paths) by re-reading
+    /// each touched path's parent folder from disk. Vanished folders are dropped; unreadable ones are left as they were.
+    /// shortcut: re-lists whole parent folders, fine for notes-sized Vaults; switch to per-entry patches if one gets huge.
+    public func refreshed(paths: [String], root: URL) throws -> VaultNode {
+        var tree = self
+        for path in paths {
+            let parts = path.split(separator: "/").map(String.init)
+            guard !parts.isEmpty else { continue }
+            tree = try tree.replacing(folder: Array(parts.dropLast()), at: 0, dir: root, prefix: "")
+        }
+        return tree
+    }
+
+    private func replacing(folder parts: [String], at i: Int, dir: URL, prefix: String) throws -> VaultNode {
+        var kids = children
+        if i < parts.count {
+            let name = parts[i], path = prefix + name
+            let sub = dir.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: sub.path, isDirectory: &isDir), isDir.boolValue else {
+                return VaultNode(name: self.name, relativePath: relativePath, isFolder: true, children: kids.filter { $0.relativePath != path })
+            }
+            if let idx = kids.firstIndex(where: { $0.relativePath == path && $0.isFolder }) {
+                kids[idx] = try kids[idx].replacing(folder: parts, at: i + 1, dir: sub, prefix: path + "/")
+            } else if !name.hasPrefix(".") || (prefix.isEmpty && name == ".constellation") {
+                kids.append(try Vault.load(folderAt: sub, relativePath: path))
+                kids = Vault.sorted(kids)
+            }
+            return VaultNode(name: self.name, relativePath: relativePath, isFolder: true, children: kids)
+        }
+        let fresh = try Vault.load(folderAt: dir, relativePath: relativePath)
+        return VaultNode(name: name, relativePath: relativePath, isFolder: true, children: fresh.children)
     }
 }
