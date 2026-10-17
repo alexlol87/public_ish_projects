@@ -90,7 +90,13 @@ export class App {
    * Mouse sequence relative to the centre of an element: steps are ["move", dx, dy] | ["down", button] | ["up", button];
    * `ctrl` holds Control throughout.
    */
-  async pointer(css, steps, { ctrl = false, text } = {}) {
+  async pointer(css, steps, opts = {}) {
+    for (let i = 0; ; i++) {
+      try { return await this.pointerOnce(css, steps, opts); }
+      catch (e) { if (i >= 4 || !/no such element|stale|intercepted/.test(e.message)) throw e; await sleep(300); } // the UI re-renders after file events
+    }
+  }
+  async pointerOnce(css, steps, { ctrl = false, text } = {}) {
     const id = await this.el(await this.mark(css, text));
     const origin = { "element-6066-11e4-a52e-4f735466cecf": id };
     const pt = [], key = [];
@@ -123,7 +129,10 @@ export class App {
       for (const h of await this.windows()) {
         await this.switchTo(h);
         const u = await this.req("GET", "/url");
-        if (part === null ? !u.includes("view=") : u.includes(part)) return h;
+        if (part === null ? !u.includes("view=") : u.includes(part)) {
+          xwin("focus", part === null ? "Constellation" : "Constellation graph"); // no window manager: give the window X focus ourselves
+          return h;
+        }
       }
       await sleep(200);
     }

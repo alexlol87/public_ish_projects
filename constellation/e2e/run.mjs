@@ -433,11 +433,88 @@ await test("settings: staleness days and theme persist", async () => {
   }
 });
 
+
+const setDoc = (text) => app.eval(`const v = ${VIEW}; v.focus(); v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: A[0] }, selection: { anchor: 0 } });`, text);
+await test("every toolbar format wraps the selection", async () => {
+  write("acme-shop/fmt.md", "x\n");
+  await openRow("acme-shop/fmt.md");
+  const want = { bold: "**word**", italic: "*word*", underline: "<u>word</u>", strikethrough: "~~word~~", inlineCode: "`word`", codeBlock: "```", heading1: "# word", heading2: "## word", heading3: "### word", bulletList: "- word", numberedList: "1. word", taskList: "- [ ] word", quote: "> word", link: "[[word]]" };
+  for (const [action, expected] of Object.entries(want)) {
+    await setDoc("word\n");
+    await selectText("word");
+    await app.click(".fmt-" + action);
+    ok((await doc()).includes(expected), `${action}: ${JSON.stringify(await doc())}`);
+    await app.click(".fmt-" + action).catch(() => {});
+  }
+  await setDoc("word\n");
+  await app.click(".fmt-table");
+  ok((await doc()).includes("|"), "table skeleton: " + JSON.stringify(await doc()));
+});
+
+await test("live preview widgets: table, code block, quote, image, tag, checkbox", async () => {
+  await setDoc("# Widgets\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\nlet x = 1;\n```\n\n> quoted text\n\n![alt text](missing.png)\n\n#payments and **bold** and `code`\n\n- [ ] open task\n- [x] done task\n\nend\n");
+  await caret("end");
+  await app.until(() => !!document.querySelector(".cm-table") && !!document.querySelector(".cm-image-missing"), "table and missing-image widgets");
+  for (const sel of [".cm-codeblock", ".cm-quote", ".cm-image-missing", ".cm-tag", ".cm-task", ".cm-bold", ".cm-code"]) ok(await app.has(sel), "has " + sel);
+  ok((await doc()).includes("![alt text](missing.png)"), "a broken image must not rewrite the text: " + JSON.stringify((await doc()).slice(0, 80)));
+  eq(await app.eval(() => [...document.querySelectorAll(".cm-task")].map((c) => c.checked)), [false, true], "checkbox states");
+  const text = await app.eval(() => document.querySelector(".cm-content").innerText);
+  ok(!text.includes("**bold**") && !text.includes("```") && !text.includes("![alt"), "markers hidden: " + text);
+  await shot("12-widgets");
+});
+
+await test("inline image from the vault loads", async () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  fs.writeFileSync(path.join(vault, "acme-shop/pic.png"), png);
+  await setDoc("![pic](pic.png)\n\nend\n");
+  await caret("end");
+  await app.until(() => document.querySelector("img.cm-image")?.naturalWidth > 0, "image loaded", 5000);
+  ok((await doc()).startsWith("![pic](pic.png)"), "text unchanged");
+});
+
+await test("link to a heading jumps to it", async () => {
+  write("acme-shop/headlink.md", "[[acme-shop/cart-service/endpoints#GET /carts/{id}]]\n\nsecond\n");
+  await openRow("acme-shop/headlink.md");
+  await waitDoc("second");
+  await caret("second");
+  await app.click(".cm-link");
+  await app.until(() => document.querySelector(".tab.active")?.title === "acme-shop/cart-service/endpoints.md", "endpoints opened");
+  await sleep(300);
+  eq(await app.eval(`const v = ${VIEW}; return v.state.doc.lineAt(v.state.selection.main.head).text`), "## GET /carts/{id}", "caret on the heading");
+});
+
+await test("Ctrl-click on a #tag opens the Tags tab filtered", async () => {
+  await openRow("acme-shop/orders-service/README.md");
+  await waitDoc("#payments");
+  await caret("# Orders");
+  await sleep(200);
+  await app.ctrlClick(".cm-tag");
+  await app.until(() => document.querySelector("#tab-tags").classList.contains("on") && document.querySelector(".side .list .match"), "tag hits list");
+  ok((await resultsText()).includes("#payments"), "filtered to #payments");
+  await side("files");
+});
+
+await test("backlink click opens the linking note", async () => {
+  await openRow("acme-shop/orders-service/endpoints.md");
+  await app.until(() => [...document.querySelectorAll("#inspector .row-item")].some((r) => r.title.includes("cart-service")), "backlinks");
+  await app.click("#inspector .row-item[title*='cart-service/endpoints.md']");
+  await app.until(() => document.querySelector(".tab.active")?.title === "acme-shop/cart-service/endpoints.md", "backlink target open");
+});
+
 // ---------- graph window ----------
 let main;
 const graph = async () => { await app.focusWindow("view=graph"); };
 const gstate = () => app.eval(() => document.querySelector("#graph-canvas").e2e());
-const settle = async () => { let last = ""; for (let i = 0; i < 40; i++) { const s = JSON.stringify((await gstate()).nodes.map((n) => [Math.round(n.x), Math.round(n.y)])); if (s === last) return; last = s; await sleep(250); } };
+const settle = async () => { // layout finished (and the view fitted) and nothing moving
+  let last = "", same = 0;
+  for (let i = 0; i < 60 && same < 3; i++) {
+    const st = await gstate();
+    const now = JSON.stringify([st.heat, st.view, st.nodes.map((n) => [Math.round(n.x), Math.round(n.y)])]);
+    same = st.heat === 0 && now === last ? same + 1 : 0;
+    last = now;
+    await sleep(250);
+  }
+};
 const nodeOf = async (id) => (await gstate()).nodes.find((n) => n.id === id);
 const canvasPointer = async (steps, opts) => {
   const r = await app.eval(() => { const c = document.querySelector("#graph-canvas").getBoundingClientRect(); return [c.width, c.height]; });
@@ -460,6 +537,14 @@ await test("graph: window opens (Ctrl+G), renders nodes and edges", async () => 
   await shot("09-graph");
 });
 
+await test("idle app does not refresh itself (reads must not look like changes)", async () => {
+  await app.focusWindow(null);
+  await app.eval(() => { window.__n = 0; window.__TAURI_INTERNALS__.invoke("plugin:event|listen", { event: "vault-changed", target: { kind: "Any" }, handler: window.__TAURI_INTERNALS__.transformCallback(() => window.__n++) }); });
+  await sleep(3500);
+  const n = await app.eval(() => window.__n);
+  ok(n <= 1, `${n} vault-changed events in 3.5 s of idling with the graph window open`);
+});
+
 await test("graph: hover highlights, click opens the note in the main window", async () => {
   await graph();
   const n = await nodeOf("acme-shop/orders-service/README.md");
@@ -476,6 +561,8 @@ await test("graph: drag a node, pan, zoom", async () => {
   await graph();
   await settle();
   const n = await nodeOf("acme-shop/orders-service/README.md");
+  await canvasPointer([["move", n.x, n.y]]);
+  await app.until(() => document.querySelector("#graph-canvas").e2e().hover === "acme-shop/orders-service/README.md", "pointer over the node", 3000);
   await canvasPointer([["move", n.x, n.y], ["down", 0], ["move", n.x + 60, n.y + 40], ["move", n.x + 80, n.y + 50], ["up", 0]]);
   await sleep(500);
   const moved = await nodeOf("acme-shop/orders-service/README.md");
@@ -492,36 +579,52 @@ await test("graph: drag a node, pan, zoom", async () => {
   ok(v2.k > v1.k, `zoom in (${v1.k} -> ${v2.k})`);
 });
 
+await test("graph: clicking a ghost node creates the Note", async () => {
+  await graph();
+  const g = (await gstate()).nodes.find((n) => n.kind === "ghost");
+  ok(g, "ghost node present");
+  await canvasPointer([["move", g.x, g.y], ["down", 0], ["up", 0]]);
+  await sleep(1000);
+  ok(fs.readdirSync(vault, { recursive: true }).some((f) => f.endsWith("phantom-note.md")), "phantom-note.md created");
+  await app.focusWindow(null);
+  await app.until(() => document.querySelector(".tab.active")?.title.includes("phantom-note"), "opened in main");
+});
+
 await test("graph: filters (edge kind, archive, tag, local depth)", async () => {
   await graph();
+  await sleep(1500); // the panel is rebuilt after the previous test's file changes
   const select = (id, v) => app.eval((id, v) => { const s = document.querySelector(id); s.value = v; s.dispatchEvent(new Event("change")); }, id, v);
   /** Waits for the graph to reload into a state satisfying `pred`. */
-  const reloaded = async (what, pred) => {
-    for (let i = 0; i < 20; i++) { await sleep(300); const s = await gstate(); if (pred(s)) return s; }
-    throw new Error("graph never reached: " + what + " " + JSON.stringify(await gstate().then((s) => [s.nodes.length, s.edges])));
+  const reloaded = async (what, pred, ms = 6000) => {
+    for (let i = 0; i < ms / 300; i++) { await sleep(300); const s = await gstate(); if (pred(s)) return s; }
+    throw new Error("graph never reached: " + what + " " + JSON.stringify(await gstate().then((s) => [s.nodes.length, s.edges])) + " boxes " + JSON.stringify(await app.eval(() => [...document.querySelectorAll(".chk input")].map((c) => c.checked ? 1 : 0).join(""))));
+  };
+  /** Clicks, and clicks once more if the graph did not react (WebKit now and then drops a click right after a reload). */
+  let retries = 0;
+  const toggle = async (css, text, what, pred) => {
+    for (let i = 0; ; i++) {
+      await sleep(700); // a second click within the double-click time on the same spot is not a plain click
+      await app.click(css, text);
+      try { return await reloaded(what, pred, 2500); } catch (e) { if (i >= 2) throw e; retries++; }
+    }
   };
   await settle();
   const { nodes: { length: n0 }, edges: e0 } = await gstate();
-  await app.click(".chk", "containment");
-  const e1 = (await reloaded("fewer edges without containment", (s) => s.edges < e0)).edges;
-  await app.click(".chk", "containment");
-  await reloaded("edges back", (s) => s.edges === e0);
-  await app.click("#g-archive");
-  await reloaded("archive adds nodes", (s) => s.nodes.length > n0);
-  await app.click("#g-archive");
-  await reloaded("archive hidden again", (s) => s.nodes.length === n0);
+  await toggle(".chk", "containment", "fewer edges without containment", (s) => s.edges < e0);
+  await toggle(".chk", "containment", "edges back", (s) => s.edges === e0);
+  await toggle("#g-archive", undefined, "archive adds nodes", (s) => s.nodes.length > n0);
+  await toggle("#g-archive", undefined, "archive hidden again", (s) => s.nodes.length === n0);
   await select("#g-tag", "alpha");
   const n3 = (await reloaded("tag filter narrows", (s) => s.nodes.length < n0)).nodes.length;
   ok(n3 >= 2, "tag filter keeps the tagged notes and neighbours: " + n3);
   await select("#g-tag", "");
   await reloaded("tag filter off", (s) => s.nodes.length === n0);
-  await app.click("#g-local");
-  const l1 = (await reloaded("local graph smaller", (s) => s.nodes.length < n0)).nodes.length;
+  const l1 = (await toggle("#g-local", undefined, "local graph smaller", (s) => s.nodes.length < n0)).nodes.length;
   await select("#g-depth", "3");
   const l3 = (await reloaded("depth 3 not smaller", (s) => s.nodes.length >= l1)).nodes.length;
   ok(l3 >= l1, "depth");
-  await app.click("#g-local");
-  await reloaded("local off", (s) => s.nodes.length === n0);
+  await toggle("#g-local", undefined, "local off", (s) => s.nodes.length === n0);
+  if (retries) console.log(`      (${retries} click(s) needed a retry)`);
   await shot("11-graph-filters");
 });
 
