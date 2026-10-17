@@ -1,35 +1,7 @@
 import Foundation
 
-/// One file change. Commands return these instead of writing; the app applies them as one undoable step.
-public enum FileEdit: Equatable {
-    case write(path: String, text: String)   // Vault-relative; creates folders as needed
-    case move(from: String, to: String)
-}
-
 extension Vault {
     public struct RenameError: Error { public let message: String }
-
-    /// Applies edits in order and returns the edits that undo them (apply those for one ⌘Z). Writes must target existing files.
-    @discardableResult
-    public static func apply(_ edits: [FileEdit], in root: URL) throws -> [FileEdit] {
-        var undo: [FileEdit] = []
-        let fm = FileManager.default
-        for e in edits {
-            switch e {
-            case .write(let path, let text):
-                let url = root.appendingPathComponent(path)
-                undo.append(.write(path: path, text: try String(contentsOf: url, encoding: .utf8)))
-                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try text.write(to: url, atomically: true, encoding: .utf8)
-            case .move(let from, let to):
-                let dst = root.appendingPathComponent(to)
-                try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try fm.moveItem(at: root.appendingPathComponent(from), to: dst)
-                undo.append(.move(from: to, to: from))
-            }
-        }
-        return undo.reversed()
-    }
 
     public static func renameNote(_ path: String, to newName: String, in root: URL) throws -> [FileEdit] {
         let folder = (path as NSString).deletingLastPathComponent
@@ -49,15 +21,19 @@ extension Vault {
         guard !FileManager.default.fileExists(atPath: root.appendingPathComponent(new).path) else { throw RenameError(message: "\(new) already exists") }
         let after = before.map { $0 == old ? new : $0 }
         let newName = String(((new as NSString).lastPathComponent as NSString).deletingPathExtension)
-        var edits = try rewriteLinks(to: old, among: before, newTarget: { link in
+        let rewrites = try rewriteLinks(to: old, among: before, newTarget: { link in
             let hadMd = link.target.lowercased().hasSuffix(".md"), pathStyle = link.target.contains("/")
             if !pathStyle, resolve(link.target, among: after) == .note(new) { return link.target }  // still resolves: leave as written
             var t = pathStyle ? String(new.dropLast(3)) : newName
             if !pathStyle, resolve(t, among: after) != .note(new) { t = String(new.dropLast(3)) }  // name now ambiguous
             return hadMd ? t + ".md" : t
         }, headingTo: { $0 }, in: root)
-        edits.append(.move(from: old, to: new))
-        return edits
+        // A move is create-new + remove-old; the moved Note's own Link rewrites are folded into the new file's text.
+        let text = try String(contentsOf: root.appendingPathComponent(old), encoding: .utf8)
+        let moved = rewrites[old].map { replacing(text, $0) } ?? text
+        return edits(rewrites.filter { $0.key != old }, root: root)
+            + [FileEdit(path: new, range: NSRange(location: 0, length: 0), text: moved, createsFile: true),
+               FileEdit(path: old, range: NSRange(location: 0, length: 0), text: "", removesFile: true)]
     }
 
     /// Renames the first heading titled `old` in `notePath` and rewrites `[[note#old]]` Links (Calls and Uses included).
@@ -66,14 +42,14 @@ extension Vault {
         let text = try String(contentsOf: root.appendingPathComponent(notePath), encoding: .utf8)
         guard let h = NoteParser.parse(text).headings.first(where: { $0.title == old }) else { throw RenameError(message: "No heading \(old)") }
         let hashes = String(repeating: "#", count: h.level)
-        return try rewriteLinks(to: notePath, among: paths, newTarget: { $0.target }, headingTo: { $0.lowercased() == old.lowercased() ? new : $0 }, in: root,
-                                     extra: [notePath: [(h.range, hashes + " " + new)]])
+        return edits(try rewriteLinks(to: notePath, among: paths, newTarget: { $0.target }, headingTo: { $0.lowercased() == old.lowercased() ? new : $0 }, in: root,
+                                     extra: [notePath: [(h.range, hashes + " " + new)]]), root: root)
     }
 
     /// Renames a Tag and its children (`a/b` -> `c` also turns `a/b/x` into `c/x`) in text and frontmatter, case-insensitively.
     public static func renameTag(_ old: String, to new: String, in root: URL) throws -> [FileEdit] {
         let o = old.lowercased()
-        var edits: [FileEdit] = []
+        var rewrites: [String: [(NSRange, String)]] = [:]
         for p in try notePaths(in: root) {
             let text = try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)
             let ns = text as NSString
@@ -83,9 +59,9 @@ extension Vault {
                 let inline = ns.substring(with: t.range).hasPrefix("#")
                 return (t.range, (inline ? "#" : "") + new + t.name.dropFirst(old.count))
             }
-            if !reps.isEmpty { edits.append(.write(path: p, text: replacing(text, reps))) }
+            if !reps.isEmpty { rewrites[p] = reps }
         }
-        return edits
+        return edits(rewrites, root: root)
     }
 
     // MARK: helpers
@@ -98,8 +74,8 @@ extension Vault {
 
     /// One `.write` per Note whose Links resolve to `target` (plus `extra` replacements, e.g. a heading line).
     private static func rewriteLinks(to target: String, among paths: [String], newTarget: (WikiLink) -> String, headingTo: (String) -> String,
-                                     in root: URL, extra: [String: [(NSRange, String)]] = [:]) throws -> [FileEdit] {
-        var edits: [FileEdit] = []
+                                     in root: URL, extra: [String: [(NSRange, String)]] = [:]) throws -> [String: [(NSRange, String)]] {
+        var out: [String: [(NSRange, String)]] = [:]
         for p in paths {
             let text = try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)
             var reps = extra[p] ?? []
@@ -108,8 +84,15 @@ extension Vault {
                 let s = "[[" + t + (h.map { "#" + $0 } ?? "") + (l.alias.map { "|" + $0 } ?? "") + "]]"
                 if s != (text as NSString).substring(with: l.range) { reps.append((l.range, s)) }
             }
-            if !reps.isEmpty { edits.append(.write(path: p, text: replacing(text, reps))) }
+            if !reps.isEmpty { out[p] = reps }
         }
-        return edits
+        return out
+    }
+
+    /// Replacements per file as `FileEdit`s, back to front within each file, files in path order.
+    private static func edits(_ rewrites: [String: [(NSRange, String)]], root: URL) -> [FileEdit] {
+        rewrites.keys.sorted().flatMap { p in
+            rewrites[p]!.sorted { $0.0.location > $1.0.location }.map { FileEdit(path: p, range: $0.0, text: $0.1) }
+        }
     }
 }
