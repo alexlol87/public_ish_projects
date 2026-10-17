@@ -95,7 +95,7 @@ jobs:
           dmg=$(find target -type f -path '*/release/bundle/dmg/*.dmg' | head -n1)
           test -n "$app" && test -n "$dmg"
           codesign --verify --strict --verbose=2 "$app"
-          lipo -archs "$app/Contents/MacOS/Constellation"
+          lipo -archs "$app"/Contents/MacOS/*
           ditto -c -k --keepParent "$app" out/Constellation-macos.zip
           cp "$dmg" out/Constellation.dmg
           echo "APP=$PWD/$app" >> "$GITHUB_ENV"
@@ -114,7 +114,7 @@ jobs:
         run: |
           export CONSTELLATION_VAULT="$PWD/fixtures/vault"
           if [ "$RUNNER_OS" = macOS ]; then
-            "$APP/Contents/MacOS/Constellation" > "$RUNNER_TEMP/launch.log" 2>&1 &
+            "$APP"/Contents/MacOS/* > "$RUNNER_TEMP/launch.log" 2>&1 &
           else
             # No FUSE on runners: the AppImage unpacks itself and runs.
             APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a out/Constellation-linux-*.AppImage > "$RUNNER_TEMP/launch.log" 2>&1 &
