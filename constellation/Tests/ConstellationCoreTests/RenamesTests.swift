@@ -48,10 +48,16 @@ final class RenamesTests: XCTestCase {
 
     func testMoveNoteKeepsNameLinksAndRewritesPathLinks() throws {
         let root = try makeVault(files)
-        _ = try FileEdit.apply(try Vault.moveNote("acme/cart.md", toFolder: "shop/v2", in: root), root: root)
+        let undo = try FileEdit.apply(try Vault.moveNote("acme/cart.md", toFolder: "shop/v2", in: root), root: root)
         XCTAssertEqual(try read(root, "acme/orders.md"), "See [[cart]] and [[shop/v2/cart#Totals|sum]] and [[shop/v2/cart.md]]. `[[cart]]`")
         XCTAssertEqual(try read(root, "other.md"), "[[Cart#Totals]] [[missing]]")
         XCTAssertEqual(try brokenLinks(root), ["other.md: missing"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("shop/v2/cart.md").path))
+        let redo = try FileEdit.apply(undo, root: root)
+        for (p, text) in files { XCTAssertEqual(try read(root, p), text) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("shop/v2/cart.md").path))
+        _ = try FileEdit.apply(redo, root: root)
+        XCTAssertEqual(try read(root, "acme/orders.md"), "See [[cart]] and [[shop/v2/cart#Totals|sum]] and [[shop/v2/cart.md]]. `[[cart]]`")
     }
 
     func testRenameToNameClashingWithAnotherNoteFallsBackToPath() throws {

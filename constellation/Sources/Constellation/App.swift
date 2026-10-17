@@ -32,18 +32,23 @@ struct RootView: View {
     @State private var tags: TagIndex?
     @State private var sidebarTab = SidebarTab.files
     @State private var tagFilter: String?
+    @State private var epoch = 0  // bumped after a rename so the editor reloads from the rewritten files
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         NavigationSplitView {
             if let tree {
                 Picker("", selection: $sidebarTab) { ForEach(SidebarTab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal, 8)
-                if sidebarTab == .tags, let tags { TagsView(index: tags, selected: $tagFilter) { hit in go(hit.path, reveal: NSRange(location: hit.offset, length: 0)) } } else {
+                if sidebarTab == .tags, let tags { TagsView(index: tags, selected: $tagFilter, rename: { old in
+                    if let new = promptText("Rename tag #\(old) to", initial: old) { perform("Rename Tag") { try Vault.renameTag(old, to: new.trimmingCharacters(in: CharacterSet(charactersIn: "#")), in: $0) } }
+                }) { hit in go(hit.path, reveal: NSRange(location: hit.offset, length: 0)) } } else {
                 TextField("Search", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal, 8)
                 if !query.isEmpty, let search { SearchResultsView(results: search.search(query)) { m in
                     try? tabs?.open(m.path); reveal = .init(range: NSRange(location: m.offset, length: m.hit.length))
                 } openNote: { path in try? tabs?.open(path) } } else {
                 List(tree.children, children: \.optionalChildren, selection: $selection) { node in
                     Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
+                        .contextMenu { if !node.isFolder { noteMenu(node.relativePath) } }
                 } } }
             } else {
                 VStack {
@@ -81,7 +86,7 @@ struct RootView: View {
                                onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) },
                                onTag: { tagFilter = $0.lowercased(); sidebarTab = .tags },
                                tagNames: { tags?.completions(for: $0) ?? [] })
-                        .id("\(active)#\(tabs.revision(active))")
+                        .id("\(active)#\(tabs.revision(active))#\(epoch)")
                 }
             } else {
                 Text("Select a Note").foregroundStyle(.secondary)
@@ -151,8 +156,12 @@ struct RootView: View {
                 }
             }
             Section("Outline") {
+                if let h = NoteParser.parse(text).headings.last(where: { $0.range.location <= cursor }) {
+                    Button("Rename heading at cursor…") { renameHeading(h.title) }
+                }
                 ForEach(Array(NoteParser.parse(text).headings.enumerated()), id: \.offset) { _, h in
                     Button(h.title) { reveal = .init(range: h.range) }.buttonStyle(.plain).padding(.leading, CGFloat(h.level - 1) * 10)
+                        .contextMenu { Button("Rename heading…") { renameHeading(h.title) } }
                 }
             }
         }.inspectorColumnWidth(min: 160, ideal: 220, max: 320)
@@ -190,6 +199,49 @@ struct RootView: View {
             let range = link.heading.flatMap { h in headings.first { $0.title.caseInsensitiveCompare(h) == .orderedSame }?.range }
             reveal = range.map { .init(range: $0) }
         } catch { self.error = "\(error)" }
+    }
+
+    @ViewBuilder private func noteMenu(_ path: String) -> some View {
+        Button("Rename…") {
+            let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+            if let new = promptText("Rename Note to", initial: name) { perform("Rename Note") { try Vault.renameNote(path, to: new, in: $0) } }
+        }
+        Button("Move…") {
+            if let dest = promptText("Move Note to folder (Vault-relative)", initial: (path as NSString).deletingLastPathComponent) {
+                perform("Move Note") { try Vault.moveNote(path, toFolder: dest.trimmingCharacters(in: CharacterSet(charactersIn: "/")), in: $0) }
+            }
+        }
+    }
+
+    private func renameHeading(_ old: String) {
+        guard let active = tabs?.active, let new = promptText("Rename heading", initial: old), new != old else { return }
+        perform("Rename Heading") { try Vault.renameHeading(old, to: new, inNote: active, in: $0) }
+    }
+
+    /// Saves open Notes, asks the Vault for the edits, applies them as one undoable step and refreshes the UI.
+    private func perform(_ name: String, _ make: (URL) throws -> [FileEdit]) {
+        guard let root else { return }
+        do {
+            try tabs?.saveAll()
+            let edits = try make(root)
+            if !edits.isEmpty { try UndoableEdits.run(edits, root: root, undo: undoManager, name: name) { refreshAfter($0, root: root) } }
+        } catch { self.error = "\(error)" }
+    }
+
+    /// Reloads tree, indexes and open tabs from disk (a moved Note's tab follows it to the new path).
+    private func refreshAfter(_ edits: [FileEdit], root: URL) {
+        let moved: [String: String] = Dictionary(uniqueKeysWithValues: zip(edits.filter(\.removesFile).map(\.path), edits.filter(\.createsFile).map(\.path)))
+        let paths = Array(Set(edits.map(\.path)))
+        tree = try? Vault.load(root: root)
+        try? search?.update(paths: paths)
+        try? tags?.update(paths: paths)
+        GraphModel.shared.reload()
+        var fresh = NoteTabs(root: root)
+        for p in tabs?.paths ?? [] { try? fresh.open(moved[p] ?? p) }
+        if let a = tabs?.active { try? fresh.open(moved[a] ?? a) }
+        tabs = fresh
+        epoch += 1
+        refreshBacklinks()
     }
 
     private func saveDue() {
