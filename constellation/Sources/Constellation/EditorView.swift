@@ -163,7 +163,9 @@ struct EditorView: NSViewRepresentable {
             let result = MarkdownStyler.style(storage.string, cursorLine: cursor)
             let all = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
-            storage.setAttributes([.font: Self.baseFont, .foregroundColor: NSColor.textColor], range: all)
+            let pal = AppSettings.shared.palette
+            tv.backgroundColor = NSColor(hex: pal.background)
+            storage.setAttributes([.font: Self.baseFont, .foregroundColor: NSColor(hex: pal.text)], range: all)
             for s in result.styled {
                 switch s.role {
                 case .heading(let level):
@@ -184,9 +186,9 @@ struct EditorView: NSViewRepresentable {
                     // Checkbox widget on the `[ ]` range's first character (unverified on macOS; fallback: leave raw `[ ]`).
                     storage.addAttribute(.attachment, value: Self.attachment(text: checked ? "☑" : "☐"), range: NSRange(location: s.range.location, length: 1))
                 case .tag:
-                    storage.addAttributes([.foregroundColor: NSColor.systemTeal, .backgroundColor: NSColor.systemTeal.withAlphaComponent(0.12)], range: s.range)
+                    storage.addAttributes([.foregroundColor: NSColor(hex: pal.tag), .backgroundColor: NSColor(hex: pal.tag).withAlphaComponent(0.12)], range: s.range)
                 case .link:
-                    storage.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
+                    storage.addAttributes([.foregroundColor: NSColor(hex: pal.link), .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
                 }
             }
             // Broken Links (missing or ambiguous) are red. shortcut: resolves per Link on every restyle; cache when Vaults get big.

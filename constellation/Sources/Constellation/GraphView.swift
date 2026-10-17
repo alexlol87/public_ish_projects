@@ -9,11 +9,14 @@ final class GraphModel: ObservableObject {
     var onOpen: (String) -> Void = { _ in }
     @Published var graph = VaultGraph(nodes: [], edges: [])
     @Published var tick = 0
+    /// Repo folder paths with their staleness (README `verified_on`).
+    var repos: [String: Staleness] = [:]
     var layout = ForceLayout(ids: [], edges: [])
 
     func reload() {
         guard let root, let g = try? Vault.graph(in: root) else { return }
         graph = g
+        repos = (try? Vault.repoStaleness(in: root)) ?? [:]
         layout.update(ids: g.nodes.map(\.id), edges: g.edges.map { ($0.from, $0.to) })
     }
     func step() { layout.step(); tick &+= 1 }
@@ -28,6 +31,7 @@ struct GraphView: View {
     @State private var dragging: String?
     @State private var panStart: CGSize?
     @State private var zoomStart: Double?
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         GeometryReader { geo in
@@ -49,7 +53,11 @@ struct GraphView: View {
                 for n in model.graph.nodes {
                     guard let p = pos[n.id] else { continue }
                     let c = to(p), r = n.kind == .folder ? 7.0 : 5.0
-                    let base: Color = n.kind == .folder ? .orange : n.kind == .ghost ? .red : Self.typeColour(n.noteType)
+                    let pal = settings.palette
+                    // A Repo is its folder plus its README Node.
+                    let repoPath = n.kind == .folder ? n.id : n.id.hasSuffix("/README.md") ? String(n.id.dropLast(10)) : ""
+                    let stale = model.repos[repoPath]?.isStale(threshold: settings.thresholdDays) == true
+                    let base: Color = stale ? Color(hex: pal.stale) : n.kind == .folder ? Color(hex: pal.folderNode) : n.kind == .ghost ? .red : n.noteType == nil || n.noteType == "note" ? Color(hex: pal.noteNode) : Self.typeColour(n.noteType)
                     let on = hover == nil || near.contains(n.id)
                     let dot = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
                     ctx.fill(dot, with: .color(on ? base.opacity(n.kind == .ghost ? 0.5 : 1) : base.opacity(0.15)))
@@ -87,6 +95,7 @@ struct GraphView: View {
                 .onEnded { _ in zoomStart = nil })
         }
         .frame(minWidth: 500, minHeight: 400)
+        .background(Color(hex: settings.palette.background))
         .onAppear { model.reload() }
         .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in model.step() }
     }

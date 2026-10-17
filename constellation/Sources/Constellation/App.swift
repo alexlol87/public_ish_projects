@@ -5,9 +5,10 @@ import SwiftUI
 
 struct ConstellationApp: App {
     var body: some Scene {
-        WindowGroup { RootView() }
+        WindowGroup { RootView().onAppear { AppSettings.shared.applyAppearance() } }
             .commands { CommandGroup(after: .sidebar) { OpenGraphButton() } }
         Window("Graph", id: "graph") { GraphView() }
+        Settings { SettingsView() }
     }
 }
 
@@ -32,6 +33,8 @@ struct RootView: View {
     @State private var tags: TagIndex?
     @State private var sidebarTab = SidebarTab.files
     @State private var tagFilter: String?
+    @ObservedObject private var settings = AppSettings.shared
+    @State private var repos: [String: Staleness] = [:]
 
     var body: some View {
         NavigationSplitView {
@@ -43,7 +46,12 @@ struct RootView: View {
                     try? tabs?.open(m.path); reveal = .init(range: NSRange(location: m.offset, length: m.hit.length))
                 } openNote: { path in try? tabs?.open(path) } } else {
                 List(tree.children, children: \.optionalChildren, selection: $selection) { node in
-                    Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
+                    HStack {
+                        Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
+                        if let st = repos[node.relativePath] {
+                            Text(st.label).font(.caption2).foregroundStyle(st.isStale(threshold: settings.thresholdDays) ? Color(hex: settings.palette.stale) : .secondary)
+                        }
+                    }.foregroundStyle(repos[node.relativePath]?.isStale(threshold: settings.thresholdDays) == true ? Color(hex: settings.palette.stale) : Color.primary)
                 } } }
             } else {
                 VStack {
@@ -81,7 +89,7 @@ struct RootView: View {
                                onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) },
                                onTag: { tagFilter = $0.lowercased(); sidebarTab = .tags },
                                tagNames: { tags?.completions(for: $0) ?? [] })
-                        .id("\(active)#\(tabs.revision(active))")
+                        .id("\(active)#\(tabs.revision(active))#\(settings.theme.rawValue)")
                 }
             } else {
                 Text("Select a Note").foregroundStyle(.secondary)
@@ -118,8 +126,10 @@ struct RootView: View {
             UserDefaults.standard.set(url.path, forKey: "lastVault")
             GraphModel.shared.onOpen = { go($0, reveal: nil) }
             GraphModel.shared.root = url
+            repos = (try? Vault.repoStaleness(in: url)) ?? [:]
             watcher = VaultWatcher(root: url) { paths in
                 GraphModel.shared.reload()
+                repos = (try? Vault.repoStaleness(in: url)) ?? [:]
                 if let t = tree, let fresh = try? t.refreshed(paths: paths, root: url) { tree = fresh }
                 try? search?.update(paths: paths)
                 try? tags?.update(paths: paths)
@@ -141,9 +151,9 @@ struct RootView: View {
                     Button(b.path) { go(b.path, reveal: b.link.range) }.buttonStyle(.plain)
                 }
             }
-            if let (title, rel) = relations {
-                ForEach([("Calls out", rel.callsOut), ("Calls in", rel.callsIn), ("Used by", rel.usesIn)], id: \.0) { name, refs in
-                    Section("\(title): \(name)") {
+            if let r = relations {
+                ForEach([("Calls out", r.rel.callsOut), ("Calls in", r.rel.callsIn), ("Used by", r.rel.usesIn)], id: \.0) { name, refs in
+                    Section("\(r.title): \(name)") {
                         ForEach(Array(refs.enumerated()), id: \.offset) { _, r in
                             Button(r.heading.map { "\(r.path)#\($0)" } ?? r.path) { go(r.path, reveal: nil) }.buttonStyle(.plain)
                         }
