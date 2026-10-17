@@ -60,6 +60,18 @@ describe("decorations", () => {
     expect(d.filter((x) => x.endsWith("cm-codeblock"))).toHaveLength(1);
   });
 
+  test("collapsed fence lines are thin code-block edges, expanded on the cursor line", () => {
+    const d = describeAll(at("x\n```\nfenced\n```\nend", 0));
+    expect(d).toEqual(["2-2:cm-codeblock cm-fence cm-fence-collapsed", "2-5:hide", "6-6:cm-codeblock", "13-13:cm-codeblock cm-fence cm-fence-collapsed", "13-16:hide"]);
+    expect(describeAll(at("x\n```\nfenced\n```\nend", 3))).toContain("2-2:cm-codeblock cm-fence");
+  });
+
+  test("frontmatter is a summary widget off the cursor, dim raw lines inside", () => {
+    const doc = "---\ntype: repo\n---\n# T";
+    expect(describeAll(at(doc, doc.length))).toEqual(["0-18:FrontmatterWidget", "21-22:cm-h cm-h1"]);
+    expect(describeAll(at(doc, 6))).toEqual(["0-0:cm-frontmatter", "4-4:cm-frontmatter", "15-15:cm-frontmatter", "21-22:cm-h cm-h1", "19-21:hide"].sort((a, b) => parseInt(a) - parseInt(b)));
+  });
+
   test("task checkbox is a widget off the cursor line and raw on it", () => {
     expect(describeAll(at("- [ ] a\nb", 8))).toContain("2-5:CheckboxWidget");
     expect(describeAll(at("- [ ] a\nb", 3)).some((d) => d.includes("Checkbox"))).toBe(false);

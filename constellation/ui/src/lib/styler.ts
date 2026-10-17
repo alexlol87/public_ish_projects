@@ -6,6 +6,10 @@ export interface Range { from: number; to: number }
 export type StyleRole =
   | { kind: "heading"; level: number }
   | { kind: "bold" | "italic" | "strike" | "underline" | "inlineCode" | "codeBlock" }
+  /** A ``` fence line; `collapsed` (off the cursor) means its text is hidden and it draws as a thin edge of the block. */
+  | { kind: "codeFence"; collapsed: boolean }
+  /** Whole frontmatter block off the cursor (drawn as `summary`), or one of its lines (summary "") when the cursor is inside. */
+  | { kind: "frontmatter"; summary: string }
   /** Content of a `> ` quote line (the marker is hidden). */
   | { kind: "quote" }
   /** `target` is `path[#heading]` for a wikilink, the URL for a markdown link. */
@@ -113,6 +117,7 @@ export function style(text: string, cursorLine: Range | null = null): StyleResul
   let inFence = false;
   let loc = 0;
   let t: ReturnType<typeof table>;
+  let fm: number;
   for (let li = 0; li < lines.length; li++) {
     const raw = lines[li];
     const full: Range = { from: loc, to: Math.min(loc + raw.length + 1, text.length) };
@@ -123,9 +128,22 @@ export function style(text: string, cursorLine: Range | null = null): StyleResul
     const hidden: Range[] = [];
     loc = full.to;
 
-    if (content.startsWith("```")) {
+    if (li === 0 && content === "---" && (fm = frontmatterEnd(lines)) > 0) {
+      const end = lines.slice(0, fm + 1).reduce((n, l) => n + l.length + 1, 0);
+      const block = { from: 0, to: Math.min(end - 1, text.length) };
+      if (touches({ from: 0, to: end }, cursorLine)) {
+        for (let i = 0, at = 0; i <= fm; at += lines[i].length + 1, i++) out.styled.push({ from: at, to: at + lines[i].length, role: { kind: "frontmatter", summary: "" } });
+      } else {
+        out.styled.push({ ...block, role: { kind: "frontmatter", summary: frontmatterSummary(lines.slice(1, fm)) || "properties" } });
+        out.hidden.push(block);
+      }
+      loc = end;
+      li = fm;
+      continue;
+    } else if (content.startsWith("```")) {
       inFence = !inFence;
-      if (line.to > line.from) hidden.push(line);
+      out.styled.push({ ...line, role: { kind: "codeFence", collapsed: !active } });
+      hidden.push(line);
     } else if (inFence) {
       if (line.to > line.from) out.styled.push({ ...line, role: { kind: "codeBlock" } });
     } else if (content.trim().startsWith("|") && (t = table(lines, li))) {
@@ -154,6 +172,23 @@ export function style(text: string, cursorLine: Range | null = null): StyleResul
     if (!active) out.hidden.push(...hidden);
   }
   return out;
+}
+
+/** Index of the line closing a frontmatter block opened by `---` on line 0, or -1. */
+function frontmatterEnd(lines: string[]): number {
+  for (let i = 1; i < lines.length; i++) if (/^(---|\.\.\.)\r?$/.test(lines[i])) return i;
+  return -1;
+}
+
+/** One-line summary of YAML frontmatter lines: `type: repo · tags: a, b`. List items join their key. */
+export function frontmatterSummary(lines: string[]): string {
+  const parts: string[] = [];
+  for (const l of lines) {
+    const item = /^\s+-\s*(.*)$/.exec(l);
+    if (item && parts.length) parts[parts.length - 1] += (parts[parts.length - 1].endsWith(":") ? " " : ", ") + item[1].trim();
+    else if (l.trim()) parts.push(l.trim());
+  }
+  return parts.join(" · ");
 }
 
 /** The line (including newline) containing a UTF-16 cursor offset. */

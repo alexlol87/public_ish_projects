@@ -62,6 +62,23 @@ class TableWidget extends WidgetType {
   }
 }
 
+class FrontmatterWidget extends WidgetType {
+  constructor(private summary: string) { super(); }
+  eq(o: FrontmatterWidget) { return o.summary === this.summary; }
+  toDOM(view: EditorView) {
+    const div = document.createElement("div");
+    div.className = "cm-frontmatter-summary";
+    div.textContent = this.summary;
+    div.title = "Frontmatter (click to edit)";
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(div) + 4 } }); // into the block: after the opening `---`
+      view.focus();
+    });
+    return div;
+  }
+}
+
 const mark = (cls: string, attrs?: Record<string, string>) => Decoration.mark({ class: cls, attributes: attrs });
 const hide = Decoration.replace({});
 const lineDeco = (cls: string) => Decoration.line({ class: cls });
@@ -96,10 +113,14 @@ export function buildDecorations(state: EditorState, o: DecoOptions): Built {
   };
   for (const { from, to, role } of styled) {
     const lineStart = state.doc.lineAt(from).from;
-    if (role.kind === "taskBox" || role.kind === "image" || role.kind === "table") widgets.add(`${from}-${to}`);
+    if (role.kind === "taskBox" || role.kind === "image" || role.kind === "table" || role.kind === "frontmatter") widgets.add(`${from}-${to}`);
     if (role.kind === "taskBox") replace(from, to, Decoration.replace({ widget: new CheckboxWidget(role.checked, o.onTickTask) }));
     else if (role.kind === "image") replace(from, to, Decoration.replace({ widget: new ImageWidget(o.resolveImage(role.path), role.alt) }));
     else if (role.kind === "table") replace(from, to, Decoration.replace({ widget: new TableWidget(role.rendered), block: true }));
+    else if (role.kind === "frontmatter") {
+      if (role.summary) replace(from, to, Decoration.replace({ widget: new FrontmatterWidget(role.summary), block: true }));
+      else all.push(lineDeco("cm-frontmatter").range(lineStart));
+    } else if (role.kind === "codeFence") all.push(lineDeco(role.collapsed ? "cm-codeblock cm-fence cm-fence-collapsed" : "cm-codeblock cm-fence").range(lineStart));
     else if (role.kind === "codeBlock") all.push(lineDeco("cm-codeblock").range(lineStart));
     else if (role.kind === "quote") all.push(lineDeco("cm-quote").range(lineStart));
     else {

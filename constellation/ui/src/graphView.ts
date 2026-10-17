@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, type EdgeKind, type GraphFilter, type VaultGraph, type TagNode } from "./api";
 import { ForceLayout } from "./lib/forceLayout";
+import { graphLabels } from "./lib/graphLabels";
 import { applyTheme, palette, THEME_CHOICES, type ThemeChoice } from "./lib/themes";
 import { h, toast } from "./ui";
 
@@ -22,6 +23,7 @@ export async function graphView(app: HTMLElement) {
   let layout = new ForceLayout([], []);
   let hover: string | null = null;
   let neighbours = new Map<string, Set<string>>();
+  let labels = new Map<string, string>();
   let heat = 0;
   let refit = false;
   const view = { x: 0, y: 0, k: 1 };
@@ -67,6 +69,7 @@ export async function graphView(app: HTMLElement) {
     reloads.push(why);
     try { g = await api.graph(filter, local ? current : null); } catch (e) { toast(String(e), true); return; }
     neighbours = new Map(g.nodes.map((n) => [n.id, new Set<string>()]));
+    labels = graphLabels(g.nodes);
     for (const e of g.edges) { neighbours.get(e.from)?.add(e.to); neighbours.get(e.to)?.add(e.from); }
     layout.update(g.nodes.map((n) => n.id), g.edges.map((e) => [e.from, e.to]));
     heat = 400;
@@ -123,7 +126,10 @@ export async function graphView(app: HTMLElement) {
       if (n.kind === "ghost") { ctx.strokeStyle = pal.stale; ctx.lineWidth = 1.5; ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]); }
       else { ctx.fillStyle = n.kind === "folder" ? pal.folderNode : pal.noteNode; ctx.fill(); }
       if (n.id === current) { ctx.strokeStyle = pal.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 7); ctx.stroke(); }
-      if (g.nodes.length < 120 || view.k > 1.2 || n.id === hover || near?.has(n.id)) { ctx.fillStyle = pal.text; ctx.fillText(n.name, x, y + r + 12); }
+      // Labels fade out when zoomed out (and for big graphs), except the hovered Node, its neighbours and the current Note.
+      const focus = n.id === hover || near?.has(n.id) || n.id === current;
+      const fade = focus ? 1 : (g.nodes.length < 120 || view.k > 1.2 ? 1 : 0) * Math.min(1, Math.max(0, (view.k - 0.45) / 0.3));
+      if (fade > 0) { ctx.globalAlpha *= fade; ctx.fillStyle = pal.text; ctx.fillText(labels.get(n.id) ?? n.name, x, y + r + 12); }
     }
     ctx.globalAlpha = 1;
   }
@@ -164,7 +170,7 @@ export async function graphView(app: HTMLElement) {
   };
   // Read-only introspection for the e2e harness: where each node is drawn (canvas pixels) and the view transform.
   Object.assign(canvas, {
-    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, kind: n.kind, x, y }; }), edges: g.edges.length, hover, local, heat, reloads: [...reloads], drag: drag && { id: drag.id, moved: drag.moved } }),
+    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, label: labels.get(n.id), kind: n.kind, x, y }; }), edges: g.edges.length, hover, local, heat, reloads: [...reloads], drag: drag && { id: drag.id, moved: drag.moved } }),
   });
   const pos = (e: MouseEvent) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
   let drag: { id: string | null; moved: boolean; sx: number; sy: number } | null = null;
@@ -175,7 +181,7 @@ export async function graphView(app: HTMLElement) {
     if (drag) {
       if (Math.hypot(x - drag.sx, y - drag.sy) > 3) drag.moved = true;
       if (drag.moved) {
-        if (drag.id) { const [wx, wy] = toWorld(x, y); layout.pin(drag.id, { x: wx, y: wy }); heat = Math.max(heat, 200); }
+        if (drag.id) { const [wx, wy] = toWorld(x, y); layout.pin(drag.id, { x: wx, y: wy }); heat = Math.max(heat, 40); } // gentle reheat: neighbours follow, the rest barely moves
         else { view.x += x - drag.sx; view.y += y - drag.sy; drag.sx = x; drag.sy = y; }
         redraw();
       }
@@ -187,6 +193,7 @@ export async function graphView(app: HTMLElement) {
   addEventListener("mouseup", () => {
     if (!drag) return;
     const d = drag; drag = null;
+    if (d.moved && d.id) heat = Math.min(heat, 24); // cool down quickly after a drop
     if (!d.moved && d.id) void click(d.id);
   });
   canvas.addEventListener("wheel", (e) => {

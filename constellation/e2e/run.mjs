@@ -114,7 +114,12 @@ await test("live preview hides markers off the cursor line", async () => {
   await sleep(150);
   const t = await visible();
   ok(!t.includes("**shopping**") && t.includes("shopping"), "markers hidden elsewhere: " + t);
+  const fm = await app.eval(() => document.querySelector(".cm-frontmatter-summary")?.textContent ?? "");
+  ok(fm.startsWith("type: repo · repo_url:") && !t.includes("---"), "frontmatter collapsed to a summary: " + fm);
   await shot("02-live-preview");
+  await caret("verified_on");
+  await app.until(() => !document.querySelector(".cm-frontmatter-summary") && document.querySelectorAll(".cm-frontmatter").length >= 3, "frontmatter raw with the cursor inside");
+  await caret("# Cart service");
 });
 
 await test("plain click on a link off the cursor line opens it", async () => {
@@ -460,6 +465,7 @@ await test("live preview widgets: table, code block, quote, image, tag, checkbox
   eq(await app.eval(() => [...document.querySelectorAll(".cm-task")].map((c) => c.checked)), [false, true], "checkbox states");
   const text = await app.eval(() => document.querySelector(".cm-content").innerText);
   ok(!text.includes("**bold**") && !text.includes("```") && !text.includes("![alt"), "markers hidden: " + text);
+  eq(await app.eval(() => document.querySelectorAll(".cm-fence-collapsed").length), 2, "both fence lines collapsed");
   await shot("12-widgets");
 });
 
@@ -534,6 +540,8 @@ await test("graph: window opens (Ctrl+G), renders nodes and edges", async () => 
   ok(s.edges > 3, "edges " + s.edges);
   ok(s.nodes.some((n) => n.kind === "folder") && s.nodes.some((n) => n.kind === "note"), "folder and note nodes");
   ok(s.nodes.some((n) => n.kind === "ghost" && n.name.includes("phantom")), "ghost node for the broken link: " + JSON.stringify(s.nodes.map((n) => n.id)));
+  const labels = s.nodes.map((n) => n.label);
+  ok(labels.includes("cart-service/endpoints") && labels.includes("orders-service/endpoints") && !labels.some((l) => l.endsWith(".md")), "disambiguated labels: " + JSON.stringify(labels));
   await shot("09-graph");
 });
 

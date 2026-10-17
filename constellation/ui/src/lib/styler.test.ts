@@ -39,7 +39,7 @@ describe("styler", () => {
   });
   test("fenced code is not styled inside", () => {
     const out = style("```swift\n**not bold**\n```\nafter");
-    expect(out.styled).toEqual([s(9, 12, { kind: "codeBlock" })]);
+    expect(out.styled).toEqual([s(0, 8, { kind: "codeFence", collapsed: true }), s(9, 12, { kind: "codeBlock" }), s(22, 3, { kind: "codeFence", collapsed: true })]);
     expect(out.hidden).toEqual([r(0, 8), r(22, 3)]);
   });
   test("cursor line keeps its markers only", () => {
@@ -114,7 +114,31 @@ describe("styler", () => {
     expect(style("| a | b |\n| c | d |").styled).toEqual([]);
   });
   test("fences stay code blocks", () => {
-    expect(roles("```mermaid\n| a | b |\n|---|---|\n![x](y.png)\n```")).toEqual(["codeBlock", "codeBlock", "codeBlock"]);
+    expect(roles("```mermaid\n| a | b |\n|---|---|\n![x](y.png)\n```")).toEqual(["codeFence", "codeBlock", "codeBlock", "codeBlock", "codeFence"]);
+  });
+  test("fence on the cursor line is shown, not collapsed", () => {
+    const text = "```\nx\n```";
+    const out = style(text, lineRange(1, text));
+    expect(out.styled[0]).toEqual(s(0, 3, { kind: "codeFence", collapsed: false }));
+    expect(out.hidden).toEqual([r(6, 3)]);
+  });
+  test("frontmatter collapses to a summary off the cursor", () => {
+    const text = "---\ntype: endpoint\ntags:\n  - a\n  - b\n---\n# T";
+    const out = style(text, lineRange(text.length, text));
+    expect(out.styled[0]).toEqual(s(0, 40, { kind: "frontmatter", summary: "type: endpoint · tags: a, b" }));
+    expect(out.hidden).toEqual([r(0, 40)]);
+    expect(roles("---\n---\nx")).toEqual(["frontmatter"]);
+    expect(style("---\n---\nx").styled[0].role).toEqual({ kind: "frontmatter", summary: "properties" });
+  });
+  test("frontmatter is raw but dimmed when the cursor is inside", () => {
+    const text = "---\na: 1\n---\nx";
+    const out = style(text, lineRange(5, text));
+    expect(out.styled).toEqual([0, 4, 9].map((at, i) => s(at, [3, 4, 3][i], { kind: "frontmatter", summary: "" })));
+    expect(out.hidden).toEqual([]);
+  });
+  test("--- without a closing line, or not on line 1, is not frontmatter", () => {
+    expect(roles("---\na: 1")).toEqual([]);
+    expect(roles("x\n---\na\n---")).toEqual([]);
   });
 
   // tasks and tags

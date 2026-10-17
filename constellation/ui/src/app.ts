@@ -191,6 +191,7 @@ function renderTabs() {
     h("div", { class: "tab" + (p === tabs.active ? " active" : ""), title: p, onclick: () => { tabs.active = p; showActive(); void refreshInspector(); } },
       h("span", {}, label(p) + (tabs.pending().includes(p) ? " •" : "")),
       h("span", { class: "x", onclick: (e: Event) => { e.stopPropagation(); void closeTab(p); } }, "×"))));
+  P.tabbar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 async function closeTab(p: string) {
@@ -339,7 +340,7 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
   for (const c of n.children) {
     const open = expanded.has(c.relativePath);
     const row = h("div", {
-      class: "row-item" + (c.appOnly ? " dim" : "") + (c.relativePath === tabs.active ? " active" : ""), style: `padding-left:${8 + depth * 14}px`, title: c.relativePath,
+      class: "row-item" + (c.isFolder ? " folder" : "") + (c.appOnly ? " dim" : "") + (c.relativePath === tabs.active ? " active" : ""), style: `padding-left:${8 + depth * 14}px`, title: c.relativePath,
       onclick: () => {
         if (!c.isFolder) return void openNote(c.relativePath);
         if (expanded.has(c.relativePath)) expanded.delete(c.relativePath); else expanded.add(c.relativePath);
@@ -348,7 +349,7 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
         void renderSide();
       },
       oncontextmenu: (e: MouseEvent) => !c.isFolder && !c.appOnly && contextMenu(e, [["Rename / move…", () => void renameNote(c.relativePath)]]),
-    }, h("span", { class: "chev" }, c.isFolder ? (open ? "▾" : "▸") : ""), (c.isFolder ? "📁 " : "") + c.name);
+    }, h("span", { class: "chev" }, c.isFolder ? (open ? "▾" : "▸") : ""), c.name);
     out.push(row);
     if (c.isFolder && open) out.push(...renderTree(c, depth + 1));
   }
@@ -373,7 +374,7 @@ function renderResults(r: SearchResults) {
   const sec = (title: string, n: number, rows: HTMLElement[]) => n ? [h("div", { class: "sec" }, `${title} (${n})`), ...rows] : [];
   const readme = (f: string) => `${f}/README.md`;
   P.results.replaceChildren(
-    ...sec("Folders", r.folders.length, r.folders.map((f) => h("div", { class: "row-item", onclick: () => void openNote(readme(f)) }, "📁 " + f))),
+    ...sec("Folders", r.folders.length, r.folders.map((f) => h("div", { class: "row-item folder", onclick: () => void openNote(readme(f)) }, f))),
     ...sec("Notes", r.notes.length, r.notes.map((p) => h("div", { class: "row-item", onclick: () => void openNote(p) }, p, ...label(p)))),
     ...sec("Text matches", r.matches.length, r.matches.map((m) => {
       const { location: a, length: l } = m.hit, s = m.sentence;
