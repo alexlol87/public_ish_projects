@@ -75,4 +75,21 @@ final class MarkdownStylerTests: XCTestCase {
         let text = "**a**\n**b**"
         XCTAssertEqual(MarkdownStyler.lineRange(covering: r(0, 6), in: text), r(0, 6))
     }
+
+    func testWikilinkHidesBracketsOffCursorLine() {
+        let out = MarkdownStyler.style("a [[api]] b")
+        XCTAssertEqual(out.styled, [StyledRange(range: r(4, 3), role: .link)])
+        XCTAssertEqual(out.hidden, [r(2, 2), r(7, 2)])
+    }
+
+    func testWikilinkAliasShowsOnlyAlias() {
+        let out = MarkdownStyler.style("[[notes#H|the notes]]")
+        XCTAssertEqual(out.styled, [StyledRange(range: r(10, 9), role: .link)])
+        XCTAssertEqual(out.hidden, [r(0, 10), r(19, 2)])
+    }
+
+    func testWikilinkMarkersVisibleOnCursorLineAndIgnoredInCode() {
+        XCTAssertEqual(MarkdownStyler.style("[[a]]", cursorLine: r(0, 5)).hidden, [])
+        XCTAssertEqual(MarkdownStyler.style("`[[a]]`").styled.map(\.role), [.inlineCode])
+    }
 }

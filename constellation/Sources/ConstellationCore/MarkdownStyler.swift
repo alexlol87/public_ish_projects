@@ -109,7 +109,7 @@ public enum MarkdownStyler {
             let re = try! NSRegularExpression(pattern: pattern)
             return re.matches(in: s, range: NSRange(location: 0, length: ns.length))
         }
-
+        let wikilink = "\\[\\[([^\\[\\]|]+)(?:\\|([^\\[\\]]*))?\\]\\]"  // group 1 target[#heading], group 2 alias
         var taken: [NSRange] = []  // spans already claimed (code wins over everything)
         func free(_ r: NSRange) -> Bool { !taken.contains { NSIntersectionRange($0, r).length > 0 } }
 
@@ -127,6 +127,7 @@ public enum MarkdownStyler {
         // Delimited spans: pattern group 1 is the content; the rest of the match is markers.
         let spans: [(String, StyleRole)] = [
             ("`([^`]+)`", .inlineCode),
+            (wikilink, .link),
             ("\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*", .bold),
             ("(?<![*\\w])\\*(?=[^\\s*])([^*]+?)(?<=\\S)\\*(?![*\\w])", .italic),
             ("(?<![\\w])_(?=[^\\s_])([^_]+?)(?<=\\S)_(?![\\w])", .italic),
@@ -135,6 +136,15 @@ public enum MarkdownStyler {
         for (pattern, role) in spans {
             for m in matches(pattern) where free(m.range) {
                 taken.append(m.range)
+                if pattern == wikilink {
+                    // Visible part: the alias if given, else target and heading. Everything else is a marker.
+                    let alias = m.range(at: 2)
+                    let vis = alias.location == NSNotFound ? m.range(at: 1) : alias
+                    out.styled.append(StyledRange(range: shift(vis), role: .link))
+                    hidden.append(shift(NSRange(location: m.range.location, length: vis.location - m.range.location)))
+                    hidden.append(shift(NSRange(location: NSMaxRange(vis), length: NSMaxRange(m.range) - NSMaxRange(vis))))
+                    continue
+                }
                 let c = m.range(at: 1)
                 out.styled.append(StyledRange(range: shift(c), role: role))
                 hidden.append(shift(NSRange(location: m.range.location, length: c.location - m.range.location)))
