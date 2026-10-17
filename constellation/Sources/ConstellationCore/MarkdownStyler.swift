@@ -9,6 +9,8 @@ public enum StyleRole: Equatable {
     case inlineCode
     case codeBlock
     case link
+    /// `#tag` including the `#`; never hidden.
+    case tag
     /// Whole `![alt](path)` range; the editor draws the image (or a placeholder) instead of the raw text.
     case image(path: String, alt: String)
     /// Whole table block; `rendered` is the column-aligned monospace text to draw instead of the raw rows.
@@ -151,6 +153,7 @@ public enum MarkdownStyler {
                 hidden.append(shift(NSRange(location: NSMaxRange(c), length: NSMaxRange(m.range) - NSMaxRange(c))))
             }
         }
+        for t in NoteParser.inlineTags(in: s) where free(t.range) { out.styled.append(StyledRange(range: shift(t.range), role: .tag)) }
     }
 }
 

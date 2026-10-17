@@ -29,17 +29,22 @@ struct RootView: View {
     @State private var cursor = 0
     @State private var relations: (title: String, rel: EndpointRelations)?
     @State private var search: SearchIndex?
+    @State private var tags: TagIndex?
+    @State private var sidebarTab = SidebarTab.files
+    @State private var tagFilter: String?
 
     var body: some View {
         NavigationSplitView {
             if let tree {
+                Picker("", selection: $sidebarTab) { ForEach(SidebarTab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal, 8)
+                if sidebarTab == .tags, let tags { TagsView(index: tags, selected: $tagFilter) { hit in go(hit.path, reveal: NSRange(location: hit.offset, length: 0)) } } else {
                 TextField("Search", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal, 8)
                 if !query.isEmpty, let search { SearchResultsView(results: search.search(query)) { m in
                     try? tabs?.open(m.path); reveal = .init(range: NSRange(location: m.offset, length: m.hit.length))
                 } openNote: { path in try? tabs?.open(path) } } else {
                 List(tree.children, children: \.optionalChildren, selection: $selection) { node in
                     Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
-                } }
+                } } }
             } else {
                 VStack {
                     Button("Create vault…") { chooseFolder(create: true) }
@@ -73,7 +78,9 @@ struct RootView: View {
                     FormatToolbar()
                     Divider()
                     EditorView(initialText: tabs.text(active) ?? "", root: root!, notePath: active, reveal: reveal, onCursor: { cursor = $0; refreshRelations() },
-                               onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) })
+                               onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) },
+                               onTag: { tagFilter = $0.lowercased(); sidebarTab = .tags },
+                               tagNames: { tags?.completions(for: $0) ?? [] })
                         .id("\(active)#\(tabs.revision(active))")
                 }
             } else {
@@ -107,7 +114,7 @@ struct RootView: View {
 
     private func open(_ url: URL) {
         do {
-            tree = try Vault.load(root: url); search = try SearchIndex(root: url); root = url; tabs = NoteTabs(root: url); error = nil
+            tree = try Vault.load(root: url); search = try SearchIndex(root: url); tags = try TagIndex(root: url); root = url; tabs = NoteTabs(root: url); error = nil
             UserDefaults.standard.set(url.path, forKey: "lastVault")
             GraphModel.shared.onOpen = { go($0, reveal: nil) }
             GraphModel.shared.root = url
@@ -115,6 +122,7 @@ struct RootView: View {
                 GraphModel.shared.reload()
                 if let t = tree, let fresh = try? t.refreshed(paths: paths, root: url) { tree = fresh }
                 try? search?.update(paths: paths)
+                try? tags?.update(paths: paths)
                 tabs?.diskChanged(paths)
             }
         } catch { self.error = "\(error)" }
