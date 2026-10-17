@@ -7,6 +7,8 @@ public struct VaultNode: Equatable, Identifiable, Sendable {
     public let isFolder: Bool
     public let children: [VaultNode]
     public var id: String { relativePath }
+    /// App-only files show in the tree but are excluded from search and the graph.
+    public var isAppOnly: Bool { Vault.isAppOnly(relativePath) }
 }
 
 /// The Vault seam: reads a folder of markdown Notes. Foundation only.
@@ -18,21 +20,54 @@ public enum Vault {
                   children: try children(of: root, prefix: ""))
     }
 
+    public struct NotEmpty: Error {}
+
+    private static let appOnlyTop: Set<String> = ["AGENTS.md", "repos.txt", "tags.md", "templates", ".constellation"]
+
+    /// True for the app's own files (top level only) and anything inside its folders.
+    public static func isAppOnly(_ relativePath: String) -> Bool {
+        appOnlyTop.contains(String(relativePath.split(separator: "/").first ?? ""))
+    }
+
+    /// Writes the starter files into an empty (or missing) folder. Throws `NotEmpty` rather than touch existing files.
+    public static func create(at root: URL) throws {
+        let fm = FileManager.default
+        if let existing = try? fm.contentsOfDirectory(atPath: root.path), !existing.isEmpty { throw NotEmpty() }
+        for d in ["templates", "external", "clients", ".constellation"] {
+            try fm.createDirectory(at: root.appendingPathComponent(d), withIntermediateDirectories: true)
+        }
+        let files = [
+            "README.md": "# Vault\n\nWhat this vault covers.\n",
+            "AGENTS.md": "# Agent rules\n\nPlaceholder.\n",
+            "repos.txt": "# One repository name per line.\n",
+            "tags.md": "# Tags\n\n- #example: what this tag means\n",
+        ]
+        for (name, text) in files { try text.write(to: root.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+    }
+
+    /// The remembered Vault folder, or nil if none was saved or it no longer exists (show the first-launch choice).
+    public static func reopenable(_ savedPath: String?) -> URL? {
+        var isDir: ObjCBool = false
+        guard let savedPath, FileManager.default.fileExists(atPath: savedPath, isDirectory: &isDir), isDir.boolValue else { return nil }
+        return URL(fileURLWithPath: savedPath)
+    }
+
     public static func readNote(_ note: VaultNode, in root: URL) throws -> String {
         try String(contentsOf: root.appendingPathComponent(note.relativePath), encoding: .utf8)
     }
 
     private static func children(of dir: URL, prefix: String) throws -> [VaultNode] {
         let urls = try FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [])
         var folders: [VaultNode] = [], notes: [VaultNode] = []
         for url in urls {
             let name = url.lastPathComponent
+            if name.hasPrefix(".") && !(prefix.isEmpty && name == ".constellation") { continue }
             let path = prefix + name
             if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true {
                 folders.append(VaultNode(name: name, relativePath: path, isFolder: true,
                                          children: try children(of: url, prefix: path + "/")))
-            } else if url.pathExtension.lowercased() == "md" {
+            } else if url.pathExtension.lowercased() == "md" || isAppOnly(path) {
                 notes.append(VaultNode(name: name, relativePath: path, isFolder: false, children: []))
             }
         }
