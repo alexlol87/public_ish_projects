@@ -1,2 +1,5 @@
 .build/
 build/
+dist/
+node_modules/
+target/

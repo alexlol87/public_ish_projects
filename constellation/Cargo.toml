@@ -1,0 +1,4 @@
+[workspace]
+resolver = "2"
+# `src-tauri` will be added here once the Tauri shell exists.
+members = ["core"]
