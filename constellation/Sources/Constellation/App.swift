@@ -16,13 +16,20 @@ struct RootView: View {
     @State private var tabs: NoteTabs?
     @State private var error: String?
     @State private var watcher: VaultWatcher?
+    @State private var query = ""
+    @State private var search: SearchIndex?
+    @State private var reveal: (path: String, range: NSRange, token: Int)?
 
     var body: some View {
         NavigationSplitView {
             if let tree {
+                TextField("Search", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal, 8)
+                if !query.isEmpty, let search { SearchResultsView(results: search.search(query)) { m in
+                    try? tabs?.open(m.path); reveal = (m.path, NSRange(location: m.offset, length: m.hit.length), (reveal?.token ?? 0) + 1)
+                } openNote: { path in try? tabs?.open(path) } } else {
                 List(tree.children, children: \.optionalChildren, selection: $selection) { node in
                     Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
-                }
+                } }
             } else {
                 VStack {
                     Button("Create vault…") { chooseFolder(create: true) }
@@ -53,8 +60,9 @@ struct RootView: View {
                             Spacer()
                         }.padding(6).background(Color.yellow.opacity(0.25))
                     }
-                    EditorView(initialText: tabs.text(active) ?? "") { self.tabs?.edit(active, text: $0) }
-                        .id("\(active)#\(tabs.revision(active))")
+                    let jump = reveal.flatMap { $0.path == active ? $0 : nil }
+                    EditorView(initialText: tabs.text(active) ?? "", reveal: jump?.range) { self.tabs?.edit(active, text: $0) }
+                        .id("\(active)#\(tabs.revision(active))#\(jump?.token ?? 0)")
                 }
             } else {
                 Text("Select a Note").foregroundStyle(.secondary)
@@ -85,10 +93,11 @@ struct RootView: View {
 
     private func open(_ url: URL) {
         do {
-            tree = try Vault.load(root: url); root = url; tabs = NoteTabs(root: url); error = nil
+            tree = try Vault.load(root: url); search = try SearchIndex(root: url); root = url; tabs = NoteTabs(root: url); error = nil
             UserDefaults.standard.set(url.path, forKey: "lastVault")
             watcher = VaultWatcher(root: url) { paths in
                 if let t = tree, let fresh = try? t.refreshed(paths: paths, root: url) { tree = fresh }
+                try? search?.update(paths: paths)
                 tabs?.diskChanged(paths)
             }
         } catch { self.error = "\(error)" }
@@ -111,5 +120,47 @@ struct RootView: View {
 
 private extension VaultNode {
     var optionalChildren: [VaultNode]? { isFolder ? children : nil }
+}
+
+/// Folders / Notes / Text matches; clicking a text match opens the Note at the hit.
+private struct SearchResultsView: View {
+    let results: SearchIndex.Results
+    let openMatch: (SearchIndex.TextMatch) -> Void
+    let openNote: (String) -> Void
+
+    var body: some View {
+        List {
+            if !results.folders.isEmpty {
+                Section("Folders") { ForEach(results.folders, id: \.self) { Label($0, systemImage: "folder") } }
+            }
+            if !results.notes.isEmpty {
+                Section("Notes") {
+                    ForEach(results.notes, id: \.self) { p in Button(p) { openNote(p) }.buttonStyle(.plain) }
+                }
+            }
+            if !results.matches.isEmpty {
+                Section("Text matches") {
+                    ForEach(Array(results.matches.enumerated()), id: \.offset) { _, m in
+                        Button { openMatch(m) } label: {
+                            VStack(alignment: .leading) {
+                                Text(highlighted(m)).lineLimit(3)
+                                Text(m.path).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func highlighted(_ m: SearchIndex.TextMatch) -> AttributedString {
+        var a = AttributedString(m.sentence)
+        let s = m.sentence as NSString
+        let lower = AttributedString(s.substring(to: m.hit.location)).characters.count
+        let start = a.index(a.startIndex, offsetByCharacters: lower)
+        let end = a.index(start, offsetByCharacters: AttributedString(s.substring(with: m.hit)).characters.count)
+        a[start..<end].backgroundColor = .yellow.opacity(0.5)
+        return a
+    }
 }
 #endif

@@ -7,6 +7,7 @@ import SwiftUI
 /// Use `.id(notePath)` so each Note gets a fresh view (and undo stack).
 struct EditorView: NSViewRepresentable {
     let initialText: String
+    var reveal: NSRange? = nil   // search hit to select and scroll to on creation
     let onChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
@@ -22,6 +23,9 @@ struct EditorView: NSViewRepresentable {
         tv.textContainerInset = NSSize(width: 12, height: 12)
         tv.string = initialText
         context.coordinator.restyle(tv)
+        if let r = reveal, NSMaxRange(r) <= (tv.string as NSString).length {
+            DispatchQueue.main.async { tv.setSelectedRange(r); tv.scrollRangeToVisible(r) }
+        }
         return scroll
     }
 
