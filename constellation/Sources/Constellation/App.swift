@@ -1,0 +1,68 @@
+#if canImport(AppKit)
+import AppKit
+import ConstellationCore
+import SwiftUI
+
+struct ConstellationApp: App {
+    var body: some Scene {
+        WindowGroup { RootView() }
+    }
+}
+
+struct RootView: View {
+    @State private var root: URL?
+    @State private var tree: VaultNode?
+    @State private var selection: String?
+    @State private var text = ""
+    @State private var error: String?
+
+    var body: some View {
+        NavigationSplitView {
+            if let tree {
+                List(tree.children, children: \.optionalChildren, selection: $selection) { node in
+                    Label(node.name, systemImage: node.isFolder ? "folder" : "doc.text")
+                }
+            } else {
+                Button("Open Vault…", action: chooseFolder).padding()
+            }
+        } detail: {
+            if let error {
+                Text(error).foregroundStyle(.red).padding()
+            } else {
+                ScrollView { Text(text).font(.body.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding() }
+            }
+        }
+        .frame(minWidth: 700, minHeight: 450)
+        .onAppear {
+            // Lets the CI launch test open a fixture Vault without the open panel.
+            if let path = ProcessInfo.processInfo.environment["CONSTELLATION_VAULT"] { open(URL(fileURLWithPath: path)) }
+        }
+        .onChange(of: selection) { _, path in show(path) }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        if panel.runModal() == .OK, let url = panel.url { open(url) }
+    }
+
+    private func open(_ url: URL) {
+        do { tree = try Vault.load(root: url); root = url; error = nil } catch { self.error = "\(error)" }
+    }
+
+    private func show(_ path: String?) {
+        guard let root, let tree, let path, let node = find(path, in: tree), !node.isFolder else { return }
+        do { text = try Vault.readNote(node, in: root); error = nil } catch { self.error = "\(error)" }
+    }
+
+    private func find(_ path: String, in node: VaultNode) -> VaultNode? {
+        if node.relativePath == path { return node }
+        return node.children.lazy.compactMap { find(path, in: $0) }.first
+    }
+}
+
+private extension VaultNode {
+    var optionalChildren: [VaultNode]? { isFolder ? children : nil }
+}
+#endif
