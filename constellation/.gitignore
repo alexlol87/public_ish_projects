@@ -4,4 +4,5 @@ dist/
 node_modules/
 target/
 src-tauri/gen/
+e2e/out/
 .scratch/

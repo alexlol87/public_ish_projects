@@ -83,6 +83,22 @@ launch-tests each against the fixture Vault, and on `main` replaces the `constel
 
 ```sh
 npm test                                   # frontend (vitest)
+npx tauri build --no-bundle && npm run e2e # end-to-end, Linux only (see below)
 cargo clippy --all-targets -- -D warnings
 cargo test --workspace                     # Rust core
 ```
+
+### End-to-end tests (Linux only)
+
+`npm run e2e` drives the release binary through [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/) and
+WebKitWebDriver, with a tiny dependency-free WebDriver client (`e2e/lib.mjs`) and `e2e/run.mjs` (about 30 checks:
+first launch, tree, tabs, editing and autosave, external edits and the conflict banner, live preview, links, Tags,
+search, inspector, rename and undo, task tick, themes, the graph window, flush on close, reopen at launch). Each run
+uses a temporary copy of `fixtures/vault` plus extra notes it writes, and a temporary config directory.
+
+Needs `cargo install tauri-driver --locked`, `WebKitWebDriver` (Debian: `webkit2gtk-driver`), `python3`, and `Xvfb`
+(without it the current `$DISPLAY` is used, which must be awake: a locked or blanked screen stops WebKit painting).
+Build first with `npx tauri build --no-bundle` (the binary is read from `$CARGO_TARGET_DIR/release/constellation`,
+default `target/release/`). `npm run e2e -- <part of a test name>` runs a subset; screenshots land in `e2e/out/`
+(git-ignored), failures save one too. The app has two test-only switches that do nothing unless set:
+`CONSTELLATION_E2E_PICK=<dir>` answers the native folder dialog, and the graph canvas exposes `e2e()` for node positions.
