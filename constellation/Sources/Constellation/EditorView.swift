@@ -27,6 +27,7 @@ struct EditorView: NSViewRepresentable {
         tv.isVerticallyResizable = true
         tv.textContainer?.widthTracksTextView = true
         scroll.documentView = tv
+        tv.onPlainClick = { [weak c = context.coordinator] tv, offset in c?.tickIfBox(tv, at: offset) ?? false }
         tv.onCommandClick = { [weak c = context.coordinator] tv, offset in c?.follow(tv, at: offset) }
         tv.delegate = context.coordinator
         tv.isRichText = false
@@ -92,6 +93,22 @@ struct EditorView: NSViewRepresentable {
             if LinkTextView.typedLinkPrefix(in: tv) != nil { tv.complete(nil) }  // typing after `[[` opens autocomplete
         }
 
+        /// Click on a task checkbox: ask the Vault for the edits (archive move, or a plain toggle) and apply them as one undo step.
+        /// Edits to this Note go through the text view (so ⌘Z undoes them); edits to other files are written and their inverse is registered on the same undo group.
+        func tickIfBox(_ tv: NSTextView, at offset: Int) -> Bool {
+            let boxes = MarkdownStyler.style(tv.string).styled.filter { if case .taskBox = $0.role { return true }; return false }
+            guard boxes.contains(where: { NSLocationInRange(offset, $0.range) }),
+                  let edits = try? Vault.tick(taskAt: offset, in: tv.string, path: notePath, root: root), !edits.isEmpty else { return false }
+            let others = edits.filter { $0.path != notePath }
+            if let inverse = try? FileEdit.apply(others, root: root), !others.isEmpty {
+                tv.undoManager?.registerUndo(withTarget: self) { _ in _ = try? FileEdit.apply(inverse, root: self.root) }
+            }
+            for e in edits where e.path == notePath {
+                tv.insertText(e.text, replacementRange: e.range)
+            }
+            return true
+        }
+
         func follow(_ tv: NSTextView, at offset: Int) {
             if let l = NoteParser.parse(tv.string).links.first(where: { NSLocationInRange(offset, $0.range) }) { onFollow(l) }
         }
@@ -148,6 +165,9 @@ struct EditorView: NSViewRepresentable {
                     storage.addAttribute(.attachment, value: Self.attachment(image: path, alt: alt, root: root, note: notePath), range: NSRange(location: s.range.location, length: 1))
                 case .table(let rendered):
                     storage.addAttribute(.attachment, value: Self.attachment(text: rendered), range: NSRange(location: s.range.location, length: 1))
+                case .taskBox(let checked):
+                    // Checkbox widget on the `[ ]` range's first character (unverified on macOS; fallback: leave raw `[ ]`).
+                    storage.addAttribute(.attachment, value: Self.attachment(text: checked ? "☑" : "☐"), range: NSRange(location: s.range.location, length: 1))
                 case .link:
                     storage.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
                 }
@@ -171,10 +191,15 @@ struct EditorView: NSViewRepresentable {
 /// NSTextView that reports ⌘-clicks and completes only the text typed after `[[`.
 final class LinkTextView: NSTextView {
     var onCommandClick: ((NSTextView, Int) -> Void)?
+    /// Plain click; return true when it was handled (a task checkbox) so the cursor is not moved.
+    var onPlainClick: ((NSTextView, Int) -> Bool)?
 
     override func mouseDown(with event: NSEvent) {
-        guard event.modifierFlags.contains(.command) else { return super.mouseDown(with: event) }
         let offset = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        guard event.modifierFlags.contains(.command) else {
+            if onPlainClick?(self, offset) == true { return }
+            return super.mouseDown(with: event)
+        }
         onCommandClick?(self, offset)
     }
 

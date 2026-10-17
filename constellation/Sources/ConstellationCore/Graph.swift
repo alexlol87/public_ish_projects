@@ -38,13 +38,13 @@ public struct VaultGraph: Equatable {
 }
 
 extension Vault {
-    /// Every Note and folder is a Node; Containment and Link edges; broken Links become ghost Nodes. App-only files are left out.
-    public static func graph(in root: URL) throws -> VaultGraph {
+    /// Archive Notes are left out unless `includeArchive`. Every Note and folder is a Node; Containment and Link edges; broken Links become ghost Nodes. App-only files are left out.
+    public static func graph(in root: URL, includeArchive: Bool = false) throws -> VaultGraph {
         let tree = try load(root: root)
-        let paths = try notePaths(in: root)
+        let paths = try notePaths(in: root).filter { includeArchive || !isArchive($0) }
         var nodes: [GraphNode] = [], edges: [GraphEdge] = []
         func walk(_ n: VaultNode) {
-            for c in n.children where !c.isAppOnly && (c.isFolder || c.relativePath.hasSuffix(".md")) {
+            for c in n.children where !c.isAppOnly && (includeArchive || !isArchive(c.relativePath)) && (c.isFolder || c.relativePath.hasSuffix(".md")) {
                 nodes.append(GraphNode(id: c.relativePath, name: c.name, kind: c.isFolder ? .folder : .note))
                 edges.append(GraphEdge(from: n.relativePath, to: c.relativePath, kind: .containment))
                 if c.isFolder { walk(c) }
