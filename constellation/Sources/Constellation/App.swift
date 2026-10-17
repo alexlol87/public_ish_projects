@@ -56,7 +56,13 @@ struct RootView: View {
                             Text(st.label).font(.caption2).foregroundStyle(st.isStale(threshold: settings.thresholdDays) ? Color(hex: settings.palette.stale) : .secondary)
                         }
                     }
-                        .contextMenu { if !node.isFolder { noteMenu(node.relativePath) } }
+                        .contextMenu {
+                            if !node.isFolder { noteMenu(node.relativePath) }
+                            if node.isFolder && AgentFiles.isRepoFolder(node.relativePath) {
+                                Button("Copy ingest prompt") { copy(AgentFiles.ingestPrompt(repo: node.name)) }
+                                Button("Copy refresh prompt") { copy(AgentFiles.refreshPrompt(repo: node.name)) }
+                            }
+                        }
                         .foregroundStyle(repos[node.relativePath]?.isStale(threshold: settings.thresholdDays) == true ? Color(hex: settings.palette.stale) : Color.primary)
                 } } }
             } else {
@@ -267,6 +273,11 @@ struct RootView: View {
 
 private extension VaultNode {
     var optionalChildren: [VaultNode]? { isFolder ? children : nil }
+}
+
+private func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
 }
 
 /// Folders / Notes / Text matches; clicking a text match opens the Note at the hit.

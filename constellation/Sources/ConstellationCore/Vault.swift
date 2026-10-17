@@ -48,10 +48,13 @@ public enum Vault {
         }
         let files = [
             "README.md": "# Vault\n\nWhat this vault covers.\n",
-            "AGENTS.md": "# Agent rules\n\nPlaceholder.\n",
+            "AGENTS.md": AgentFiles.agentsMD,
             "repos.txt": "# One repository name per line.\n",
             "tags.md": "# Tags\n\n- #example: what this tag means\n",
         ]
+        for (name, text) in AgentFiles.templates {
+            try text.write(to: root.appendingPathComponent("templates/\(name).md"), atomically: true, encoding: .utf8)
+        }
         for (name, text) in files { try text.write(to: root.appendingPathComponent(name), atomically: true, encoding: .utf8) }
     }
 
