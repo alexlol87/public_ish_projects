@@ -63,6 +63,15 @@ public enum MarkdownStyler {
         return ns.lineRange(for: NSRange(location: min(max(cursor, 0), ns.length), length: 0))
     }
 
+    /// The whole lines touched by a selection, so markers stay visible across a multi-line selection.
+    /// A selection ending exactly at a line start does not include that next line.
+    public static func lineRange(covering sel: NSRange, in text: String) -> NSRange {
+        let ns = text as NSString
+        let loc = min(max(sel.location, 0), ns.length)
+        let end = min(max(NSMaxRange(sel) - (sel.length > 0 ? 1 : 0), loc), ns.length)
+        return NSUnionRange(ns.lineRange(for: NSRange(location: loc, length: 0)), ns.lineRange(for: NSRange(location: end, length: 0)))
+    }
+
     private static func styleInline(_ s: String, offset: Int, into out: inout StyleResult, hidden: inout [NSRange]) {
         let ns = s as NSString
         func shift(_ r: NSRange) -> NSRange { NSRange(location: r.location + offset, length: r.length) }
