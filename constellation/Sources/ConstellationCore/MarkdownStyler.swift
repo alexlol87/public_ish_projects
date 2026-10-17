@@ -15,6 +15,8 @@ public enum StyleRole: Equatable {
     case image(path: String, alt: String)
     /// Whole table block; `rendered` is the column-aligned monospace text to draw instead of the raw rows.
     case table(rendered: String)
+    /// The `[ ]` / `[x]` of a task item (3 chars); the editor draws a clickable checkbox, hidden on the cursor line.
+    case taskBox(checked: Bool)
 }
 
 public struct StyledRange: Equatable {
@@ -77,6 +79,11 @@ public enum MarkdownStyler {
             } else {
                 let before = out.styled.count
                 styleInline(content, offset: line.location, into: &out, hidden: &hidden)
+                if !active, let m = taskBoxPattern.firstMatch(in: content, range: NSRange(location: 0, length: (content as NSString).length)) {
+                    let r = NSRange(location: line.location + m.range(at: 1).location, length: 3)
+                    out.styled.append(StyledRange(range: r, role: .taskBox(checked: m.range(at: 2).length > 0 && (content as NSString).substring(with: m.range(at: 2)) != " ")))
+                    hidden.append(r)
+                }
                 // Raw markdown comes back on the cursor line: no image widget there.
                 if active {
                     let mine = out.styled[before...].filter { if case .image = $0.role { return false }; return true }
@@ -87,6 +94,8 @@ public enum MarkdownStyler {
         }
         return out
     }
+
+    private static let taskBoxPattern = try! NSRegularExpression(pattern: #"^[ \t]*[-*+] (\[([ xX])\])(?= |$)"#)
 
     /// The line (including newline) containing a UTF-16 cursor offset.
     public static func lineRange(containing cursor: Int, in text: String) -> NSRange {

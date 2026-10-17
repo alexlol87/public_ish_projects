@@ -219,7 +219,7 @@ private struct SearchResultsView: View {
             }
             if !results.notes.isEmpty {
                 Section("Notes") {
-                    ForEach(results.notes, id: \.self) { p in Button(p) { openNote(p) }.buttonStyle(.plain) }
+                    ForEach(results.notes, id: \.self) { p in Button(results.isArchived(p) ? "\(p)  (archived)" : p) { openNote(p) }.buttonStyle(.plain) }
                 }
             }
             if !results.matches.isEmpty {
@@ -228,7 +228,7 @@ private struct SearchResultsView: View {
                         Button { openMatch(m) } label: {
                             VStack(alignment: .leading) {
                                 Text(highlighted(m)).lineLimit(3)
-                                Text(m.path).font(.caption).foregroundStyle(.secondary)
+                                Text(results.isArchived(m.path) ? "\(m.path)  (archived)" : m.path).font(.caption).foregroundStyle(.secondary)
                             }
                         }.buttonStyle(.plain)
                     }
