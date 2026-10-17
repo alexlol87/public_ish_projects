@@ -1,6 +1,6 @@
 # Constellation: implementation plan
 
-Status: **rewritten from Swift/macOS to Tauri 2 (Linux + macOS); stack, architecture, distribution and tests below are updated, the other sections still describe the original Swift design and apply as product spec**. Written 2026-10-17 from a design interview. Vocabulary is defined in
+Status: **v1 built**, as a Tauri 2 app for Linux and macOS (first written in Swift, then rewritten). Written 2026-10-17 from a design interview. Vocabulary is defined in
 [GLOSSARY.md](GLOSSARY.md); hard-to-reverse decisions are in [docs/adr/](docs/adr/).
 
 ## 1. Purpose
@@ -221,26 +221,29 @@ constellation/
 **Core has no UI dependency**, so `cargo test` runs the same on Linux and macOS. The frontend talks to it only through
 Tauri commands and events.
 
-Core modules (each a small surface with the logic behind it):
+Core modules in `core/src/` (each a small surface with the logic behind it). All text offsets are UTF-16, to match
+JavaScript strings in the editor.
 
-| Module | Interface (sketch) | Notes |
-|--------|--------------------|-------|
-| `NoteParser` | `parse(text) -> ParsedNote` (frontmatter, headings with ranges, links with ranges, Calls/Uses per heading, task items, Tags with ranges) | Hand-written line parser. No markdown library (zero dependencies). The editor's styling uses the same ranges. |
-| `Vault` | `load(root)`, `apply(change)`, notes, folders | Treats the file system as the source of truth and holds the index in memory. Applies the hidden-file rules from §2 #38. |
-| `LinkResolver` | `resolve(link, from:) -> Target?` | Resolves by path, then by unique name, then marks the link broken. |
-| `Graph` | `nodes`, `edges(kind)`, `local(around:depth:)` | Edge kinds: Containment, Link, Call, Uses. Folds Calls into one edge per Note pair, with the list of Endpoint pairs. |
-| `SearchIndex` | `search(query) -> Results(folders, notes, matches)` | Lowercased, diacritic-folded copy of every Note. Text is split into sentences on load so a match returns its sentence. Updated per changed file. Target: <50 ms for 5,000 Notes. |
-| `TagIndex` | `tags -> [(tag, count)]`, `notes(tag) -> [(note, line)]` | Built from the parser output and updated per changed file. Nested Tags roll up into their parent. |
-| `Refactor` | `rename(note, to:)`, `renameHeading(in:from:to:)`, `renameTag(from:to:) -> [FileEdit]` | Returns edits and the app applies them, so undo is one step. |
-| `Archiver` | `archive(item, in: note) -> [FileEdit]` | Removes the item and appends the entry from §4.5 to the Project's archive Note. |
-| `VaultScaffold` | `create(at:)` | Writes the starter files from §2 #37. |
+| Module | Main entry points | Notes |
+|--------|-------------------|-------|
+| `parser` | `parse(text) -> ParsedNote` (frontmatter, headings, links, Calls/Uses per heading, task items, Tags, all with ranges) | Hand-written line parser, no markdown library. |
+| `vault` | `load`, `create`, `read_note`, `write_note`, `resolve_image` | The file system is the source of truth. Applies the hidden-file rules from §2 #38. `create` writes the starter files from §2 #37. |
+| `index` | `VaultIndex`: `open(root)`, `ingest(paths)`, plus search, tags, graph, backlinks, completions, broken links, staleness | What the shell holds in memory. Reads each file once and updates per changed file. |
+| `links` | `resolve(target) -> LinkResolution` | By path, then by unique name, otherwise broken. |
+| `graph` | `VaultGraph`, `GraphFilter` (`.constellation/graph.json`), `filtered(filter, around)` | Edge kinds: Containment, Link, Call, Uses. Calls fold into one edge per Note pair, with the Endpoint pairs. |
+| `search` | `search(query) -> Results { folders, notes, matches }` | Case- and diacritic-folded copy of every Note, split into sentences. Target: <50 ms at 5,000 Notes (about 5 ms measured). |
+| `tags` | tag tree, hits, completions | Nested Tags roll up into their parent. |
+| `renames` | `rename_note`, `move_note_to_folder`, `rename_heading`, `rename_tag -> Vec<FileEdit>` | Return edits; the shell applies them. |
+| `archiver` | `tick(offset) -> Vec<FileEdit>` | Removes the item and appends the §4.5 entry to the Project's archive Note. |
+| `edit` | `FileEdit`, `apply(edits) -> inverse edits` | The inverse edits make every refactor one undo step. |
+| `agent_files` | `AGENTS.md`, templates, ingest/refresh prompts | |
 
 App layer:
 - Three panes in the main window, plus a separate graph window.
 - The editor is CodeMirror 6 with decorations for live preview.
 - The graph is drawn on a canvas, using a simple force simulation of Barnes–Hut type when node count makes plain n² too
   slow.
-- A `notify` watcher in `src-tauri` feeds `Vault.apply`.
+- A `notify` watcher in `src-tauri` feeds `VaultIndex::ingest` and tells the windows what changed.
 - Settings: theme and staleness days.
 
 ## 6. Editor

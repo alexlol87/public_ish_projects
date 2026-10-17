@@ -1,7 +1,6 @@
 // Scale test (not part of `npm run e2e`): generates a ~5,000-Note Vault, opens it in the release app and measures
 // launch, tree, typing, search, tags, inspector, graph and a 200-file agent rewrite. Fails if search is slow.
-// Run: `npm run e2e:perf` (after building the release binary, as for `npm run e2e`). Set E2E_PORT=4460 to run it
-// next to another harness.
+// Run: `npm run e2e:perf` (after building the release binary, as for `npm run e2e`).
 import fs from "node:fs";
 import path from "node:path";
 import { genVault } from "./genvault.mjs";
