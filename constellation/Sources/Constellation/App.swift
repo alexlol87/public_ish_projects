@@ -44,7 +44,7 @@ struct RootView: View {
                         Spacer()
                     }.padding(6)
                     Divider()
-                    EditorView(initialText: tabs.text(active) ?? "") { self.tabs?.edit(active, text: $0) }
+                    EditorView(initialText: tabs.text(active) ?? "", root: root, notePath: active) { self.tabs?.edit(active, text: $0) }
                         .id(active)
                 }
             } else {

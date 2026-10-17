@@ -7,9 +7,11 @@ import SwiftUI
 /// Use `.id(notePath)` so each Note gets a fresh view (and undo stack).
 struct EditorView: NSViewRepresentable {
     let initialText: String
+    var root: URL? = nil  // with notePath: resolves image paths
+    var notePath = ""
     let onChange: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange, root: root, notePath: notePath) }
 
     func makeNSView(context: Context) -> NSScrollView {
         // Default NSTextView is TextKit 2; never touch `.layoutManager` (drops to TextKit 1).
@@ -30,7 +32,9 @@ struct EditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         static let baseFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
         var onChange: (String) -> Void
-        init(onChange: @escaping (String) -> Void) { self.onChange = onChange }
+        let root: URL?
+        let notePath: String
+        init(onChange: @escaping (String) -> Void, root: URL?, notePath: String) { self.onChange = onChange; self.root = root; self.notePath = notePath }
 
         private var restyling = false
 
@@ -43,6 +47,27 @@ struct EditorView: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             restyle(tv)
             onChange(tv.string)
+        }
+
+        static func attachment(image path: String, alt: String, root: URL?, note: String) -> NSTextAttachment {
+            if let root, let url = ImagePaths.resolve(path, note: note, root: root), let img = NSImage(contentsOf: url) {
+                let a = NSTextAttachment()
+                let w = min(img.size.width, 480)
+                a.image = img
+                a.bounds = CGRect(x: 0, y: 0, width: w, height: img.size.height * w / max(img.size.width, 1))
+                return a
+            }
+            return attachment(text: "[missing image: \(alt.isEmpty ? path : alt)]")
+        }
+
+        /// Monospace text drawn into an image (tables, placeholders).
+        static func attachment(text: String) -> NSTextAttachment {
+            let str = NSAttributedString(string: text, attributes: [.font: baseFont, .foregroundColor: NSColor.textColor])
+            let size = str.size()
+            let a = NSTextAttachment()
+            a.image = NSImage(size: size, flipped: false) { rect in str.draw(in: rect); return true }
+            a.bounds = CGRect(origin: .zero, size: size)
+            return a
         }
 
         /// Attribute-only edits: they never touch characters, selection or the undo stack.
@@ -65,6 +90,12 @@ struct EditorView: NSViewRepresentable {
                     storage.addAttribute(.obliqueness, value: 0.2, range: s.range)
                 case .inlineCode, .codeBlock:
                     storage.addAttribute(.backgroundColor, value: NSColor.quaternaryLabelColor, range: s.range)
+                case .image(let path, let alt):
+                    // Widget: draw the image (or a placeholder) on the range's first character; the rest is hidden below.
+                    // Unverified on macOS: .attachment on a non-U+FFFC character. Fallback: dim the raw text only.
+                    storage.addAttribute(.attachment, value: Self.attachment(image: path, alt: alt, root: root, note: notePath), range: NSRange(location: s.range.location, length: 1))
+                case .table(let rendered):
+                    storage.addAttribute(.attachment, value: Self.attachment(text: rendered), range: NSRange(location: s.range.location, length: 1))
                 case .link:
                     storage.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: s.range)
                 }
