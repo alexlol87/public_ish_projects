@@ -53,6 +53,8 @@ struct RootView: View {
                             Spacer()
                         }.padding(6).background(Color.yellow.opacity(0.25))
                     }
+                    FormatToolbar()
+                    Divider()
                     EditorView(initialText: tabs.text(active) ?? "") { self.tabs?.edit(active, text: $0) }
                         .id("\(active)#\(tabs.revision(active))")
                 }
