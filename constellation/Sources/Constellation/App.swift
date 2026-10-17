@@ -60,8 +60,10 @@ struct RootView: View {
                             Spacer()
                         }.padding(6).background(Color.yellow.opacity(0.25))
                     }
+                    FormatToolbar()
+                    Divider()
                     let jump = reveal.flatMap { $0.path == active ? $0 : nil }
-                    EditorView(initialText: tabs.text(active) ?? "", reveal: jump?.range) { self.tabs?.edit(active, text: $0) }
+                    EditorView(initialText: tabs.text(active) ?? "", reveal: jump?.range, root: root, notePath: active) { self.tabs?.edit(active, text: $0) }
                         .id("\(active)#\(tabs.revision(active))#\(jump?.token ?? 0)")
                 }
             } else {

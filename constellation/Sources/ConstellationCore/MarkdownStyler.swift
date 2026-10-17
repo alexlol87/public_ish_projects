@@ -9,6 +9,10 @@ public enum StyleRole: Equatable {
     case inlineCode
     case codeBlock
     case link
+    /// Whole `![alt](path)` range; the editor draws the image (or a placeholder) instead of the raw text.
+    case image(path: String, alt: String)
+    /// Whole table block; `rendered` is the column-aligned monospace text to draw instead of the raw rows.
+    case table(rendered: String)
 }
 
 public struct StyledRange: Equatable {
@@ -33,9 +37,12 @@ public enum MarkdownStyler {
         var out = StyleResult()
         var inFence = false
         var loc = 0
+        var lineIndex = 0
+        var lines: [String]?  // lazily split, only when a table could start
         while loc < ns.length {
             let full = ns.lineRange(for: NSRange(location: loc, length: 0))
             loc = NSMaxRange(full)
+            defer { lineIndex += 1 }
             var line = full  // without the trailing newline
             while line.length > 0, "\n\r".contains(ns.character(at: NSMaxRange(line) - 1).asScalar) {
                 line.length -= 1
@@ -49,8 +56,30 @@ public enum MarkdownStyler {
                 if line.length > 0 { hidden.append(line) }
             } else if inFence {
                 if line.length > 0 { out.styled.append(StyledRange(range: line, role: .codeBlock)) }
+
+            } else if content.trimmingCharacters(in: .whitespaces).hasPrefix("|"),
+                      let t = table(in: lines ?? { let l = text.components(separatedBy: "\n"); lines = l; return l }(), at: lineIndex) {
+                // Block range spans t.count lines (without the last newline); active if the cursor line touches it.
+                var end = full.location
+                for _ in 0..<t.count { end = NSMaxRange(ns.lineRange(for: NSRange(location: end, length: 0))) }
+                var block = NSRange(location: full.location, length: end - full.location)
+                while block.length > 0, "\n\r".contains(ns.character(at: NSMaxRange(block) - 1).asScalar) { block.length -= 1 }
+                let on = cursorLine.map { NSIntersectionRange($0, NSRange(location: block.location, length: end - block.location)).length > 0 || $0.location == block.location } ?? false
+                if !on {
+                    out.styled.append(StyledRange(range: block, role: .table(rendered: t.rendered)))
+                    out.hidden.append(block)
+                }
+                loc = end
+                lineIndex += t.count - 1  // the defer adds the last one
+                continue
             } else {
+                let before = out.styled.count
                 styleInline(content, offset: line.location, into: &out, hidden: &hidden)
+                // Raw markdown comes back on the cursor line: no image widget there.
+                if active {
+                    let mine = out.styled[before...].filter { if case .image = $0.role { return false }; return true }
+                    out.styled.replaceSubrange(before..., with: mine)
+                }
             }
             if !active { out.hidden += hidden }
         }
@@ -80,8 +109,15 @@ public enum MarkdownStyler {
             let re = try! NSRegularExpression(pattern: pattern)
             return re.matches(in: s, range: NSRange(location: 0, length: ns.length))
         }
+
         var taken: [NSRange] = []  // spans already claimed (code wins over everything)
         func free(_ r: NSRange) -> Bool { !taken.contains { NSIntersectionRange($0, r).length > 0 } }
+
+        for m in imagePattern.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            taken.append(m.range)
+            out.styled.append(StyledRange(range: shift(m.range), role: .image(path: ns.substring(with: m.range(at: 2)), alt: ns.substring(with: m.range(at: 1)))))
+            hidden.append(shift(m.range))
+        }
 
         if let m = matches("^(#{1,6}) +(?=\\S)").first, ns.length > m.range.length {
             let title = NSRange(location: m.range.length, length: ns.length - m.range.length)
