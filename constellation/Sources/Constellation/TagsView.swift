@@ -8,6 +8,7 @@ enum SidebarTab: String, CaseIterable { case files = "Files", tags = "Tags" }
 struct TagsView: View {
     let index: TagIndex
     @Binding var selected: String?
+    let rename: (String) -> Void
     let open: (TagIndex.Hit) -> Void
     @State private var sort = TagIndex.Sort.name
 
@@ -17,6 +18,7 @@ struct TagsView: View {
                 .pickerStyle(.segmented).padding(.horizontal, 8)
             List(index.tree(sortedBy: sort), children: \.optionalChildren, selection: $selected) { node in
                 HStack { Text(node.name); Spacer(); Text("\(node.count)").foregroundStyle(.secondary) }.tag(node.tag)
+                    .contextMenu { Button("Rename…") { rename(node.tag) } }
             }
             if let selected {
                 Divider()
