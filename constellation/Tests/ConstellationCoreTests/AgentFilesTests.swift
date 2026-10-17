@@ -32,13 +32,13 @@ final class AgentFilesTests: XCTestCase {
         let expected = ["project": "project", "repo": "repo", "endpoints": "endpoint", "architecture": "architecture", "adr": "adr",
                         "requirements": "requirements", "future": "future", "bugs": "bugs", "todo": "todo",
                         "external-api": "external-api", "client": "client", "archive": "archive"]
-        for (name, type) in expected { XCTAssertEqual(NoteParser.parse(AgentFiles.templates[name]!).type, type, name) }
-        let repo = NoteParser.parse(AgentFiles.templates["repo"]!)
+        for (name, type) in expected { XCTAssertEqual(Vault.parse(AgentFiles.templates[name]!).type, type, name) }
+        let repo = Vault.parse(AgentFiles.templates["repo"]!)
         for k in ["repo_url", "verified_commit", "verified_on"] { XCTAssertNotNil(repo.frontmatter[k], k) }
     }
 
     func testEndpointsTemplateHasCallsAndStatus() {
-        let p = NoteParser.parse(AgentFiles.templates["endpoints"]!)
+        let p = Vault.parse(AgentFiles.templates["endpoints"]!)
         XCTAssertEqual(p.calls.count, 1)
         XCTAssertEqual(p.calls[0].links.count, 1)
         XCTAssertEqual(p.calls[0].links[0].heading, "GET /path")
@@ -46,10 +46,10 @@ final class AgentFilesTests: XCTestCase {
     }
 
     func testClientAndExternalTemplates() {
-        let c = NoteParser.parse(AgentFiles.templates["client"]!)
+        let c = Vault.parse(AgentFiles.templates["client"]!)
         XCTAssertEqual(c.uses.count, 1)
         XCTAssertEqual(c.uses[0].links.count, 1)
-        XCTAssertFalse(NoteParser.parse(AgentFiles.templates["external-api"]!).headings.filter { NoteParser.isEndpoint($0.title) }.isEmpty)
+        XCTAssertFalse(Vault.parse(AgentFiles.templates["external-api"]!).endpoints.isEmpty)
     }
 
     func testTemplatesAreIgnoredByTheVaultIndexes() throws {

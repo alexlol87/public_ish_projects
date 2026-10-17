@@ -134,4 +134,46 @@ final class NoteTabsTests: XCTestCase {
         tabs.diskChanged(["a.md", "other.md"])
         XCTAssertEqual(tabs.text("a.md"), "one")
     }
+
+    func testAutosaveAndSaveAllNeverWriteOverAPendingConflict() throws {
+        let root = try vault(["a.md": "one"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md")
+        tabs.edit("a.md", text: "mine", at: t0)
+        try write(root, "a.md", "theirs")
+        tabs.diskChanged(["a.md"])
+        try tabs.saveDue(at: t0 + 60)
+        try tabs.saveAll()
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.md"), encoding: .utf8), "theirs")
+        XCTAssertTrue(tabs.hasConflicts)
+        try tabs.close("a.md")  // refuses rather than dropping my edits or the disk text
+        XCTAssertEqual(tabs.paths, ["a.md"])
+        XCTAssertEqual(tabs.text("a.md"), "mine")
+    }
+
+    func testReloadAfterEditsRemapsMovedTabsAndRebuildsFromDisk() throws {
+        let root = try vault(["a.md": "A", "b.md": "B", "c.md": "C"])
+        var tabs = NoteTabs(root: root)
+        for p in ["a.md", "b.md", "c.md"] { try tabs.open(p) }
+        try tabs.open("b.md")
+        let edits = try Vault.moveNote("b.md", toFolder: "sub", in: root) + [FileEdit(path: "c.md", range: NSRange(location: 0, length: 1), text: "C2")]
+        try FileEdit.apply(edits, root: root)
+        tabs.reloadAfter(edits)
+        XCTAssertEqual(tabs.paths, ["a.md", "sub/b.md", "c.md"])
+        XCTAssertEqual(tabs.active, "sub/b.md")
+        XCTAssertEqual(tabs.text("c.md"), "C2")
+        XCTAssertEqual(tabs.revision("c.md"), 1)  // bumped so the editor view is rebuilt
+        XCTAssertEqual(tabs.revision("sub/b.md"), 1)
+    }
+
+    func testReloadAfterEditsDropsDeletedTabs() throws {
+        let root = try vault(["a.md": "A", "b.md": "B"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md"); try tabs.open("b.md")
+        let edits = [FileEdit(path: "b.md", range: NSRange(location: 0, length: 0), text: "", removesFile: true)]
+        try FileEdit.apply(edits, root: root)
+        tabs.reloadAfter(edits)
+        XCTAssertEqual(tabs.paths, ["a.md"])
+        XCTAssertEqual(tabs.active, "a.md")
+    }
 }

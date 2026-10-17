@@ -36,19 +36,15 @@ public enum Staleness: Equatable {
 extension Vault {
     /// Vault-relative Repo folder -> staleness, for every `<folder>/README.md` with `type: repo`. Skips app-only files.
     public static func repoStaleness(in root: URL, now: Date = Date()) throws -> [String: Staleness] {
+        repoStaleness(parsed: try parsedNotes(in: root), now: now)
+    }
+
+    static func repoStaleness(parsed: [String: ParsedNote], now: Date) -> [String: Staleness] {
         var out: [String: Staleness] = [:]
-        func walk(_ node: VaultNode) throws {
-            for c in node.children {
-                if c.isFolder { try walk(c); continue }
-                guard c.name.lowercased() == "readme.md" || c.name.lowercased() == "readme", !c.isAppOnly,
-                      let slash = c.relativePath.lastIndex(of: "/") else { continue }
-                let parsed = NoteParser.parse(try readNote(c, in: root))
-                if parsed.type == "repo" {
-                    out[String(c.relativePath[..<slash])] = Staleness.of(verifiedOn: parsed.frontmatter["verified_on"], now: now)
-                }
-            }
+        for (path, note) in parsed where note.type == "repo" {
+            guard let slash = path.lastIndex(of: "/"), path[path.index(after: slash)...].lowercased() == "readme.md" else { continue }
+            out[String(path[..<slash])] = Staleness.of(verifiedOn: note.frontmatter["verified_on"], now: now)
         }
-        try walk(try load(root: root))
         return out
     }
 }

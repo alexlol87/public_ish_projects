@@ -102,7 +102,7 @@ final class ArchiverTests: XCTestCase {
         let all = try Vault.graph(in: root, includeArchive: true)
         XCTAssertTrue(all.nodes.contains { $0.id == "shop/archive/fixed-bugs.md" })
 
-        let r = try SearchIndex(root: root).search("stale")
+        let r = try VaultIndex(root: root).search("stale")
         XCTAssertEqual(r.notes, [])
         XCTAssertEqual(r.matches.map(\.path), ["shop/archive/fixed-bugs.md"])
         XCTAssertTrue(r.isArchived("shop/archive/fixed-bugs.md"))

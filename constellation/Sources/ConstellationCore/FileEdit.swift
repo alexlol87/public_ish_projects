@@ -1,6 +1,6 @@
 import Foundation
 
-/// One change to one file. Commands (Archiver, later renames) return `[FileEdit]` instead of writing, so the app applies
+/// One change to one file. Commands (Archiver, renames, link creation) return `[FileEdit]` instead of writing, so the app applies
 /// them as one undoable step and tests can inspect them. `range` is UTF-16 in the file's current text.
 public struct FileEdit: Equatable {
     public var path: String  // Vault-relative

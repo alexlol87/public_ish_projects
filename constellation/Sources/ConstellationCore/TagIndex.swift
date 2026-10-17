@@ -1,26 +1,27 @@
 import Foundation
 
 /// In-memory Tag index over a Vault. Tags are case-folded (lowercase); `a/b` rolls up into `a`.
-/// App-only files are skipped. Build with `init(root:)`, feed touched paths to `update(paths:)` like `SearchIndex`.
+/// App-only files are skipped. Owned by `VaultIndex`, which builds it once and feeds it touched paths like `SearchIndex`.
 public struct TagIndex {
     public struct Hit: Equatable, Sendable {
         public let path: String
         public let line: String   // the line containing the Tag
         public let offset: Int    // UTF-16 offset of the Tag in the Note
     }
-    public struct Node: Equatable, Sendable {
+    public struct Node: Equatable, Sendable, Identifiable {
         public let tag: String    // full lowercase path, e.g. "team/payments"
         public let count: Int     // Notes holding this Tag or any child
         public let children: [Node]
+        public var id: String { tag }
         public var name: String { String(tag.split(separator: "/").last ?? "") }
     }
     public enum Sort { case name, count }
 
     private struct Occ { let tag: String; let line: String; let offset: Int }
-    public let root: URL
+    let root: URL
     private var notes: [String: [Occ]] = [:]
 
-    public init(root: URL) throws {
+    init(root: URL) throws {
         self.root = root
         try add(folder: try Vault.load(root: root))
     }
@@ -40,7 +41,7 @@ public struct TagIndex {
         }
     }
 
-    public mutating func update(paths: [String]) throws {
+    mutating func update(paths: [String]) throws {
         for path in paths {
             let parts = path.split(separator: "/")
             if parts.isEmpty || parts.contains(where: { $0.hasPrefix(".") }) || Vault.isAppOnly(path) { continue }
@@ -55,7 +56,7 @@ public struct TagIndex {
     private static func matches(_ tag: String, _ query: String) -> Bool { tag == query || tag.hasPrefix(query + "/") }
 
     /// Foldable tree of every Tag with its Note count, parents rolled up.
-    public func tree(sortedBy sort: Sort) -> [Node] {
+    func tree(sortedBy sort: Sort) -> [Node] {
         var paths: [String: Set<String>] = [:]  // tag (and each ancestor) -> Notes
         for (path, occs) in notes {
             for o in occs {
@@ -77,7 +78,7 @@ public struct TagIndex {
     }
 
     /// Notes holding the Tag (or a child Tag), one hit per line, ordered by path then position.
-    public func notes(for tag: String) -> [Hit] {
+    func notes(for tag: String) -> [Hit] {
         let q = tag.lowercased()
         var out: [Hit] = []
         for path in notes.keys.sorted() {
@@ -90,7 +91,7 @@ public struct TagIndex {
     }
 
     /// Existing Tags (and their parents) starting with `prefix`, for `#` autocomplete.
-    public func completions(for prefix: String) -> [String] {
+    func completions(for prefix: String) -> [String] {
         let q = prefix.lowercased()
         var all = Set<String>()
         for occs in notes.values { for o in occs {
@@ -101,7 +102,7 @@ public struct TagIndex {
     }
 
     /// The Tag text typed after a `#` at the end of `line` (a `#` that would start a Tag), else nil.
-    public static func typedPrefix(inLineBeforeCursor line: String) -> String? {
+    static func typedPrefix(inLineBeforeCursor line: String) -> String? {
         let ns = line as NSString
         guard let m = NoteParser.typedTagRe.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { return nil }
         return ns.substring(with: m.range(at: 1))

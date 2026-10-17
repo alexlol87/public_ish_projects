@@ -51,10 +51,10 @@ final class MarkdownWidgetsTests: XCTestCase {
         _ = fm.createFile(atPath: root.appendingPathComponent("notes/near.png").path, contents: Data())
         _ = fm.createFile(atPath: root.appendingPathComponent("assets/far.png").path, contents: Data())
         addTeardownBlock { try? fm.removeItem(at: root) }
-        XCTAssertEqual(ImagePaths.resolve("near.png", note: "notes/a.md", root: root)?.lastPathComponent, "near.png")
-        XCTAssertEqual(ImagePaths.resolve("assets/far.png", note: "notes/a.md", root: root)?.lastPathComponent, "far.png")
-        XCTAssertEqual(ImagePaths.resolve("/assets/far.png", note: "notes/a.md", root: root)?.lastPathComponent, "far.png")
-        XCTAssertNil(ImagePaths.resolve("gone.png", note: "notes/a.md", root: root))
-        XCTAssertNil(ImagePaths.resolve("../../etc/passwd", note: "notes/a.md", root: root))
+        XCTAssertEqual(Vault.resolveImage("near.png", note: "notes/a.md", root: root)?.lastPathComponent, "near.png")
+        XCTAssertEqual(Vault.resolveImage("assets/far.png", note: "notes/a.md", root: root)?.lastPathComponent, "far.png")
+        XCTAssertEqual(Vault.resolveImage("/assets/far.png", note: "notes/a.md", root: root)?.lastPathComponent, "far.png")
+        XCTAssertNil(Vault.resolveImage("gone.png", note: "notes/a.md", root: root))
+        XCTAssertNil(Vault.resolveImage("../../etc/passwd", note: "notes/a.md", root: root))
     }
 }

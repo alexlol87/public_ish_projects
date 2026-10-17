@@ -43,32 +43,32 @@ final class EndpointsTests: XCTestCase {
     }
 
     func testNoteTypesAndUnknownKeys() {
-        let p = NoteParser.parse(cart)
+        let p = Vault.parse(cart)
         XCTAssertEqual(p.type, "endpoint")
         XCTAssertEqual(p.frontmatter["owner"], "team-a")
         XCTAssertEqual(p.headings.map(\.title), ["Cart endpoints", "GET /cart", "DELETE /cart"])
-        XCTAssertEqual(NoteParser.parse("plain").type, "note")
-        let odd = NoteParser.parse("---\ntype: gizmo\nx: 1\n---\nbody")
+        XCTAssertEqual(Vault.parse("plain").type, "note")
+        let odd = Vault.parse("---\ntype: gizmo\nx: 1\n---\nbody")
         XCTAssertEqual(odd.type, "gizmo")
         XCTAssertEqual(odd.frontmatter["x"], "1")
     }
 
     func testCallsPerEndpointAndStatus() {
-        let p = NoteParser.parse(cart)
+        let p = Vault.parse(cart)
         XCTAssertEqual(p.calls.map(\.heading.title), ["GET /cart", "DELETE /cart"])
         XCTAssertEqual(p.calls[0].links.map(\.heading), ["POST /orders", "GET /stock"])
         XCTAssertEqual(p.status.first?.values, ["implemented": "true", "last_changed": "2026-01-02"])
     }
 
     func testCallsOutsideEndpointHeadingIsPlainList() {
-        let p = NoteParser.parse("# Misc\nCalls:\n- [[a]]\n## GET /x\nCalls:\n- [[b#GET /y]]")
+        let p = Vault.parse("# Misc\nCalls:\n- [[a]]\n## GET /x\nCalls:\n- [[b#GET /y]]")
         XCTAssertEqual(p.calls.map(\.heading.title), ["GET /x"])
         XCTAssertEqual(p.links.map(\.target), ["a", "b"])
     }
 
     func testUsesOnlyInClientNotes() {
-        XCTAssertEqual(NoteParser.parse(web).uses.first?.links.first?.target, "shop-cart/endpoints")
-        XCTAssertTrue(NoteParser.parse("# W\nUses:\n- [[a#GET /x]]").uses.isEmpty)
+        XCTAssertEqual(Vault.parse(web).uses.first?.links.first?.target, "shop-cart/endpoints")
+        XCTAssertTrue(Vault.parse("# W\nUses:\n- [[a#GET /x]]").uses.isEmpty)
     }
 
     func testGraphNodeTypesAndFoldedEdges() throws {
@@ -100,10 +100,35 @@ final class EndpointsTests: XCTestCase {
     }
 
     func testEndpointHeadingUnderCursor() {
-        let p = NoteParser.parse(cart)
+        let p = Vault.parse(cart)
         let ns = cart as NSString
         XCTAssertEqual(p.endpointHeading(at: ns.range(of: "[[shop-orders/endpoints#GET").location)?.title, "GET /cart")
         XCTAssertNil(p.endpointHeading(at: 0))
         XCTAssertNil(p.endpointHeading(at: ns.range(of: "# Cart").location + 3))
+    }
+
+    func testCallsBelongToTheEnclosingEndpointAcrossSubHeadings() {
+        let p = Vault.parse("## GET /a\n### Request\nCalls:\n- [[b#GET /b]]\n## Notes\nCalls:\n- [[c#GET /c]]\n")
+        XCTAssertEqual(p.calls.map(\.heading.title), ["GET /a"])
+        XCTAssertEqual(p.calls[0].links.map(\.target), ["b"])
+        let text = "## GET /a\n### Request\nbody\n## Notes\nmore"
+        let q = Vault.parse(text)
+        XCTAssertEqual(q.endpointHeading(at: (text as NSString).range(of: "body").location)?.title, "GET /a")
+        XCTAssertNil(q.endpointHeading(at: (text as NSString).range(of: "more").location))
+    }
+
+    func testCallsAcceptTrailingSpacesIndentedBulletsAndBacktickedMethods() {
+        let p = Vault.parse("## `GET /a`\nCalls: \t\n  - [[b#GET /b]]\n\t* [[c#GET /c]]\nStatus:\n  - implemented: true\n")
+        XCTAssertEqual(p.calls.map(\.heading.title), ["`GET /a`"])
+        XCTAssertEqual(p.calls[0].links.map(\.target), ["b", "c"])
+        XCTAssertEqual(p.status.first?.values, ["implemented": "true"])
+    }
+
+    func testBacktickedMethodHeadingsFoldIntoPlainEndpointNames() throws {
+        let root = try makeVault(["a.md": "## `GET /a`\nCalls:\n- [[b#GET /b]]\n", "b.md": "## GET /b\n"])
+        let g = try Vault.graph(in: root)
+        XCTAssertEqual(g.edges.first { $0.kind == .call }?.pairs, [EndpointPair(from: "GET /a", to: "GET /b")])
+        let r = try Vault.endpointRelations(path: "b.md", heading: "GET /b", in: root)
+        XCTAssertEqual(r.callsIn, [EndpointRef(path: "a.md", heading: "GET /a")])
     }
 }

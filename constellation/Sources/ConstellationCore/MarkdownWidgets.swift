@@ -35,8 +35,8 @@ extension MarkdownStyler {
 }
 
 /// Resolves an image path from a Note: Note-relative first, then Vault-relative. Never escapes the Vault.
-public enum ImagePaths {
-    public static func resolve(_ path: String, note: String, root: URL) -> URL? {
+enum ImagePaths {
+    static func resolve(_ path: String, note: String, root: URL) -> URL? {
         let rootPath = root.standardizedFileURL.path
         let noteDir = (note as NSString).deletingLastPathComponent
         let rel = path.hasPrefix("/") ? [String(path.dropFirst())] : [(noteDir as NSString).appendingPathComponent(path), path]

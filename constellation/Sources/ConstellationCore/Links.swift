@@ -13,9 +13,11 @@ public struct Backlink: Equatable {
 
 extension Vault {
     /// All searchable Note paths (app-only files excluded), sorted.
-    static func notePaths(in root: URL) throws -> [String] {
+    static func notePaths(in root: URL) throws -> [String] { notePaths(in: try load(root: root)) }
+
+    static func notePaths(in tree: VaultNode) -> [String] {
         func walk(_ n: VaultNode) -> [String] { n.isFolder ? n.children.flatMap(walk) : (n.isAppOnly || !n.relativePath.hasSuffix(".md") ? [] : [n.relativePath]) }
-        return walk(try load(root: root)).sorted()
+        return walk(tree).sorted()
     }
 
     /// Resolves by Vault path first, else by a unique Note name (case-insensitive, `.md` optional).
@@ -49,43 +51,40 @@ extension Vault {
         }
     }
 
-    /// Creates the missing Note for a broken Link (empty file; folders as needed) and returns its path.
-    @discardableResult
-    public static func createNote(forLink target: String, in root: URL) throws -> String {
-        guard case .broken(let path) = try resolve(target, in: root) else { return try resolve(target, in: root).path }
-        let url = root.appendingPathComponent(path)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "".write(to: url, atomically: true, encoding: .utf8)
-        return path
+    /// The edit that creates the missing Note for a broken Link (empty file, folders as needed); none if the Link resolves.
+    /// `resolve` tells where it lands. Writes nothing: the caller applies the edits.
+    public static func createNote(forLink target: String, in root: URL) throws -> [FileEdit] {
+        guard case .broken(let path) = try resolve(target, in: root) else { return [] }
+        return [FileEdit(path: path, range: NSRange(location: 0, length: 0), text: "", createsFile: true)]
     }
 
     /// Links in other Notes that resolve to `path`, in path then text order.
     public static func backlinks(to path: String, in root: URL) throws -> [Backlink] {
-        let paths = try notePaths(in: root)
+        backlinks(to: path, parsed: try parsedNotes(in: root))
+    }
+
+    static func backlinks(to path: String, parsed: [String: ParsedNote]) -> [Backlink] {
+        let paths = parsed.keys.sorted()
         var out: [Backlink] = []
         for p in paths where p != path {
-            let text = try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)
-            for l in NoteParser.parse(text).links where resolve(l.target, among: paths) == .note(path) {
-                out.append(Backlink(path: p, link: l))
-            }
+            for l in parsed[p]!.links where resolve(l.target, among: paths) == .note(path) { out.append(Backlink(path: p, link: l)) }
         }
         return out
     }
 
     /// Text to offer after `[[`: Note names, or `name#Heading` once the typed text contains `#`.
     public static func completions(for typed: String, in root: URL) throws -> [String] {
-        let paths = try notePaths(in: root)
+        completions(for: typed, parsed: try parsedNotes(in: root))
+    }
+
+    static func completions(for typed: String, parsed: [String: ParsedNote]) -> [String] {
+        let paths = parsed.keys.sorted()
         if let hash = typed.firstIndex(of: "#") {
             let target = String(typed[..<hash]), prefix = typed[typed.index(after: hash)...].lowercased()
             guard case .note(let p) = resolve(target, among: paths) else { return [] }
-            let text = try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)
-            return NoteParser.parse(text).headings.filter { $0.title.lowercased().hasPrefix(prefix) }.map { "\(target)#\($0.title)" }
+            return parsed[p]!.headings.filter { $0.title.lowercased().hasPrefix(prefix) }.map { "\(target)#\($0.title)" }
         }
         return paths.map { String($0.split(separator: "/").last!.dropLast(3)) }
             .filter { $0.lowercased().hasPrefix(typed.lowercased()) }
     }
-}
-
-extension LinkResolution {
-    var path: String { if case .note(let p) = self { return p } else { return "" } }
 }

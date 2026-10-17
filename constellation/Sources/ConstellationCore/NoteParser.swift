@@ -11,6 +11,8 @@ public struct NoteHeading: Equatable {
     public let level: Int
     public let title: String
     public let range: NSRange  // whole heading line without newline
+    /// The title without backticks (`` `GET /a` `` -> `GET /a`), which is how Links name an Endpoint.
+    public var plainTitle: String { title.replacingOccurrences(of: "`", with: "") }
 }
 
 public struct TagRef: Equatable {
@@ -29,9 +31,18 @@ public struct ParsedNote: Equatable {
     /// Missing `type` is a plain Note.
     public var type: String { frontmatter["type"] ?? "note" }
 
-    /// The Endpoint heading the offset sits under (nearest heading above it), if that heading is an Endpoint.
+    /// Headings that name an Endpoint (`GET /path`, optionally in backticks).
+    public var endpoints: [NoteHeading] { headings.filter { NoteParser.isEndpoint($0.title) } }
+
+    /// The Endpoint the offset sits in: the nearest Endpoint heading above it, unless a heading of the same or a higher
+    /// level (a sibling or parent section) comes in between. Sub-headings such as `### Request` stay inside the Endpoint.
     public func endpointHeading(at offset: Int) -> NoteHeading? {
-        headings.last { $0.range.location <= offset }.flatMap { NoteParser.isEndpoint($0.title) ? $0 : nil }
+        var shallowest = Int.max
+        for h in headings.reversed() where h.range.location <= offset {
+            if NoteParser.isEndpoint(h.title) { return shallowest <= h.level ? nil : h }
+            shallowest = min(shallowest, h.level)
+        }
+        return nil
     }
 }
 
@@ -45,10 +56,9 @@ public struct EndpointStatus: Equatable {
     public let values: [String: String]  // implemented, last_changed, missing, ...
 }
 
-/// Pure Note parser. Skips fenced and inline code. Later tickets (Tags, Calls, tasks) add fields to `ParsedNote`
-/// and a pattern in `parseLine`.
-public enum NoteParser {
-    public static func parse(_ text: String) -> ParsedNote {
+/// Pure Note parser behind `Vault.parse`. Skips fenced and inline code. New fields go on `ParsedNote` plus a pattern in `parseLine`.
+enum NoteParser {
+    static func parse(_ text: String) -> ParsedNote {
         let ns = text as NSString
         var out = ParsedNote()
         var inFence = false
@@ -137,9 +147,9 @@ public enum NoteParser {
     }
 }
 
-// Endpoints, Calls and Uses (ticket 11): separate functions to keep ticket merges small.
+// Endpoints, Calls and Uses.
 extension NoteParser {
-    private static let endpointRe = regex("^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /")
+    private static let endpointRe = regex("^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /")
 
     static func isEndpoint(_ title: String) -> Bool {
         endpointRe.firstMatch(in: title, range: NSRange(location: 0, length: (title as NSString).length)) != nil
@@ -176,23 +186,25 @@ extension NoteParser {
         let isClient = out.type == "client"
         var i = 0
         while i < lines.count {
-            let label = lines[i].0
+            let label = lines[i].0.trimmingCharacters(in: .whitespaces)
             i += 1
             guard label == "Calls:" || label == "Uses:" || label == "Status:" else { continue }
             var bullets: [(String, NSRange)] = []
-            while i < lines.count, lines[i].0.hasPrefix("- ") || lines[i].0.hasPrefix("* ") { bullets.append(lines[i]); i += 1 }
+            while i < lines.count, case let b = lines[i].0.trimmingCharacters(in: .whitespaces), b.hasPrefix("- ") || b.hasPrefix("* ") {
+                bullets.append((b, lines[i].1)); i += 1
+            }
             let at = lines[i - bullets.count - 1].1.location
             let heading = out.headings.last { $0.range.location <= at }
             switch label {
             case "Calls:":
-                guard let h = heading, isEndpoint(h.title) else { continue }
+                guard let h = out.endpointHeading(at: at) else { continue }
                 out.calls.append(SectionLinks(heading: h, links: links(in: bullets, out)))
             case "Uses:":
                 guard isClient else { continue }
                 let h = heading ?? NoteHeading(level: 0, title: "", range: NSRange(location: 0, length: 0))
                 out.uses.append(SectionLinks(heading: h, links: links(in: bullets, out)))
             default:
-                guard let h = heading, isEndpoint(h.title) else { continue }
+                guard let h = out.endpointHeading(at: at) else { continue }
                 var v: [String: String] = [:]
                 for (b, _) in bullets {
                     let kv = b.dropFirst(2).split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }

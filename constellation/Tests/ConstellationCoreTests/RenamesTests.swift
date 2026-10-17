@@ -14,13 +14,9 @@ final class RenamesTests: XCTestCase {
         return root
     }
     private func read(_ root: URL, _ p: String) throws -> String { try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8) }
+    /// Names of the ghost Nodes the graph shows for broken Links.
     private func brokenLinks(_ root: URL) throws -> [String] {
-        let paths = try Vault.notePaths(in: root)
-        return try paths.flatMap { p in
-            try NoteParser.parse(read(root, p)).links.filter { l in
-                if case .broken = Vault.resolve(l.target, among: paths) { return true } else { return false }
-            }.map { "\(p): \($0.target)" }
-        }
+        try Vault.graph(in: root).nodes.filter { $0.kind == .ghost }.map(\.name)
     }
 
     private let files = [
@@ -38,7 +34,7 @@ final class RenamesTests: XCTestCase {
         let undo = try FileEdit.apply(edits, root: root)
         XCTAssertEqual(try read(root, "acme/orders.md"), "See [[basket]] and [[acme/basket#Totals|sum]] and [[acme/basket.md]]. `[[cart]]`")
         XCTAssertEqual(try read(root, "other.md"), "[[basket#Totals]] [[missing]]")
-        XCTAssertEqual(try brokenLinks(root), ["other.md: missing"])
+        XCTAssertEqual(try brokenLinks(root), ["missing"])
 
         _ = try FileEdit.apply(undo, root: root)
         XCTAssertEqual(try read(root, "acme/orders.md"), files["acme/orders.md"])
@@ -51,7 +47,7 @@ final class RenamesTests: XCTestCase {
         let undo = try FileEdit.apply(try Vault.moveNote("acme/cart.md", toFolder: "shop/v2", in: root), root: root)
         XCTAssertEqual(try read(root, "acme/orders.md"), "See [[cart]] and [[shop/v2/cart#Totals|sum]] and [[shop/v2/cart.md]]. `[[cart]]`")
         XCTAssertEqual(try read(root, "other.md"), "[[Cart#Totals]] [[missing]]")
-        XCTAssertEqual(try brokenLinks(root), ["other.md: missing"])
+        XCTAssertEqual(try brokenLinks(root), ["missing"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("shop/v2/cart.md").path))
         let redo = try FileEdit.apply(undo, root: root)
         for (p, text) in files { XCTAssertEqual(try read(root, p), text) }
@@ -91,8 +87,8 @@ final class RenamesTests: XCTestCase {
         let undo = try FileEdit.apply(try Vault.renameTag("team/pay", to: "squad/billing", in: root), root: root)
         XCTAssertEqual(try read(root, "a.md"), "---\ntags: [squad/billing, other]\n---\nText #squad/billing and #squad/billing/api, not #teamwork or `#team/pay`.")
         XCTAssertEqual(try read(root, "b.md"), "---\ntags:\n  - team\n---\n#team #squad/billing")
-        let idx = try TagIndex(root: root)
-        XCTAssertNil(idx.notes(for: "team/pay").first)
+        let idx = try VaultIndex(root: root)
+        XCTAssertNil(idx.tagHits(for: "team/pay").first)
         _ = try FileEdit.apply(undo, root: root)
         XCTAssertEqual(try read(root, "b.md"), "---\ntags:\n  - team\n---\n#team #Team/Pay")
     }

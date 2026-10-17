@@ -1,7 +1,7 @@
 import Foundation
 
 /// In-memory search over a Vault's folder names, Note names and Note text. Case- and diacritic-insensitive substring match.
-/// App-only files are never indexed. Build once with `init(root:)`, then feed touched paths to `update(paths:)`.
+/// App-only files are never indexed. Owned by `VaultIndex`, which builds it once and feeds it touched paths.
 public struct SearchIndex {
     public struct TextMatch: Equatable, Sendable {
         public let path: String
@@ -19,14 +19,18 @@ public struct SearchIndex {
         public func isArchived(_ path: String) -> Bool { Vault.isArchive(path) }
     }
 
-    private struct Entry { let folded: [UInt16]; let text: [UInt16]; let aligned: Bool; let foldedName: String; let tags: Set<String> }
+    /// `origin`: folded unit i came from original units start[i]..<end[i]. nil for ASCII text, where folding keeps every offset.
+    private struct Entry {
+        let folded: [UInt16]; let text: [UInt16]; let foldedName: String; let tags: Set<String>
+        let origin: (start: [Int], end: [Int])?
+    }
 
-    public static let maxMatches = 200
-    public let root: URL
+    private static let maxMatches = 200
+    let root: URL
     private var folders = Set<String>()
     private var notes: [String: Entry] = [:]
 
-    public init(root: URL) throws {
+    init(root: URL) throws {
         self.root = root
         try add(folder: try Vault.load(root: root))
     }
@@ -43,16 +47,32 @@ public struct SearchIndex {
     private mutating func addNote(_ path: String) throws {
         let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
         let name = String(path.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
-        let f = Array(Self.fold(text).utf16), t = Array(text.utf16)
-        notes[path] = Entry(folded: f, text: t, aligned: f.count == t.count, foldedName: Self.fold(name),
+        let t = Array(text.utf16)
+        let f: [UInt16], origin: (start: [Int], end: [Int])?
+        if text.utf8.allSatisfy({ $0 < 128 }) { f = Array(Self.fold(text).utf16); origin = nil }
+        else { let k = Self.foldKeepingOrigins(text); f = k.0; origin = k.1 }
+        notes[path] = Entry(folded: f, text: t, foldedName: Self.fold(name),
                            tags: Set(NoteParser.parse(text).tags.flatMap { t in
                                let c = t.name.lowercased().split(separator: "/")
                                return (1...c.count).map { c[..<$0].joined(separator: "/") }
-                           }))
+                           }), origin: origin)
+    }
+
+    /// Folds one Character at a time so every folded unit knows which original units it came from
+    /// (folding changes the UTF-16 length: "ß" -> "ss", "e" + combining accent -> "e").
+    private static func foldKeepingOrigins(_ text: String) -> ([UInt16], (start: [Int], end: [Int])?) {
+        var folded: [UInt16] = [], start: [Int] = [], end: [Int] = []
+        var pos = 0
+        for ch in text {
+            let n = ch.utf16.count
+            for u in (ch.isASCII ? ch.lowercased() : fold(String(ch))).utf16 { folded.append(u); start.append(pos); end.append(pos + n) }
+            pos += n
+        }
+        return (folded, (start, end))
     }
 
     /// Re-reads each touched path (create, edit, delete, move all arrive as paths). No full reload.
-    public mutating func update(paths: [String]) throws {
+    mutating func update(paths: [String]) throws {
         for path in paths {
             let parts = path.split(separator: "/")
             if parts.isEmpty || parts.contains(where: { $0.hasPrefix(".") }) || Vault.isAppOnly(path) { continue }
@@ -68,7 +88,7 @@ public struct SearchIndex {
         }
     }
 
-    public func search(_ query: String) -> Results {
+    func search(_ query: String) -> Results {
         // `#tag` terms filter Notes (a parent Tag matches its children); the rest is the text query.
         var words: [Substring] = [], wanted: [String] = []
         for w in query.split(whereSeparator: \.isWhitespace) {
@@ -89,15 +109,16 @@ public struct SearchIndex {
         for path in hits where r.matches.count < Self.maxMatches {
             let e = notes[path]!
             var from = 0
-            // shortcut: one match per sentence; if folding changed the text length the offsets can't be shared, so such Notes get no text matches.
-            while e.aligned, r.matches.count < Self.maxMatches, let at = Self.find(qU, in: e.folded, from: from) {
-                var s = at, t = at + qU.count
+            // One match per sentence. `at` is in folded text; `hitStart`/`hitEnd` are the same hit in the original text.
+            while r.matches.count < Self.maxMatches, let at = Self.find(qU, in: e.folded, from: from) {
+                let (hitStart, hitEnd) = e.origin.map { ($0.start[at], $0.end[at + qU.count - 1]) } ?? (at, at + qU.count)
+                var s = hitStart, t = hitEnd
                 while s > 0, !Self.isBreak(e.text, before: s) { s -= 1 }
                 while t < e.text.count, !Self.isBreak(e.text, before: t) { t += 1 }
-                while s < at, Self.isSpace(e.text[s]) { s += 1 }
+                while s < hitStart, Self.isSpace(e.text[s]) { s += 1 }
                 let sentence = String(decoding: e.text[s..<t], as: UTF16.self)
-                r.matches.append(TextMatch(path: path, sentence: sentence, hit: NSRange(location: at - s, length: qU.count), offset: at))
-                from = t
+                r.matches.append(TextMatch(path: path, sentence: sentence, hit: NSRange(location: hitStart - s, length: hitEnd - hitStart), offset: hitStart))
+                from = e.origin.map { o in o.start.firstIndex { $0 >= t } ?? o.start.count } ?? t
             }
         }
         return r

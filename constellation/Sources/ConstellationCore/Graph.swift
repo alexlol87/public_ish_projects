@@ -27,6 +27,8 @@ public struct VaultGraph: Equatable {
     public var nodes: [GraphNode]
     public var edges: [GraphEdge]
 
+    public init(nodes: [GraphNode], edges: [GraphEdge]) { self.nodes = nodes; self.edges = edges }
+
     /// What clicking a Node opens: a Note itself, a folder's README.md; nil for ghosts and folders without one.
     public func openPath(for id: String) -> String? {
         guard let n = nodes.first(where: { $0.id == id }) else { return nil }
@@ -48,8 +50,19 @@ public struct VaultGraph: Equatable {
 extension Vault {
     /// Archive Notes are left out unless `includeArchive`. Every Note and folder is a Node; Containment and Link edges; broken Links become ghost Nodes. App-only files are left out.
     public static func graph(in root: URL, includeArchive: Bool = false) throws -> VaultGraph {
-        let tree = try load(root: root)
-        let paths = try notePaths(in: root).filter { includeArchive || !isArchive($0) }
+        graph(tree: try load(root: root), parsed: try parsedNotes(in: root), includeArchive: includeArchive)
+    }
+
+    /// Every searchable Note parsed once, by path. `VaultIndex` keeps this and patches it on `ingest`.
+    static func parsedNotes(in root: URL) throws -> [String: ParsedNote] {
+        var out: [String: ParsedNote] = [:]
+        for p in try notePaths(in: root) { out[p] = NoteParser.parse(try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)) }
+        return out
+    }
+
+    /// The graph from an already-loaded tree and parsed Notes (no disk reads).
+    static func graph(tree: VaultNode, parsed all: [String: ParsedNote], includeArchive: Bool) -> VaultGraph {
+        let paths = all.keys.sorted().filter { includeArchive || !isArchive($0) }
         var nodes: [GraphNode] = [], edges: [GraphEdge] = []
         var nodeIndex: [String: Int] = [:]
         func walk(_ n: VaultNode) {
@@ -60,7 +73,7 @@ extension Vault {
                 if c.isFolder { walk(c) }
             }
         }
-        nodes.append(GraphNode(id: "", name: root.lastPathComponent, kind: .folder))
+        nodes.append(GraphNode(id: "", name: tree.name, kind: .folder))
         walk(tree)
         let index = PathIndex(paths)
         var ghosts = Set<String>(), seen = Set<String>()
@@ -74,12 +87,11 @@ extension Vault {
             }
         }
         for p in paths {
-            let text = try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8)
-            let parsed = NoteParser.parse(text)
+            let parsed = all[p]!
             if let i = nodeIndex[p] { nodes[i].noteType = parsed.type; nodes[i].tags = Set(parsed.tags.map { $0.name.lowercased() }).sorted() }
             // A Call/Uses Link gets only its Call/Uses edge, not a plain Link edge too.
             let sectioned = Set((parsed.calls + parsed.uses).flatMap { $0.links.map(\.range.location) })
-            for s in parsed.calls { for l in s.links { fold(.call, p, l.target, EndpointPair(from: s.heading.title, to: l.heading ?? "")) } }
+            for s in parsed.calls { for l in s.links { fold(.call, p, l.target, EndpointPair(from: s.heading.plainTitle, to: l.heading ?? "")) } }
             for s in parsed.uses { for l in s.links { fold(.uses, p, l.target, EndpointPair(from: "", to: l.heading ?? "")) } }
             for l in parsed.links where !sectioned.contains(l.range.location) {
                 var to: String
@@ -176,16 +188,17 @@ extension Vault {
     public static func endpointRelations(path: String, heading: String, in root: URL) throws -> EndpointRelations {
         let paths = try notePaths(in: root)
         var r = EndpointRelations()
+        let plain = heading.replacingOccurrences(of: "`", with: "")
         func hits(_ l: WikiLink) -> Bool {
-            resolve(l.target, among: paths) == .note(path) && l.heading?.lowercased() == heading.lowercased()
+            resolve(l.target, among: paths) == .note(path) && l.heading?.lowercased() == plain.lowercased()
         }
         for p in paths {
             let parsed = NoteParser.parse(try String(contentsOf: root.appendingPathComponent(p), encoding: .utf8))
             for s in parsed.calls {
-                if p == path && s.heading.title == heading {
+                if p == path && s.heading.plainTitle == plain {
                     for l in s.links { if case .note(let t) = resolve(l.target, among: paths) { r.callsOut.append(EndpointRef(path: t, heading: l.heading)) } }
                 }
-                if s.links.contains(where: hits) { r.callsIn.append(EndpointRef(path: p, heading: s.heading.title)) }
+                if s.links.contains(where: hits) { r.callsIn.append(EndpointRef(path: p, heading: s.heading.plainTitle)) }
             }
             if parsed.uses.contains(where: { $0.links.contains(where: hits) }) { r.usesIn.append(EndpointRef(path: p, heading: nil)) }
         }

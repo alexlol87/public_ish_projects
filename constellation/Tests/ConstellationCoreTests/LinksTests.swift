@@ -52,14 +52,20 @@ final class LinksTests: XCTestCase {
 
     func testCreateNoteMakesFileAndResolves() throws {
         let root = try makeVault(files)
-        let path = try Vault.createNote(forLink: "ideas/new", in: root)
-        XCTAssertEqual(path, "ideas/new.md")
+        let edits = try Vault.createNote(forLink: "ideas/new", in: root)
+        XCTAssertEqual(edits, [FileEdit(path: "ideas/new.md", range: NSRange(location: 0, length: 0), text: "", createsFile: true)])
+        XCTAssertEqual(try Vault.resolve("ideas/new", in: root), .broken(createPath: "ideas/new.md"), "returns edits, writes nothing")
+        try FileEdit.apply(edits, root: root)
         XCTAssertEqual(try Vault.resolve("ideas/new", in: root), .note("ideas/new.md"))
+    }
+
+    func testCreateNoteForAResolvedLinkIsNoEdits() throws {
+        XCTAssertEqual(try Vault.createNote(forLink: "overview", in: makeVault(files)), [])
     }
 
     func testParserFindsLinksWithHeadingAndAlias() {
         let text = "See [[api]], [[overview#Goals]] and [[notes|the notes]] or [[a/b#H|x]]."
-        let links = NoteParser.parse(text).links
+        let links = Vault.parse(text).links
         XCTAssertEqual(links.map(\.target), ["api", "overview", "notes", "a/b"])
         XCTAssertEqual(links.map(\.heading), [nil, "Goals", nil, "H"])
         XCTAssertEqual(links.map(\.alias), [nil, nil, "the notes", "x"])
@@ -68,12 +74,12 @@ final class LinksTests: XCTestCase {
 
     func testLinksInCodeAreIgnored() {
         let text = "`[[inline]]`\n```\n[[fenced]]\n```\n[[real]]"
-        XCTAssertEqual(NoteParser.parse(text).links.map(\.target), ["real"])
+        XCTAssertEqual(Vault.parse(text).links.map(\.target), ["real"])
     }
 
     func testParserFindsHeadingsOutsideCode() {
         let text = "# One\n```\n# not\n```\n## Two\n"
-        let hs = NoteParser.parse(text).headings
+        let hs = Vault.parse(text).headings
         XCTAssertEqual(hs.map(\.title), ["One", "Two"])
         XCTAssertEqual(hs.map(\.level), [1, 2])
         XCTAssertEqual((text as NSString).substring(with: hs[1].range), "## Two")

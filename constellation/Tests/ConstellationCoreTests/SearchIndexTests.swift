@@ -23,7 +23,7 @@ final class SearchIndexTests: XCTestCase {
             "cafe-notes.md": "We met at the Café on Friday. Bring the budget.",
             "Résumé.md": "Plain text.",
         ])
-        let index = try SearchIndex(root: root)
+        let index = try VaultIndex(root: root)
 
         XCTAssertEqual(index.search("application").folders, ["Applications"])
         XCTAssertEqual(index.search("resume").notes, ["Résumé.md"])
@@ -39,7 +39,7 @@ final class SearchIndexTests: XCTestCase {
     func testSentenceAndOffsetPointAtTheHit() throws {
         let text = "# Title\n\nFirst sentence. The deadline moves! Last one?"
         let root = try makeVault(["a.md": text])
-        let m = try SearchIndex(root: root).search("deadline").matches
+        let m = try VaultIndex(root: root).search("deadline").matches
         XCTAssertEqual(m.map(\.sentence), ["The deadline moves!"])
         XCTAssertEqual((text as NSString).substring(with: NSRange(location: m[0].offset, length: 8)), "deadline")
     }
@@ -47,29 +47,43 @@ final class SearchIndexTests: XCTestCase {
     func testAppOnlyFilesAndFoldersAreExcluded() throws {
         let root = try makeVault(["AGENTS.md": "secret rule", "templates/daily.md": "secret template", "tags.md": "secret",
                                   "pub.md": "visible secret"])
-        let r = try SearchIndex(root: root).search("secret")
+        let r = try VaultIndex(root: root).search("secret")
         XCTAssertEqual(r.matches.map(\.path), ["pub.md"])
-        XCTAssertTrue(try SearchIndex(root: root).search("templates").folders.isEmpty)
-        XCTAssertTrue(try SearchIndex(root: root).search("agents").notes.isEmpty)
+        XCTAssertTrue(try VaultIndex(root: root).search("templates").folders.isEmpty)
+        XCTAssertTrue(try VaultIndex(root: root).search("agents").notes.isEmpty)
     }
 
     func testUpdateAppliesCreateEditDeleteAndFolderRemoval() throws {
         let root = try makeVault(["a.md": "alpha", "dir/b.md": "beta"])
-        var index = try SearchIndex(root: root)
+        let index = try VaultIndex(root: root)
         XCTAssertEqual(index.search("beta").matches.count, 1)
 
         try write(root, "a.md", "gamma")
         try write(root, "new/c.md", "gamma too")
-        try index.update(paths: ["a.md", "new/c.md"])
+        try index.ingest(paths: ["a.md", "new/c.md"])
         XCTAssertTrue(index.search("alpha").matches.isEmpty)
         XCTAssertEqual(index.search("gamma").matches.map(\.path).sorted(), ["a.md", "new/c.md"])
         XCTAssertEqual(index.search("new").folders, ["new"])
 
         try FileManager.default.removeItem(at: root.appendingPathComponent("dir"))
-        try index.update(paths: ["dir"])
+        try index.ingest(paths: ["dir"])
         XCTAssertTrue(index.search("beta").matches.isEmpty)
         XCTAssertTrue(index.search("dir").folders.isEmpty)
         XCTAssertTrue(index.search("b.md").notes.isEmpty)
+    }
+
+    func testHitsAfterLengthChangingFoldsMapBackToTheOriginalText() throws {
+        // "ß" folds to "ss" (longer) and a decomposed "é" to "e" (shorter); matches after them must still point at the original.
+        let text = "Die Straße ist lang. Cafe\u{301} am Eck. Der Termin steht."
+        let index = try VaultIndex(root: try makeVault(["a.md": text]))
+        let ns = text as NSString
+        for (query, shown) in [("strasse", "Straße"), ("cafe", "Cafe\u{301}"), ("termin", "Termin")] {
+            let m = try XCTUnwrap(index.search(query).matches.first, query)
+            XCTAssertEqual(ns.substring(with: NSRange(location: m.offset, length: (shown as NSString).length)), shown, query)
+            XCTAssertEqual((m.sentence as NSString).substring(with: m.hit), shown, query)
+        }
+        XCTAssertEqual(index.search("termin").matches.map(\.sentence), ["Der Termin steht."])
+        XCTAssertEqual(index.search("lang").matches.map(\.sentence), ["Die Straße ist lang."])
     }
 
     func testBenchmark5000NotesUnder50ms() throws {
@@ -77,7 +91,7 @@ final class SearchIndexTests: XCTestCase {
         for i in 0..<5000 {
             files["f\(i % 50)/note-\(i).md"] = (0..<10).map { "Sentence \($0) of note \(i) talks about topic\($0 * i % 97)." }.joined(separator: " ")
         }
-        let index = try SearchIndex(root: try makeVault(files))
+        let index = try VaultIndex(root: try makeVault(files))
         let start = Date()
         let r = index.search("topic42")
         let ms = Date().timeIntervalSince(start) * 1000

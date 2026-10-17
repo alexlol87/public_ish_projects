@@ -3,14 +3,17 @@ import Foundation
 /// Pure force-directed layout (repulsion, springs, centring). Step it from a timer; positions are not persisted.
 /// Repulsion uses a Barnes-Hut quadtree (O(n log n)), so 5,000 Nodes stay interactive.
 public struct ForceLayout {
-    public struct Point: Equatable { public var x: Double; public var y: Double }
+    public struct Point: Equatable {
+        public var x: Double; public var y: Double
+        public init(x: Double, y: Double) { self.x = x; self.y = y }
+    }
     public private(set) var positions: [String: Point] = [:]
     private var velocities: [String: Point] = [:]
     private var order: [String] = []  // stable iteration order
     private var edges: [(String, String)]
-    public var spring = 60.0, repulsion = 2000.0, damping = 0.85
+    private let spring = 60.0, repulsion = 2000.0, damping = 0.85
     /// Barnes-Hut opening angle: larger is faster and rougher.
-    public var theta = 0.8
+    private let theta = 0.8
 
     public init(ids: [String], edges: [(String, String)]) {
         self.edges = edges
