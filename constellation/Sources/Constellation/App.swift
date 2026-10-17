@@ -6,7 +6,14 @@ import SwiftUI
 struct ConstellationApp: App {
     var body: some Scene {
         WindowGroup { RootView() }
+            .commands { CommandGroup(after: .sidebar) { OpenGraphButton() } }
+        Window("Graph", id: "graph") { GraphView() }
     }
+}
+
+struct OpenGraphButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View { Button("Graph") { openWindow(id: "graph") }.keyboardShortcut("g", modifiers: .command) }
 }
 
 struct RootView: View {
@@ -107,7 +114,10 @@ struct RootView: View {
         do {
             tree = try Vault.load(root: url); search = try SearchIndex(root: url); tags = try TagIndex(root: url); root = url; tabs = NoteTabs(root: url); error = nil
             UserDefaults.standard.set(url.path, forKey: "lastVault")
+            GraphModel.shared.onOpen = { go($0, reveal: nil) }
+            GraphModel.shared.root = url
             watcher = VaultWatcher(root: url) { paths in
+                GraphModel.shared.reload()
                 if let t = tree, let fresh = try? t.refreshed(paths: paths, root: url) { tree = fresh }
                 try? search?.update(paths: paths)
                 try? tags?.update(paths: paths)
