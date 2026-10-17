@@ -97,11 +97,19 @@ struct EditorView: NSViewRepresentable {
             restyle(tv)
         }
 
+        private var inserted = false
+
+        func textView(_ tv: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            inserted = !(replacementString ?? "").isEmpty
+            return true
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             restyle(tv)
             onChange(tv.string)
-            if LinkTextView.typedLinkPrefix(in: tv) != nil || LinkTextView.typedTagPrefix(in: tv) != nil { tv.complete(nil) }  // typing after `[[` opens autocomplete
+            // Typing after `[[` or `#` opens autocomplete; deleting must not, or the popup re-inserts what was just deleted.
+            if inserted, LinkTextView.typedLinkPrefix(in: tv) != nil || LinkTextView.typedTagPrefix(in: tv) != nil { tv.complete(nil) }
         }
 
         /// Click on a task checkbox: ask the Vault for the edits (archive move, or a plain toggle) and apply them as one undo step.

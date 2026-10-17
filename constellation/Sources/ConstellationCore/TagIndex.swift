@@ -98,7 +98,7 @@ public struct TagIndex {
             var comps: [Substring] = []
             for c in o.tag.split(separator: "/") { comps.append(c); all.insert(comps.joined(separator: "/")) }
         } }
-        return all.filter { $0.hasPrefix(q) }.sorted()
+        return all.filter { $0.hasPrefix(q) && $0 != q }.sorted()  // an exact match offers nothing new and loops the popup
     }
 
     /// The Tag text typed after a `#` at the end of `line` (a `#` that would start a Tag), else nil.

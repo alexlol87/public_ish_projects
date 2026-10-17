@@ -66,10 +66,18 @@ final class TagTests: XCTestCase {
         XCTAssertEqual(idx.tagHits(for: "team/payments").map(\.path), ["a.md"])
     }
 
+    /// A fully typed Tag must not be offered back: accepting it re-inserts the text, which re-opens completion forever.
+    func testCompletionsNeverOfferExactlyWhatIsTyped() throws {
+        let idx = try makeIndex(["a.md": "#acme #team/payments"])
+        XCTAssertEqual(idx.tagCompletions(for: "acme"), [])
+        XCTAssertEqual(idx.tagCompletions(for: "ACME"), [])
+        XCTAssertEqual(idx.tagCompletions(for: "team"), ["team/payments"])
+    }
+
     func testCompletionsAndUpdate() throws {
         let idx = try makeIndex(["a.md": "#team/payments #tax"])
         XCTAssertEqual(idx.tagCompletions(for: "ta"), ["tax"])
-        XCTAssertEqual(idx.tagCompletions(for: "TEAM"), ["team", "team/payments"])
+        XCTAssertEqual(idx.tagCompletions(for: "TEAM"), ["team/payments"])
         try "#taxes".write(to: idx.root.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
         try idx.ingest(paths: ["a.md"])
         XCTAssertEqual(idx.tagCompletions(for: "ta"), ["taxes"])
