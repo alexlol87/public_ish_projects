@@ -78,6 +78,9 @@ pub fn lines(text: &str) -> Vec<Line<'_>> {
 
 /// Case- and diacritic-insensitive form: "Café" -> "cafe", "ß" -> "ss".
 pub fn fold(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_ascii_lowercase();
+    }
     s.chars().flat_map(fold_char).collect()
 }
 

@@ -145,10 +145,13 @@ fn benchmark_5000_notes() {
         .collect();
     let v = make_vault(&files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect::<Vec<_>>());
     let ix = VaultIndex::open(v.path()).unwrap();
-    let start = Instant::now();
-    let r = ix.search("topic42");
-    let ms = start.elapsed().as_secs_f64() * 1000.0;
-    assert!(!r.matches.is_empty());
-    // The 50 ms budget is for release builds; unoptimized code only has to stay usable.
-    assert!(ms < if cfg!(debug_assertions) { 1000.0 } else { 50.0 }, "{ms} ms");
+    // A rare word, and one in every Note (all hits get sorted: that used to take ~80 ms).
+    for q in ["topic42", "note"] {
+        let start = Instant::now();
+        let r = ix.search(q);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        assert!(!r.matches.is_empty());
+        // The 50 ms budget is for release builds; unoptimized code only has to stay usable.
+        assert!(ms < if cfg!(debug_assertions) { 1000.0 } else { 50.0 }, "{q}: {ms} ms");
+    }
 }

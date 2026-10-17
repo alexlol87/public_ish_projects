@@ -2,7 +2,7 @@
 //! Owned by `VaultIndex`, which feeds it the Notes (app-only files are never given to it).
 
 use crate::parser::{is_tag_name, TagRef};
-use crate::text::{ci_cmp, fold, fold_char};
+use crate::text::{fold, fold_char};
 use crate::vault::is_archive;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -193,6 +193,7 @@ impl SearchIndex {
 
 fn sorted<'a>(items: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut v: Vec<String> = items.cloned().collect();
-    v.sort_by(|a, b| ci_cmp(a, b));
+    // Same order as `ci_cmp`, folding each path once instead of on every comparison.
+    v.sort_by_cached_key(|p| (fold(p), p.clone()));
     v
 }
