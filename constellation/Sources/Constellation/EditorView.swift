@@ -10,6 +10,7 @@ struct EditorView: NSViewRepresentable {
     let root: URL
     var notePath = ""
     var reveal: Reveal?
+    var onCursor: (Int) -> Void = { _ in }
     let onChange: (String) -> Void
     let onFollow: (WikiLink) -> Void
 
@@ -41,6 +42,7 @@ struct EditorView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.onChange = onChange
+        context.coordinator.onCursor = onCursor
         context.coordinator.onFollow = onFollow
         if let reveal, reveal.id != context.coordinator.lastReveal, let tv = nsView.documentView as? NSTextView {
             context.coordinator.lastReveal = reveal.id
@@ -56,6 +58,7 @@ struct EditorView: NSViewRepresentable {
         let notePath: String
         var onFollow: (WikiLink) -> Void
         var lastReveal: UUID?
+        var onCursor: (Int) -> Void = { _ in }
         init(root: URL, notePath: String, onChange: @escaping (String) -> Void, onFollow: @escaping (WikiLink) -> Void) {
             self.root = root; self.notePath = notePath; self.onChange = onChange; self.onFollow = onFollow
         }
@@ -82,6 +85,7 @@ struct EditorView: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !restyling, let tv = notification.object as? NSTextView else { return }
+            onCursor(tv.selectedRange().location)
             restyle(tv)
         }
 
