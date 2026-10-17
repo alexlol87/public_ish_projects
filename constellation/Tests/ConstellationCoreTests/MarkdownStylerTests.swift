@@ -63,4 +63,16 @@ final class MarkdownStylerTests: XCTestCase {
         let out = MarkdownStyler.style("**a**\n", cursorLine: MarkdownStyler.lineRange(containing: 3, in: "**a**\n"))
         XCTAssertEqual(out.hidden, [])
     }
+
+    func testSelectionSpanningLinesKeepsMarkersOnEveryTouchedLine() {
+        let text = "**a**\n**b**\n**c**"
+        let sel = MarkdownStyler.lineRange(covering: r(3, 5), in: text)  // from line 1 into line 2
+        XCTAssertEqual(sel, r(0, 12))
+        XCTAssertEqual(MarkdownStyler.style(text, cursorLine: sel).hidden, [r(12, 2), r(15, 2)])
+    }
+
+    func testSelectionEndingAtLineStartDoesNotTouchNextLine() {
+        let text = "**a**\n**b**"
+        XCTAssertEqual(MarkdownStyler.lineRange(covering: r(0, 6), in: text), r(0, 6))
+    }
 }
