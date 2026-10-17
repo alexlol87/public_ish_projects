@@ -1,7 +1,8 @@
 name: constellation
 
-# Constellation, the macOS notes app in constellation/: tests (warnings are errors), the .app bundle and a launch test
-# against a fixture Vault. Runs only when this project changes.
+# Constellation, the Tauri 2 notes app for Linux and macOS in constellation/: lint and tests (warnings are errors),
+# bundles for macOS (universal) and Linux (x86_64, aarch64), each launch-tested against a fixture Vault.
+# Runs only when this project changes.
 on:
   pull_request:
     paths:
@@ -24,27 +25,100 @@ defaults:
   run:
     working-directory: constellation
 
+env:
+  LINUX_DEPS: libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev build-essential curl file xvfb
+
 jobs:
-  build:
-    name: build, test, launch
-    runs-on: macos-15
+  test:
+    name: lint and test
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain
-        run: swift --version
+      - name: Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_DEPS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: constellation/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: constellation
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --workspace
 
-      - name: Unit tests (warnings are errors)
-        run: swift test -Xswiftc -warnings-as-errors
+  bundle:
+    name: bundle (${{ matrix.name }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos, os: macos-15, args: '--target universal-apple-darwin' }
+          - { name: linux-x86_64, os: ubuntu-24.04, args: '--bundles deb,appimage' }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, args: '--bundles deb,appimage' }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_DEPS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: constellation/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: constellation
+          key: ${{ matrix.name }}
+      - run: npm ci
+      - name: Build the bundles
+        run: npm run tauri build -- ${{ matrix.args }}
 
-      - name: Build the app bundle
-        run: scripts/build-app.sh
+      - name: Collect artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p out
+          app=$(find target -type d -path '*/release/bundle/macos/Constellation.app' | head -n1)
+          dmg=$(find target -type f -path '*/release/bundle/dmg/*.dmg' | head -n1)
+          test -n "$app" && test -n "$dmg"
+          codesign --verify --strict --verbose=2 "$app"
+          lipo -archs "$app/Contents/MacOS/Constellation"
+          ditto -c -k --keepParent "$app" out/Constellation-macos.zip
+          cp "$dmg" out/Constellation.dmg
+          echo "APP=$PWD/$app" >> "$GITHUB_ENV"
+
+      - name: Collect artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          arch=$(uname -m)
+          mkdir -p out
+          cp "$(find target -type f -path '*/release/bundle/appimage/*.AppImage' | head -n1)" "out/Constellation-linux-$arch.AppImage"
+          cp "$(find target -type f -path '*/release/bundle/deb/*.deb' | head -n1)" "out/Constellation-linux-$arch.deb"
+          chmod +x out/*.AppImage
 
       - name: Launch test
-        # Opens the fixture Vault and checks the app stays up.
+        # Opens the fixture Vault and checks the app stays up for 10 s.
         run: |
-          app="build/Constellation.app"
-          CONSTELLATION_VAULT="$PWD/fixtures/vault" "$app/Contents/MacOS/Constellation" > "$RUNNER_TEMP/launch.log" 2>&1 &
+          export CONSTELLATION_VAULT="$PWD/fixtures/vault"
+          if [ "$RUNNER_OS" = macOS ]; then
+            "$APP/Contents/MacOS/Constellation" > "$RUNNER_TEMP/launch.log" 2>&1 &
+          else
+            # No FUSE on runners: the AppImage unpacks itself and runs.
+            APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a out/Constellation-linux-*.AppImage > "$RUNNER_TEMP/launch.log" 2>&1 &
+          fi
           pid=$!
           sleep 10
           if ! kill -0 "$pid"; then
@@ -52,21 +126,19 @@ jobs:
             cat "$RUNNER_TEMP/launch.log"
             exit 1
           fi
-          kill "$pid"
+          kill "$pid" || true
           cat "$RUNNER_TEMP/launch.log"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: constellation-app
-          path: |
-            constellation/build/Constellation.zip
-            constellation/build/Constellation.dmg
+          name: constellation-${{ matrix.name }}
+          path: constellation/out/*
           if-no-files-found: error
 
   release:
     # Every green build of main replaces the "constellation-latest" release.
     name: publish the latest build
-    needs: build
+    needs: bundle
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -76,20 +148,34 @@ jobs:
       run:
         working-directory: .
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: constellation/install.sh
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
-          name: constellation-app
+          pattern: constellation-*
+          path: assets
+          merge-multiple: true
       - name: Replace the constellation-latest release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          cp constellation/install.sh assets/install.sh
           cat > notes.md << EOF
-          The latest Constellation build from \`main\` (commit ${GITHUB_SHA::7}), built and tested on macOS 15.
+          The latest Constellation build from \`main\` (commit ${GITHUB_SHA::7}), tested on Linux and macOS 15.
 
-          **Install:** open \`Constellation.dmg\` (or unzip \`Constellation.zip\`), move \`Constellation.app\` to /Applications, then run
-          \`xattr -dr com.apple.quarantine /Applications/Constellation.app\` once (the app is ad-hoc signed).
+          **Install (macOS and Linux):**
+          \`\`\`
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/constellation/install.sh | bash
+          \`\`\`
+          The script downloads the right build with curl, so macOS Gatekeeper does not block it (the app is ad-hoc signed, not notarized).
+
+          **By hand:** macOS: open \`Constellation.dmg\`, drag the app to Applications, then right-click it and choose Open
+          (or run \`xattr -dr com.apple.quarantine /Applications/Constellation.app\`). Linux: make the \`.AppImage\` executable and run it,
+          or install the \`.deb\` with \`sudo apt install ./Constellation-linux-<arch>.deb\`.
           EOF
           gh release delete constellation-latest --cleanup-tag --yes || true
-          gh release create constellation-latest Constellation.zip Constellation.dmg --target "$GITHUB_SHA" --latest \
+          gh release create constellation-latest assets/* --target "$GITHUB_SHA" --latest \
             --title "Constellation (latest build)" --notes-file notes.md

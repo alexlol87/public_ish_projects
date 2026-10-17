@@ -1,19 +1,32 @@
 # Constellation
 
-A macOS notes app for a **Vault** of linked markdown Notes, like Obsidian, built for teams with many Projects made of
+A notes app (Linux and macOS) for a **Vault** of linked markdown Notes, like Obsidian, built for teams with many Projects made of
 many microservices in separate repositories. The Vault keeps what each Repo does, its Endpoints, what they call, what is
 broken and what is planned, and the app draws it as a graph of Projects, Repos, Endpoints, External APIs and Clients.
 The app starts empty: people and agents fill the Vault. Agents follow an `AGENTS.md` that the app writes into the Vault.
 
-Swift, SwiftUI with AppKit and TextKit 2, no third-party dependencies. macOS 14+, Apple Silicon.
+Tauri 2: a Rust core (`core/`), a TypeScript + CodeMirror frontend (`ui/`) and the app shell (`src-tauri/`). Linux (x86_64, aarch64) and macOS (universal, ad-hoc signed).
 
 ## Install
 
-1. Download `Constellation.dmg` (or `Constellation.zip`) from the
-   [latest release](https://github.com/alexlol87/public_ish_projects/releases/tag/constellation-latest).
-2. Move `Constellation.app` to /Applications.
-3. The app is ad-hoc signed, not notarized. Run this once:
-   `xattr -dr com.apple.quarantine /Applications/Constellation.app`
+One line, on macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alexlol87/public_ish_projects/main/constellation/install.sh | bash
+```
+
+It downloads the latest build with curl and installs it: `/Applications/Constellation.app` on macOS (or `~/Applications`),
+`~/.local/bin/constellation` plus an app-menu entry on Linux. Remove it with `... | bash -s -- --uninstall`.
+
+Downloads from the [latest release](https://github.com/alexlol87/public_ish_projects/releases/tag/constellation-latest) by hand:
+
+- **macOS, `Constellation.dmg`**: drag the app to Applications. The app is ad-hoc signed, not notarized, and a file
+  downloaded in a browser is quarantined, so Gatekeeper refuses it. Right-click the app and choose **Open** once, or run
+  `xattr -dr com.apple.quarantine /Applications/Constellation.app`. `install.sh` avoids this because curl does not set the
+  quarantine flag.
+- **Linux, `Constellation-linux-<x86_64|aarch64>.AppImage`**: `chmod +x` it and run it (needs FUSE 2, or set
+  `APPIMAGE_EXTRACT_AND_RUN=1`).
+- **Linux, `Constellation-linux-<arch>.deb`**: `sudo apt install ./Constellation-linux-<arch>.deb`.
 
 ## First launch
 
@@ -53,22 +66,23 @@ Run your own agent tool inside the Vault and tell it to follow `AGENTS.md`. It d
 
 ## Building
 
-On macOS 14+ with Swift 6.2:
+Needs Rust (stable), Node 22+ and, on Debian/Ubuntu,
+`sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev build-essential curl file`.
 
 ```sh
-scripts/build-app.sh        # build/Constellation.app (ad-hoc signed), Constellation.zip and Constellation.dmg
-CONSTELLATION_VAULT=fixtures/vault build/Constellation.app/Contents/MacOS/Constellation   # open the fictional fixture Vault
+./build.sh                  # build from source and install locally (when downloads are blocked)
+./build.sh --no-install     # only build; bundles land in target/release/bundle/ (or $CARGO_TARGET_DIR)
+npm ci && npm run tauri dev # run in development
+CONSTELLATION_VAULT=fixtures/vault npm run tauri dev   # open the fictional fixture Vault
 ```
 
-Set `SIGN_IDENTITY` to sign with a certificate instead of ad-hoc. CI (`.github/workflows/constellation.yml`) tests,
-builds, launch-tests the app, and on `main` replaces the `constellation-latest` release.
+CI (`.github/workflows/constellation.yml`) lints and tests, builds the macOS, Linux x86_64 and Linux aarch64 bundles,
+launch-tests each against the fixture Vault, and on `main` replaces the `constellation-latest` release.
 
 ## Tests
 
 ```sh
-swift test -Xswiftc -warnings-as-errors
+npm test                                   # frontend (vitest)
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace                     # Rust core
 ```
-
-`ConstellationCore` (Vault, parsing, links, search, tags, graph layout, renames, archive, agent files) is
-Foundation-only and tested on Linux too (e.g. in a `swift:6.2` container). The SwiftUI/AppKit app target compiles only
-on macOS.

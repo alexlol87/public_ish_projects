@@ -1,6 +1,6 @@
 # Constellation: implementation plan
 
-Status: **planned, not started**. Written 2026-10-17 from a design interview. Vocabulary is defined in
+Status: **rewritten from Swift/macOS to Tauri 2 (Linux + macOS); stack, architecture, distribution and tests below are updated, the other sections still describe the original Swift design and apply as product spec**. Written 2026-10-17 from a design interview. Vocabulary is defined in
 [GLOSSARY.md](GLOSSARY.md); hard-to-reverse decisions are in [docs/adr/](docs/adr/).
 
 ## 1. Purpose
@@ -19,7 +19,7 @@ Vault of linked markdown Notes, like Obsidian, with a graph of Projects, Repos, 
 
 | # | Topic | Decision |
 |---|-------|----------|
-| 1 | Stack | Native macOS app in Swift: SwiftUI, with AppKit and TextKit 2 for the editor and graph. Only Apple frameworks, **zero third-party dependencies**. macOS 14+, Apple Silicon. SwiftPM package, like `postit_app/`. |
+| 1 | Stack | Tauri 2 app for Linux and macOS. Rust core (`core/`), TypeScript frontend with CodeMirror 6 for the editor (`ui/`), app shell in `src-tauri/`. Cargo workspace plus npm (Vite). Third-party dependencies are allowed but kept small. |
 | 2 | Name | **Constellation**, in `public_ish_projects/constellation/`. Public repo, so no personal data in code, docs or samples. |
 | 3 | Vault | One Vault holds many Projects, plus `external/` and `clients/` at its root. |
 | 4 | Git | Plain files. No git integration in the app. |
@@ -30,12 +30,12 @@ Vault of linked markdown Notes, like Obsidian, with a graph of Projects, Repos, 
 | 9, 21 | Editor | Live preview at Obsidian level: markdown markers are hidden except on the line the cursor is on. |
 | 22 | Toolbar | Fixed formatting toolbar above the editor, with keyboard shortcuts. See §6.2. |
 | 23 | Rendering | Headings, emphasis, lists, task items, quotes, inline and fenced code, links, tables (monospace-aligned) and inline images. Mermaid stays a code block until after v1. |
-| 10, 39 | Live updates | FSEvents watcher updates the tree, graph, search and backlinks. Autosave runs 1 s after the last keystroke. A file changed on disk while open is reloaded silently if clean; if it has unsaved edits, a banner offers *Reload from disk* or *Keep mine*. |
+| 10, 39 | Live updates | File watcher (the `notify` crate: FSEvents on macOS, inotify on Linux) updates the tree, graph, search and backlinks. Autosave runs 1 s after the last keystroke. A file changed on disk while open is reloaded silently if clean; if it has unsaved edits, a banner offers *Reload from disk* or *Keep mine*. |
 | 11 | Search | Case- and diacritic-insensitive **substring** search over folder names, Note names and Note text. Results are grouped as Folders / Notes / Text matches, and each text match shows its sentence with the hit highlighted. In-memory index. |
 | 12 | Scale | Up to ~5,000 Notes. |
 | 13, 28 | Agents | The app writes a harness-agnostic `AGENTS.md` and `templates/` into each new Vault. It covers three workflows: Ingest, Refresh and Answer. See §7. |
 | 14, 27 | Themes | Light, Dark, Dracula and One Dark, plus System (which picks Light or Dark). A theme colours the editor, the graph and the accent. Window chrome follows the theme's light or dark appearance. |
-| 15 | Distribution | `build.sh` produces an ad-hoc-signed `.app`, a `.dmg` and a zip. A CI workflow builds, tests and publishes a `constellation-latest` release, like `window-borders.yml`. The repo README gets a table row. |
+| 15 | Distribution | `build.sh` builds from source and installs locally. A CI workflow builds, tests and publishes a `constellation-latest` release (macOS universal `.dmg` and zipped `.app`, Linux x86_64 and aarch64 `.AppImage` and `.deb`) plus `install.sh`, a curl one-liner that avoids the macOS quarantine flag (the app is ad-hoc signed, not notarized). The repo README gets a table row. |
 | 17 | Repo Notes | The fixed set listed in §4.2. Only `README.md` is required. Clicking a folder's Node opens that folder's `README.md`. |
 | 18 | Endpoint fields | Uses the template in §4.4, including Status (`implemented`, `last_changed`, missing features) and known Bugs. |
 | 19 | Up to date | Each Repo `README.md` records `verified_commit` and `verified_on`. The app shows "verified N days ago" and highlights it after N days (setting, default 30). |
@@ -207,21 +207,19 @@ SLA, auth method, docs they rely on: …
 
 ## 5. Architecture
 
-Same shape as `postit_app/`:
-
 ```
 constellation/
-├── Package.swift            targets: ConstellationCore, Constellation (app), ConstellationTests
-├── Info.plist
-├── build.sh                 swift build → .app → ad-hoc codesign → .dmg + .zip
-├── Resources/               AGENTS.md, templates/, themes
-├── Sources/ConstellationCore/   Foundation only, no AppKit
-├── Sources/Constellation/       SwiftUI + AppKit app
-└── Tests/ConstellationTests/
+├── Cargo.toml               workspace: core, src-tauri
+├── package.json             Vite, vitest, @tauri-apps/cli
+├── build.sh, install.sh     build from source / install a release
+├── core/                    Rust library, no UI or Tauri dependency; embeds AGENTS.md and templates/
+├── src-tauri/               Tauri shell: commands exposing core, file watcher, windows, bundling config
+├── ui/                      TypeScript frontend: CodeMirror editor, panes, graph
+└── fixtures/vault/          fictional Vault for tests and launch checks
 ```
 
-**Core uses Foundation only**, so `swift test` also runs on Linux. The dev sandboxes are Linux, and only CI (macos-15)
-can compile the app target.
+**Core has no UI dependency**, so `cargo test` runs the same on Linux and macOS. The frontend talks to it only through
+Tauri commands and events.
 
 Core modules (each a small surface with the logic behind it):
 
@@ -238,11 +236,11 @@ Core modules (each a small surface with the logic behind it):
 | `VaultScaffold` | `create(at:)` | Writes the starter files from §2 #37. |
 
 App layer:
-- `NavigationSplitView` with three panes, plus a separate graph `Window`.
-- The editor is an `NSTextView` with TextKit 2, wrapped in `NSViewRepresentable`.
-- The graph is drawn with SwiftUI `Canvas`, using a simple force simulation of Barnes–Hut type when node count makes
-  plain n² too slow.
-- An FSEvents watcher feeds `Vault.apply`.
+- Three panes in the main window, plus a separate graph window.
+- The editor is CodeMirror 6 with decorations for live preview.
+- The graph is drawn on a canvas, using a simple force simulation of Barnes–Hut type when node count makes plain n² too
+  slow.
+- A `notify` watcher in `src-tauri` feeds `Vault.apply`.
 - Settings: theme and staleness days.
 
 ## 6. Editor
@@ -333,7 +331,7 @@ Each milestone ends green in CI.
 
 ## 9. Tests
 
-Core code gets unit tests with `swift test`, which runs on Linux and on CI:
+Core code gets unit tests with `cargo test --workspace` (Linux and macOS in CI), the frontend gets `npm test` (vitest), and clippy runs with `-D warnings`:
 - **Parser:** frontmatter, headings, links with heading and alias, Calls/Uses blocks, task items, code fences (no links
   parsed inside them).
 - **Resolver:** path, unique name, ambiguous name, broken link.
@@ -348,8 +346,8 @@ Core code gets unit tests with `swift test`, which runs on Linux and on CI:
 - **Archiver:** the move, the entry format, and a source fallback when there is no Link.
 - **Scaffold:** the file set of a new Vault.
 
-The app target only gets the CI launch test. Check the editor and graph by hand against a fixture Vault in
-`Tests/Fixtures/`. Fixture data must be fictional.
+The app shell only gets the CI launch test (10 s against `fixtures/vault`). Check the editor and graph by hand against
+that fixture Vault. Fixture data must be fictional.
 
 ## 10. Open points to revisit after implementation
 
