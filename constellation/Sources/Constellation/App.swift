@@ -15,6 +15,8 @@ struct RootView: View {
     @State private var selection: String?
     @State private var tabs: NoteTabs?
     @State private var error: String?
+    @State private var reveal: EditorView.Reveal?
+    @State private var backlinks: [Backlink] = []
 
     var body: some View {
         NavigationSplitView {
@@ -44,13 +46,16 @@ struct RootView: View {
                         Spacer()
                     }.padding(6)
                     Divider()
-                    EditorView(initialText: tabs.text(active) ?? "") { self.tabs?.edit(active, text: $0) }
+                    EditorView(initialText: tabs.text(active) ?? "", root: root!, reveal: reveal,
+                               onChange: { self.tabs?.edit(active, text: $0) }, onFollow: { follow($0) })
                         .id(active)
                 }
             } else {
                 Text("Select a Note").foregroundStyle(.secondary)
             }
         }
+        .inspector(isPresented: .constant(tabs?.active != nil)) { inspector }
+        .onChange(of: tabs?.active) { _, _ in refreshBacklinks() }
         .frame(minWidth: 700, minHeight: 450)
         .onAppear {
             // Lets the CI launch test open a fixture Vault without the open panel.
@@ -81,6 +86,48 @@ struct RootView: View {
     private func show(_ path: String?) {
         guard let tree, let path, let node = find(path, in: tree), !node.isFolder else { return }
         do { try tabs?.open(path); error = nil } catch { self.error = "\(error)" }
+    }
+
+    private var inspector: some View {
+        let text = tabs?.active.flatMap { tabs?.text($0) } ?? ""
+        return List {
+            Section("Backlinks") {
+                ForEach(Array(backlinks.enumerated()), id: \.offset) { _, b in
+                    Button(b.path) { go(b.path, reveal: b.link.range) }.buttonStyle(.plain)
+                }
+            }
+            Section("Outline") {
+                ForEach(Array(NoteParser.parse(text).headings.enumerated()), id: \.offset) { _, h in
+                    Button(h.title) { reveal = .init(range: h.range) }.buttonStyle(.plain).padding(.leading, CGFloat(h.level - 1) * 10)
+                }
+            }
+        }.inspectorColumnWidth(min: 160, ideal: 220, max: 320)
+    }
+
+    private func refreshBacklinks() {
+        guard let root, let active = tabs?.active else { backlinks = []; return }
+        backlinks = (try? Vault.backlinks(to: active, in: root)) ?? []
+    }
+
+    private func go(_ path: String, reveal range: NSRange?) {
+        do {
+            try tabs?.open(path)
+            reveal = range.map { .init(range: $0) }
+            selection = path
+        } catch { self.error = "\(error)" }
+    }
+
+    /// ⌘-click: open the target (creating it first when the Link is broken) and jump to its heading.
+    private func follow(_ link: WikiLink) {
+        guard let root else { return }
+        do {
+            let path = try Vault.createNote(forLink: link.target, in: root)
+            tree = try Vault.load(root: root)
+            try tabs?.open(path)
+            let headings = NoteParser.parse(tabs?.text(path) ?? "").headings
+            let range = link.heading.flatMap { h in headings.first { $0.title.caseInsensitiveCompare(h) == .orderedSame }?.range }
+            reveal = range.map { .init(range: $0) }
+        } catch { self.error = "\(error)" }
     }
 
     private func saveDue() {
