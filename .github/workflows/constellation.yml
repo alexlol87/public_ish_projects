@@ -55,12 +55,12 @@ jobs:
           kill "$pid"
           cat "$RUNNER_TEMP/launch.log"
 
-      - name: Zip the app
-        run: ditto -c -k --keepParent build/Constellation.app build/Constellation.zip
       - uses: actions/upload-artifact@v4
         with:
           name: constellation-app
-          path: constellation/build/Constellation.zip
+          path: |
+            constellation/build/Constellation.zip
+            constellation/build/Constellation.dmg
           if-no-files-found: error
 
   release:
@@ -87,9 +87,9 @@ jobs:
           cat > notes.md << EOF
           The latest Constellation build from \`main\` (commit ${GITHUB_SHA::7}), built and tested on macOS 15.
 
-          **Install:** unzip \`Constellation.zip\`, move \`Constellation.app\` to /Applications, then run
+          **Install:** open \`Constellation.dmg\` (or unzip \`Constellation.zip\`), move \`Constellation.app\` to /Applications, then run
           \`xattr -dr com.apple.quarantine /Applications/Constellation.app\` once (the app is ad-hoc signed).
           EOF
           gh release delete constellation-latest --cleanup-tag --yes || true
-          gh release create constellation-latest Constellation.zip --target "$GITHUB_SHA" --latest \
+          gh release create constellation-latest Constellation.zip Constellation.dmg --target "$GITHUB_SHA" --latest \
             --title "Constellation (latest build)" --notes-file notes.md
