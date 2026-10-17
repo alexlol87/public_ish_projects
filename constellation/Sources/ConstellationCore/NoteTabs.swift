@@ -15,6 +15,34 @@ public struct NoteTabs {
     public private(set) var active: String?
     private var texts: [String: String] = [:]
     private var lastEdit: [String: Date] = [:]  // present = unsaved
+    private var onDisk: [String: String] = [:]  // last text we read or wrote; tells our own save echoes from outside edits
+    private var conflicts: [String: String] = [:]  // disk text waiting for the "Reload from disk / Keep mine" choice
+    private var revisions: [String: Int] = [:]
+
+    /// Disk text for a Note with unsaved edits that also changed on disk (show the banner); nil = no conflict.
+    public func conflict(_ path: String) -> String? { conflicts[path] }
+    /// Bumps each time the text is replaced from disk; the app uses it to rebuild the editor view.
+    public func revision(_ path: String) -> Int { revisions[path, default: 0] }
+
+    /// Feed paths FSEvents reported as changed. Clean open Notes reload silently; dirty ones get a conflict.
+    public mutating func diskChanged(_ changed: [String]) {
+        for p in changed where texts[p] != nil {
+            guard let disk = try? Vault.readNote(Self.node(p), in: root), disk != onDisk[p] else { continue }
+            if lastEdit[p] == nil { adopt(p, disk) } else { conflicts[p] = disk }
+        }
+    }
+
+    /// `reload`: take the disk text (mine is dropped). Otherwise keep mine and save it over the disk text now.
+    public mutating func resolveConflict(_ path: String, reload: Bool) throws {
+        guard let disk = conflicts[path] else { return }
+        conflicts[path] = nil
+        if reload { adopt(path, disk) } else { onDisk[path] = disk; try save(path) }
+    }
+
+    private mutating func adopt(_ path: String, _ disk: String) {
+        texts[path] = disk; onDisk[path] = disk; lastEdit[path] = nil; conflicts[path] = nil
+        revisions[path, default: 0] += 1
+    }
 
     public init(root: URL) { self.root = root }
 
@@ -24,7 +52,8 @@ public struct NoteTabs {
     /// Opens (reads) a Note, or just focuses it if it is already open.
     public mutating func open(_ path: String) throws {
         if texts[path] == nil {
-            texts[path] = try Vault.readNote(Self.node(path), in: root)
+            let t = try Vault.readNote(Self.node(path), in: root)
+            texts[path] = t; onDisk[path] = t
             paths.append(path)
         }
         active = path
@@ -48,14 +77,14 @@ public struct NoteTabs {
         guard let i = paths.firstIndex(of: path) else { return }
         try save(path)
         paths.remove(at: i)
-        texts[path] = nil
+        texts[path] = nil; onDisk[path] = nil; conflicts[path] = nil
         if active == path { active = paths.isEmpty ? nil : paths[min(i, paths.count - 1)] }
     }
 
     private mutating func save(_ path: String) throws {
         guard lastEdit[path] != nil, let text = texts[path] else { return }
         try Vault.writeNote(Self.node(path), in: root, text: text)
-        lastEdit[path] = nil
+        lastEdit[path] = nil; onDisk[path] = text
     }
 
     private static func node(_ path: String) -> VaultNode {

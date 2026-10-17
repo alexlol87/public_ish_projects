@@ -102,4 +102,28 @@ final class VaultTests: XCTestCase {
         XCTAssertNil(Vault.reopenable(root.appendingPathComponent("gone").path))
         XCTAssertNil(Vault.reopenable(nil))
     }
+
+    func testRefreshedAppliesExternalCreateDeleteAndMove() throws {
+        let root = try makeVault(["a.md": "A", "docs/old.md": "O", "gone.md": "G"])
+        var tree = try Vault.load(root: root)
+        let fm = FileManager.default
+        try "N".write(to: root.appendingPathComponent("new.md"), atomically: true, encoding: .utf8)
+        try fm.removeItem(at: root.appendingPathComponent("gone.md"))
+        try fm.createDirectory(at: root.appendingPathComponent("archive"), withIntermediateDirectories: true)
+        try fm.moveItem(at: root.appendingPathComponent("docs/old.md"), to: root.appendingPathComponent("archive/old.md"))
+
+        tree = try tree.refreshed(paths: ["new.md", "gone.md", "archive", "archive/old.md", "docs/old.md"], root: root)
+
+        XCTAssertEqual(tree, try Vault.load(root: root))
+        XCTAssertEqual(tree.children.map(\.name), ["archive", "docs", "a.md", "new.md"])
+    }
+
+    func testRefreshedCreatesNestedFoldersAndIgnoresVanishedParents() throws {
+        let root = try makeVault(["a.md": "A"])
+        let tree = try Vault.load(root: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("x/y"), withIntermediateDirectories: true)
+        try "Z".write(to: root.appendingPathComponent("x/y/z.md"), atomically: true, encoding: .utf8)
+        let after = try tree.refreshed(paths: ["x/y/z.md", "nope/missing.md"], root: root)
+        XCTAssertEqual(after, try Vault.load(root: root))
+    }
 }

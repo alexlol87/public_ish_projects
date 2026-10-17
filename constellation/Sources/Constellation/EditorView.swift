@@ -23,6 +23,7 @@ struct EditorView: NSViewRepresentable {
         tv.font = Coordinator.baseFont
         tv.textContainerInset = NSSize(width: 12, height: 12)
         tv.string = initialText
+        context.coordinator.observeFormatActions(tv)
         context.coordinator.restyle(tv)
         return scroll
     }
@@ -35,6 +36,24 @@ struct EditorView: NSViewRepresentable {
         let root: URL?
         let notePath: String
         init(onChange: @escaping (String) -> Void, root: URL?, notePath: String) { self.onChange = onChange; self.root = root; self.notePath = notePath }
+
+        private var token: NSObjectProtocol?
+        func observeFormatActions(_ tv: NSTextView) {
+            token = NotificationCenter.default.addObserver(forName: .formatAction, object: nil, queue: .main) { [weak tv] n in
+                guard let tv, tv.window?.firstResponder === tv, let a = n.object as? FormatAction else { return }
+                let e = MarkdownStyler.apply(a, to: tv.string, selection: tv.selectedRange())
+                // One replacement over the changed span = one undo step.
+                let old = tv.string as NSString, new = e.text as NSString
+                var p = 0
+                while p < min(old.length, new.length), old.character(at: p) == new.character(at: p) { p += 1 }
+                var q = 0
+                while q < min(old.length, new.length) - p, old.character(at: old.length - 1 - q) == new.character(at: new.length - 1 - q) { q += 1 }
+                tv.insertText(new.substring(with: NSRange(location: p, length: new.length - p - q)),
+                              replacementRange: NSRange(location: p, length: old.length - p - q))
+                tv.setSelectedRange(e.selection)
+            }
+        }
+        deinit { token.map(NotificationCenter.default.removeObserver) }
 
         private var restyling = false
 

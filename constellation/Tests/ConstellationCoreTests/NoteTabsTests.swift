@@ -68,4 +68,70 @@ final class NoteTabsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("b.md")), "B")
         XCTAssertFalse(tabs.hasPendingEdits)
     }
+
+    private func write(_ root: URL, _ path: String, _ text: String) throws {
+        try text.write(to: root.appendingPathComponent(path), atomically: true, encoding: .utf8)
+    }
+
+    func testCleanNoteReloadsSilentlyOnExternalChange() throws {
+        let root = try vault(["a.md": "one"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md")
+        try write(root, "a.md", "two")
+        tabs.diskChanged(["a.md"])
+        XCTAssertEqual(tabs.text("a.md"), "two")
+        XCTAssertNil(tabs.conflict("a.md"))
+        XCTAssertEqual(tabs.revision("a.md"), 1)
+    }
+
+    func testOwnSaveEchoIsNotAConflict() throws {
+        let root = try vault(["a.md": "one"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md")
+        tabs.edit("a.md", text: "mine", at: t0)
+        try tabs.saveDue(at: t0 + 2)
+        tabs.edit("a.md", text: "mine!", at: t0 + 3)  // typed before the FSEvent for the save arrives
+        tabs.diskChanged(["a.md"])
+        XCTAssertNil(tabs.conflict("a.md"))
+        XCTAssertEqual(tabs.text("a.md"), "mine!")
+        XCTAssertEqual(tabs.revision("a.md"), 0)
+    }
+
+    func testDirtyNoteRaisesConflictAndReloadTakesDisk() throws {
+        let root = try vault(["a.md": "one"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md")
+        tabs.edit("a.md", text: "mine", at: t0)
+        try write(root, "a.md", "theirs")
+        tabs.diskChanged(["a.md"])
+        XCTAssertEqual(tabs.text("a.md"), "mine")
+        XCTAssertEqual(tabs.conflict("a.md"), "theirs")
+        try tabs.resolveConflict("a.md", reload: true)
+        XCTAssertEqual(tabs.text("a.md"), "theirs")
+        XCTAssertNil(tabs.conflict("a.md"))
+        XCTAssertFalse(tabs.hasPendingEdits)
+        XCTAssertEqual(tabs.revision("a.md"), 1)
+    }
+
+    func testKeepMineSavesMyTextOverDisk() throws {
+        let root = try vault(["a.md": "one"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md")
+        tabs.edit("a.md", text: "mine", at: t0)
+        try write(root, "a.md", "theirs")
+        tabs.diskChanged(["a.md"])
+        try tabs.resolveConflict("a.md", reload: false)
+        XCTAssertNil(tabs.conflict("a.md"))
+        XCTAssertEqual(tabs.text("a.md"), "mine")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.md"), encoding: .utf8), "mine")
+    }
+
+    func testDeletedFileLeavesOpenTextAlone() throws {
+        let root = try vault(["a.md": "one"])
+        var tabs = NoteTabs(root: root)
+        try tabs.open("a.md")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("a.md"))
+        tabs.diskChanged(["a.md", "other.md"])
+        XCTAssertEqual(tabs.text("a.md"), "one")
+    }
 }
