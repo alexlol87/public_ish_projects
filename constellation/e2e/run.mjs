@@ -255,6 +255,17 @@ await test("broken link is red; click creates the Note", async () => {
   ok(fs.existsSync(path.join(vault, "nowhere-note.md")) || fs.readdirSync(vault, { recursive: true }).some((f) => f.endsWith("nowhere-note.md")), "file created");
 });
 
+await test("a link that escapes the Vault is refused with a toast; nothing is created", async () => {
+  write("acme-shop/escape.md", "[[../escaped-note]]\n\nsecond line\n");
+  await openRow("acme-shop/escape.md");
+  await waitDoc("escaped-note");
+  await caret("second");
+  await app.until(() => document.querySelector(".cm-broken"), "broken link styling");
+  await app.click(".cm-broken");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast for an escaping link");
+  ok(!fs.existsSync(path.join(vault, "..", "escaped-note.md")), "no file outside the Vault");
+});
+
 await test("link and tag autocomplete", async () => {
   write("acme-shop/typing.md", "start\n");
   await openRow("acme-shop/typing.md");
@@ -313,6 +324,17 @@ await test("Tags tab: rename tag (right-click) then undo", async () => {
   await app.click("#undo");
   await sleep(1000);
   ok(disk("external/stripe.md").includes("#payments"), "undone");
+});
+
+await test("a bad tag name is refused with a toast; tags are untouched", async () => {
+  await app.click("#tab-tags");
+  await app.until(() => document.querySelector("#tag-sort"), "tags list");
+  const before = disk("external/stripe.md");
+  await app.rightClick(".side .list .row-item", "#payments");
+  await app.click(".ctx-item", "Rename tag");
+  await fillModal("my tag");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast for a bad tag name");
+  eq(disk("external/stripe.md"), before, "nothing rewritten");
 });
 
 const clearSearch = () => search("");

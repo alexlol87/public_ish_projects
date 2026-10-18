@@ -73,21 +73,21 @@ impl PathIndex {
 }
 
 /// The edit that creates the missing Note for a broken Link (empty file, folders as needed); none if the Link resolves.
-/// Writes nothing: the caller applies the edits.
-pub fn create_note_edits(paths: &PathIndex, target: &str) -> Vec<FileEdit> {
+/// Refuses a target that is not a valid Vault path (see `clean_note_path`). Writes nothing: the caller applies the edits.
+pub fn create_note_edits(paths: &PathIndex, target: &str) -> Result<Vec<FileEdit>> {
     match paths.resolve(target) {
-        LinkResolution::Broken { create_path } => vec![FileEdit::create(&create_path, "")],
-        LinkResolution::Note { .. } => vec![],
+        LinkResolution::Broken { create_path } => Ok(vec![FileEdit::create(&clean_note_path(&create_path)?, "")]),
+        LinkResolution::Note { .. } => Ok(vec![]),
     }
 }
 
-/// The edit that creates an empty Note at the exact Vault path a person typed: trimmed, a leading `./` and doubled `/`
-/// dropped, `.md` added unless it already ends in it, folders as needed. Refuses empty, trailing-slash, absolute,
-/// `.`, `..` and hidden segments, app-only places (checked on the final path, any case) and existing Notes.
-pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
+/// A Vault-relative Note path from what a person or Link typed: trimmed, a leading `./` and doubled `/` dropped, `.md`
+/// added unless it already ends in it. Refuses empty, trailing-slash, absolute, backslash, `.`, `..` and hidden segments,
+/// and app-only places (checked on the final path, any case). So the result always stays inside the Vault.
+pub fn clean_note_path(typed: &str) -> Result<String> {
     let t = typed.trim();
     let t = t.strip_prefix("./").unwrap_or(t);
-    let bad = t.starts_with('/') || t.ends_with('/') || t.split('/').any(|s| s == "." || s.starts_with('.'));
+    let bad = t.starts_with('/') || t.ends_with('/') || t.contains('\\') || t.split('/').any(|s| s == "." || s.starts_with('.'));
     let t = t.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
     if bad || t.is_empty() {
         return Err(Error(format!("Not a valid Note path: \"{}\"", typed.trim())));
@@ -96,6 +96,12 @@ pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
     if is_app_only(&path) {
         return Err(Error("That place is for the app's own files".into()));
     }
+    Ok(path)
+}
+
+/// The edit that creates an empty Note at the exact Vault path a person typed (see `clean_note_path`); refuses existing Notes.
+pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
+    let path = clean_note_path(typed)?;
     if paths.by_path.contains_key(&strip_md(&path).to_lowercase()) {
         return Err(Error(format!("A Note already exists at {path}")));
     }
