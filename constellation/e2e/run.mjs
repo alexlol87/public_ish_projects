@@ -255,6 +255,18 @@ await test("broken link is red; click creates the Note", async () => {
   ok(fs.existsSync(path.join(vault, "nowhere-note.md")) || fs.readdirSync(vault, { recursive: true }).some((f) => f.endsWith("nowhere-note.md")), "file created");
 });
 
+await test("[[#Heading]] click jumps to the heading in the same Note", async () => {
+  write("acme-shop/selflink.md", "[[#Target]]\n\nsecond line\n\n## Target\n\nbody\n");
+  await openRow("acme-shop/selflink.md");
+  await waitDoc("Target");
+  await caret("second");
+  await app.click(".cm-link");
+  await sleep(500);
+  eq(await app.eval(`const v = ${VIEW}; return v.state.doc.lineAt(v.state.selection.main.head).text`), "## Target", "caret on the heading");
+  ok(!(await app.eval(() => document.querySelector(".toast.bad"))), "no error toast");
+  fs.rmSync(path.join(vault, "acme-shop/selflink.md"));
+});
+
 await test("a link that escapes the Vault is refused with a toast; nothing is created", async () => {
   write("acme-shop/escape.md", "[[../escaped-note]]\n\nsecond line\n");
   await openRow("acme-shop/escape.md");

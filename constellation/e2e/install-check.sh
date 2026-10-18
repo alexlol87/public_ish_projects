@@ -4,8 +4,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 home=$(mktemp -d)
-trap 'rm -rf "$home"' EXIT
+pid=
+# Stop the app (it writes under HOME until it is gone) before removing HOME.
+trap '[ -z "$pid" ] || { kill -- "-$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }; rm -rf "$home"' EXIT
 export HOME="$home"
+export TMPDIR="$home/tmp"; mkdir "$TMPDIR" # the AppImage extracts itself under TMPDIR: keep it inside the throwaway HOME
 
 bash install.sh > "$home/install.log" 2>&1 || { cat "$home/install.log"; exit 1; }
 for f in .local/bin/constellation .local/share/applications/constellation.desktop .local/share/icons/constellation.png; do
@@ -15,11 +18,11 @@ grep -q "^Icon=$home/.local/share/icons/constellation.png" "$home/.local/share/a
   { echo "FAIL: desktop entry has no icon"; exit 1; }
 
 vault="$home/vault"; cp -r fixtures/vault "$vault"
-CONSTELLATION_VAULT="$vault" APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a "$home/.local/bin/constellation" > "$home/run.log" 2>&1 &
+CONSTELLATION_VAULT="$vault" APPIMAGE_EXTRACT_AND_RUN=1 setsid xvfb-run -a "$home/.local/bin/constellation" > "$home/run.log" 2>&1 &
 pid=$!
 sleep 10
 kill -0 "$pid" 2>/dev/null || { echo "FAIL: the app quit at launch"; cat "$home/run.log"; exit 1; }
-pkill -P "$pid" || true; kill "$pid" 2>/dev/null || true
+kill -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; pid=
 
 bash install.sh --uninstall > /dev/null
 [ ! -e "$home/.local/bin/constellation" ] || { echo "FAIL: uninstall left the binary"; exit 1; }

@@ -63,6 +63,9 @@ pub struct EndpointStatus {
 pub struct ParsedNote {
     pub tags: Vec<TagRef>,
     pub links: Vec<WikiLink>,
+    /// `[[#Heading]]` Links to the Note itself (empty `target`); not part of `links`.
+    #[serde(skip)]
+    pub self_links: Vec<WikiLink>,
     pub headings: Vec<NoteHeading>,
     /// Every key kept, known or not.
     pub frontmatter: BTreeMap<String, String>,
@@ -107,6 +110,7 @@ static LINK: LazyLock<Regex> = LazyLock::new(|| re(r"\[\[([^\[\]|#]+)(?:#([^\[\]
 static TAG: LazyLock<Regex> = LazyLock::new(|| re(&format!("#({TAG_NAME})")));
 static TAG_FULL: LazyLock<Regex> = LazyLock::new(|| re(&format!("^{TAG_NAME}$")));
 static TYPED_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"#([\p{L}\p{N}_/-]*)$"));
+static SELF_LINK: LazyLock<Regex> = LazyLock::new(|| re(r"\[\[#([^\[\]|]*)(?:\|([^\[\]]*))?\]\]"));
 static WIKI: LazyLock<Regex> = LazyLock::new(|| re(r"\[\[[^\[\]]*\]\]"));
 static LINK_URL: LazyLock<Regex> = LazyLock::new(|| re(r"\]\([^)]*\)"));
 static HEX: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"));
@@ -171,6 +175,7 @@ pub fn parse(text: &str) -> ParsedNote {
     let mut out = ParsedNote {
         tags: vec![],
         links: vec![],
+        self_links: vec![],
         headings: vec![],
         frontmatter: BTreeMap::new(),
         calls: vec![],
@@ -242,6 +247,13 @@ fn body_line(l: &Line, out: &mut ParsedNote) {
             heading: c.get(2).map(|h| h.as_str().to_string()).filter(|h| !h.is_empty()),
             alias: c.get(3).map(|a| a.as_str().to_string()),
         });
+    }
+    for c in SELF_LINK.captures_iter(s) {
+        let m = c.get(0).unwrap();
+        if !code.iter().any(|r| overlaps(r, &m.range())) {
+            let heading = Some(c[1].to_string()).filter(|h| !h.is_empty());
+            out.self_links.push(WikiLink { range: range16(s, m.range(), l.start), target: String::new(), heading, alias: c.get(2).map(|a| a.as_str().to_string()) });
+        }
     }
 }
 

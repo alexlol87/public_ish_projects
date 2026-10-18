@@ -7,8 +7,6 @@ use crate::{Error, FileEdit, Result, VaultIndex};
 use std::collections::BTreeMap;
 use std::fs;
 
-static SELF_LINK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\[\[#([^\[\]|]*)(\|[^\[\]]*)?\]\]").unwrap());
-
 type Rewrites = BTreeMap<String, Vec<(Range16, String)>>;
 
 pub fn rename_note(index: &VaultIndex, path: &str, new_name: &str) -> Result<Vec<FileEdit>> {
@@ -80,11 +78,8 @@ pub fn rename_heading(index: &VaultIndex, old: &str, new: &str, note_path: &str)
     let line = format!("{} {new}", "#".repeat(h.level));
     let mut reps = vec![(h.range, line)];
     // `[[#Heading]]` has no Note part, so the Link parser skips it; rewrite those in this Note directly.
-    for c in SELF_LINK.captures_iter(&text) {
-        if c[1].to_lowercase() == old.to_lowercase() {
-            let m = c.get(0).unwrap();
-            reps.push((Range16::new(len16(&text[..m.start()]), len16(m.as_str())), format!("[[#{new}{}]]", c.get(2).map_or("", |a| a.as_str()))));
-        }
+    for l in parsed.self_links.iter().filter(|l| l.heading.as_ref().is_some_and(|x| x.to_lowercase() == old.to_lowercase())) {
+        reps.push((l.range, format!("[[#{new}{}]]", l.alias.as_ref().map_or(String::new(), |a| format!("|{a}")))));
     }
     let extra = BTreeMap::from([(note_path.to_string(), reps)]);
     let heading_to = |h: &str| if h.to_lowercase() == old.to_lowercase() { new.to_string() } else { h.to_string() };
@@ -114,17 +109,18 @@ pub fn rename_tag(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEd
         let tags = parser::parse(&text).tags;
         let hit = |n: &str| rest_of(n).is_some();
         let in_text = |t: &parser::TagRef| slice16(&text, t.range).is_some_and(|s| s.starts_with('#'));
-        // Frontmatter list items that would repeat a Tag already in the list are dropped, not renamed.
-        let mut seen: std::collections::HashSet<_> = tags.iter().filter(|t| !in_text(t) && !hit(&t.name)).map(|t| t.name.to_lowercase()).collect();
+        // Frontmatter list items (and tags.md lines) that would repeat a Tag already listed are dropped, not renamed.
+        let list = p == "tags.md";
+        let mut seen: std::collections::HashSet<_> = tags.iter().filter(|t| (list || !in_text(t)) && !hit(&t.name)).map(|t| t.name.to_lowercase()).collect();
         let reps: Vec<_> = tags
             .iter()
             .filter(|t| hit(&t.name))
             .map(|t| {
                 let name = format!("{new}{}", rest_of(&t.name).unwrap_or_default());
-                if in_text(t) {
+                if in_text(t) && !list {
                     (t.range, format!("#{name}"))
                 } else if seen.insert(name.to_lowercase()) {
-                    (t.range, name)
+                    (t.range, if in_text(t) { format!("#{name}") } else { name })
                 } else {
                     (item_with_separator(&text, t.range), String::new())
                 }
