@@ -263,7 +263,10 @@ await test("a link that escapes the Vault is refused with a toast; nothing is cr
   await app.until(() => document.querySelector(".cm-broken"), "broken link styling");
   await app.click(".cm-broken");
   await app.until(() => document.querySelector(".toast.bad"), "error toast for an escaping link");
-  ok(!fs.existsSync(path.join(vault, "..", "escaped-note.md")), "no file outside the Vault");
+  const outside = fs.existsSync(path.join(vault, "..", "escaped-note.md"));
+  fs.rmSync(path.join(vault, "acme-shop/escape.md")); // its broken Link would add a ghost to the graph
+  await sleep(800);
+  ok(!outside, "no file outside the Vault");
 });
 
 await test("link and tag autocomplete", async () => {
