@@ -365,8 +365,10 @@ async function refreshBroken() {
   const p = tabs.active;
   if (!p) return;
   const t = tabs.text(p) ?? "";
-  broken = new Set(await api.brokenTargets(t).catch(() => []));
-  if (tabs.active === p) editor.refreshDecorations();
+  const next = new Set(await api.brokenTargets(t).catch(() => []));
+  const same = next.size === broken.size && [...next].every((x) => broken.has(x)); // a full restyle of a big Note is slow
+  broken = next;
+  if (tabs.active === p && !same) editor.refreshDecorations();
 }
 
 async function undo() {
