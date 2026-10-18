@@ -10,10 +10,13 @@ On macOS, read Ctrl as the Command key.
 | Ctrl+G | Open the graph |
 | Ctrl+S | Save every open Note now |
 | Ctrl+W | Close the current tab |
-| Ctrl+Z | Undo the last app action (rename, move, task tick, new note), outside typing |
+| Ctrl+Z | Undo the last app action (rename, move, Bug or Todo tick, new note), outside typing |
 | Ctrl+, | Settings |
 | Ctrl+Shift+F | Focus the search box |
-| Ctrl-click | Open a Link in a new tab |
+| Click on a Link | Open it (on the line with the cursor, the click moves the cursor instead) |
+| Ctrl-click on a Link | Open it, also on the line with the cursor |
+| Shift-click on a Link | Same as click; it does not open a new window or pane |
+| Ctrl-click on a Tag | Open the Tags tab filtered to that Tag |
 | F1 | Open this cheat sheet (also the Help button) |
 
 ## The Vault
@@ -33,7 +36,7 @@ On macOS, read Ctrl as the Command key.
 
 ## Actions that change files
 
-- Tick a task in `bugs.md` or `todo.md` and it moves to the Project's Archive.
+- Tick a Bug or Todo item in `bugs.md` or `todo.md` and it moves to the Project's Archive.
 - Renaming or moving a Note, or renaming a heading or Tag, rewrites every Link that pointed at it.
 - Undo reverses the last of these, including a new note.
 

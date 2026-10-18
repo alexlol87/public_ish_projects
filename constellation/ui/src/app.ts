@@ -99,7 +99,6 @@ function buildLayout(app: HTMLElement) {
   P.undo = h("button", { id: "undo", title: `Undo last rename/move/task (${isMac ? "⌘" : "Ctrl+"}Z outside typing)`, disabled: true, onclick: () => void undo() }, "Undo");
   P.top = h("div", { class: "topbar" }, h("strong", {}, "Constellation"), h("span", { class: "muted vault-name", title: rootPath }, baseName(rootPath) || rootPath),
     h("span", { class: "grow" }), P.undo,
-    h("button", { id: "new-note", title: `New note (${isMac ? "⌘" : "Ctrl+"}N)`, onclick: () => void newNote() }, "New note"),
     h("button", { id: "open-graph", title: `Graph (${isMac ? "⌘" : "Ctrl+"}G)`, onclick: () => void api.openGraph() }, "Graph"),
     h("button", { id: "open-help", title: "Help (F1)", onclick: () => void openHelp() }, "Help"),
     h("button", { id: "open-settings", title: "Settings", onclick: () => void settings() }, "Settings"));
@@ -108,7 +107,9 @@ function buildLayout(app: HTMLElement) {
   P.search.addEventListener("input", () => { clearTimeout(timer); timer = window.setTimeout(() => { query = P.search.value.trim(); void renderSide(); }, 120); });
   P.list = h("div", { class: "list" });
   P.results = h("div", { class: "list", hidden: true });
-  P.side = h("div", { class: "side" }, P.search,
+  P.side = h("div", { class: "side" },
+    h("button", { id: "new-note", title: `New note (${isMac ? "⌘" : "Ctrl+"}N)`, onclick: () => void newNote() }, "New note"),
+    P.search,
     h("div", { class: "seg" },
       h("button", { id: "tab-files", onclick: () => { sideTab = "files"; tagView = null; void renderSide(); } }, "Files"),
       h("button", { id: "tab-tags", onclick: () => { sideTab = "tags"; tagView = null; void renderSide(); } }, "Tags")),
@@ -358,22 +359,33 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
   return out;
 }
 
-/** Prompts for a path pre-filled with `folder` (else the active Note's folder), creates the empty Note and opens it. */
-async function newNote(folder = (tabs.active ?? "").split("/").slice(0, -1).join("/")) {
+const isAppOnly = (p: string) => !!tree?.children.find((c) => c.name === p.split("/")[0])?.appOnly;
+const dirName = (p: string) => p.split("/").slice(0, -1).join("/");
+
+/** Opens every folder above `path` in the tree. */
+function expandAncestors(path: string) {
+  for (let d = dirName(path); d; d = dirName(d)) expanded.add(d);
+}
+
+/** Prompts for a path pre-filled with `folder` (else the active Note's folder, or the Vault root for app-only ones), creates the empty Note and opens it. */
+async function newNote(folder = tabs.active && !isAppOnly(tabs.active) ? dirName(tabs.active) : "") {
   const path = await ask("New note", folder ? `${folder}/` : "", "Folder and name. Folders are created as needed; .md is added.");
   if (!path) return;
   await flushAll();
   try {
     const np = await api.newNote(path);
     appActionAt = Date.now();
-    np.split("/").slice(0, -1).reduce((d, part) => { d = d ? `${d}/${part}` : part; expanded.add(d); return d; }, "");
+    expandAncestors(np);
     await openNote(np);
+    editor.focus();
   } catch (e) { toast(errText(e), true); }
 }
 
 async function openHelp() {
   try {
     const p = await api.openCheatSheet();
+    await refreshAll(); // first Help creates .constellation/
+    tabs.reload(p, await api.readNote(p)); // an open tab may hold stale or edited text
     await openNote(p);
   } catch (e) { toast(errText(e), true); }
 }

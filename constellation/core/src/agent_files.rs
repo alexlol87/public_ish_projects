@@ -3,8 +3,9 @@
 
 use crate::vault::is_app_only;
 
-/// The in-app cheat sheet; written to `.constellation/cheat-sheet.md` each time Help opens.
+/// The in-app cheat sheet; written to `CHEAT_SHEET_PATH` each time Help opens.
 pub const CHEAT_SHEET: &str = include_str!("cheat_sheet.md");
+pub const CHEAT_SHEET_PATH: &str = ".constellation/cheat-sheet.md";
 
 /// `AGENTS.md`, written to the Vault root.
 pub const AGENTS_MD: &str = r####"# Agent rules

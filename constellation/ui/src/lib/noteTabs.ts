@@ -84,6 +84,11 @@ export class NoteTabs {
     return { closed: true, flush };
   }
 
+  /** Replaces an open Note's text (edits included) with `diskText`; no-op if not open. */
+  reload(path: string, diskText: string) {
+    if (this.texts.has(path)) this.adopt(path, diskText);
+  }
+
   private adopt(path: string, disk: string) {
     this.texts.set(path, disk);
     this.onDisk.set(path, disk);

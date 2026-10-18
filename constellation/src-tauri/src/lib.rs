@@ -454,7 +454,7 @@ fn create_note(app: AppHandle, st: State<AppState>, target: String) -> Res<Strin
 #[tauri::command]
 fn open_cheat_sheet(st: State<AppState>) -> Res<String> {
     with(&st, |o| {
-        let path = ".constellation/cheat-sheet.md";
+        let path = agent_files::CHEAT_SHEET_PATH;
         let text = agent_files::CHEAT_SHEET;
         let text = if cfg!(target_os = "macos") { text.replace("Ctrl+", "⌘").replace("Ctrl-click", "⌘-click") } else { text.to_string() };
         vault::write_atomic(&o.index.root().join(path), &text)?;

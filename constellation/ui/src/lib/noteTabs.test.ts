@@ -13,6 +13,17 @@ describe("noteTabs", () => {
     expect(tabs.text("a.md")).toBe("A");
   });
 
+  test("reload replaces an edited buffer with the given text", () => {
+    tabs.open("a.md", "A"); tabs.edit("a.md", "mine", 0);
+    const rev = tabs.revision("a.md");
+    tabs.reload("a.md", "fresh");
+    expect(tabs.text("a.md")).toBe("fresh");
+    expect(tabs.hasPendingEdits).toBe(false);
+    expect(tabs.revision("a.md")).toBe(rev + 1);
+    tabs.reload("zzz.md", "x");
+    expect(tabs.text("zzz.md")).toBeUndefined();
+  });
+
   test("closing active tab focuses neighbour and returns pending edits", () => {
     tabs.open("a.md", "A"); tabs.open("b.md", "B");
     tabs.edit("b.md", "B2", 0);
