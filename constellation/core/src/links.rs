@@ -3,6 +3,8 @@
 use crate::edit::FileEdit;
 use crate::parser::{ParsedNote, WikiLink};
 use crate::text::strip_md;
+use crate::vault::is_app_only;
+use crate::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -77,6 +79,24 @@ pub fn create_note_edits(paths: &PathIndex, target: &str) -> Vec<FileEdit> {
         LinkResolution::Broken { create_path } => vec![FileEdit::create(&create_path, "")],
         LinkResolution::Note { .. } => vec![],
     }
+}
+
+/// The edit that creates an empty Note at the exact Vault path a person typed (`.md` added when there is no extension,
+/// folders as needed). Refuses empty, trailing-slash, absolute and `..` paths, app-only places and existing Notes.
+pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
+    let t = typed.trim();
+    let name = t.rsplit('/').next().unwrap_or("");
+    if name.is_empty() || t.starts_with('/') || t.split('/').any(|s| s == "..") {
+        return Err(Error(format!("Not a valid Note path: \"{t}\"")));
+    }
+    if is_app_only(t) {
+        return Err(Error("That place is for the app's own files".into()));
+    }
+    let path = if std::path::Path::new(name).extension().is_some() { t.to_string() } else { format!("{t}.md") };
+    if matches!(paths.resolve(&path), LinkResolution::Note { path: p } if p.eq_ignore_ascii_case(&path)) {
+        return Err(Error(format!("A Note already exists at {path}")));
+    }
+    Ok(vec![FileEdit::create(&path, "")])
 }
 
 /// Links in other Notes that resolve to `path`, in path then text order.

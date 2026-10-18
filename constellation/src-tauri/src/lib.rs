@@ -450,6 +450,17 @@ fn create_note(app: AppHandle, st: State<AppState>, target: String) -> Res<Strin
     })
 }
 
+/// Creates an empty Note at the typed Vault path; returns its path.
+#[tauri::command]
+fn new_note(app: AppHandle, st: State<AppState>, path: String) -> Res<String> {
+    with(&st, |o| {
+        let edits = o.index.new_note_edits(&path)?;
+        let made = edits[0].path.clone();
+        apply(&app, o, edits)?;
+        Ok(made)
+    })
+}
+
 /// Renames a Note (same folder) or moves it to another folder (same name); rewrites Links.
 #[tauri::command]
 fn rename_note(app: AppHandle, st: State<AppState>, path: String, new_path: String) -> Res<String> {
@@ -569,6 +580,7 @@ pub fn run() {
             undo,
             undo_depth,
             create_note,
+            new_note,
             rename_note,
             rename_heading,
             rename_tag,

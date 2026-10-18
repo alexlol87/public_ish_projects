@@ -138,6 +138,11 @@ impl VaultIndex {
         links::create_note_edits(&self.paths, target)
     }
 
+    /// The edit that creates an empty Note at an exact typed path, or why it can't. Writes nothing.
+    pub fn new_note_edits(&self, path: &str) -> Result<Vec<FileEdit>> {
+        links::new_note_edits(&self.paths, path)
+    }
+
     /// Links in `text` (an open Note's current, maybe unsaved text) that are missing or ambiguous.
     pub fn broken_links(&self, text: &str) -> Vec<WikiLink> {
         links::broken(&self.paths, parser::parse(text).links)

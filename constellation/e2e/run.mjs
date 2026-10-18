@@ -428,6 +428,38 @@ await test("rename and move a Note rewrite links; undo restores", async () => {
   ok(fs.existsSync(path.join(vault, "acme-shop/overview.md")), "move undone");
 });
 
+await test("new note: button, folder menu, Ctrl+N, existing path error, undo", async () => {
+  const modalValue = () => app.eval(() => document.querySelector(".modal input").value);
+  const exists = (f) => fs.existsSync(path.join(vault, f));
+  await openRow("acme-shop/overview.md");
+  await app.click("#new-note");
+  await app.until(() => document.querySelector(".modal input"), "dialog");
+  eq(await modalValue(), "acme-shop/", "pre-filled with the active Note's folder");
+  await app.press("Escape");
+  await sleep(300);
+  ok(!(await app.eval(() => !!document.querySelector(".modal"))), "Escape closed the prompt");
+  await app.click("#new-note");
+  await fillModal("acme-shop/idea");
+  await app.until(() => document.querySelector(".tab.active")?.title === "acme-shop/idea.md", "new note is the active tab");
+  eq(disk("acme-shop/idea.md"), "", "empty file on disk");
+  await app.until(() => document.querySelector(".row-item[title='acme-shop/idea.md']"), "shown in the tree");
+  await app.press("Control", "z");
+  await sleep(1200);
+  ok(!exists("acme-shop/idea.md"), "Ctrl+Z removed the new Note");
+  await app.rightClick(".row-item[title='clients']");
+  await app.click(".ctx-item", "New note here");
+  await app.until(() => document.querySelector(".modal input"), "dialog");
+  eq(await modalValue(), "clients/", "pre-filled with the right-clicked folder");
+  await app.press("Escape");
+  await sleep(300);
+  await app.press("Control", "n");
+  await app.until(() => document.querySelector(".modal input"), "Ctrl+N prompt");
+  await app.eval(() => { document.querySelector(".modal input").value = "acme-shop/overview.md"; });
+  await app.press("Enter");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast for an existing path");
+  ok(disk("acme-shop/overview.md").length > 0, "existing Note unchanged");
+});
+
 await test("settings: staleness days and theme persist", async () => {
   await openRow("acme-shop/cart-service/README.md");
   await app.click("#open-settings");

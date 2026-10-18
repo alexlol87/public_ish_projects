@@ -51,6 +51,7 @@ export const api = {
   undo: () => invoke<boolean>("undo"),
   undoDepth: () => invoke<number>("undo_depth"),
   createNote: (target: string) => invoke<string>("create_note", { target }),
+  newNote: (path: string) => invoke<string>("new_note", { path }),
   renameNote: (path: string, newPath: string) => invoke<string>("rename_note", { path, newPath }),
   renameHeading: (path: string, old: string, newTitle: string) => invoke<void>("rename_heading", { path, old, new: newTitle }),
   renameTag: (old: string, newName: string) => invoke<void>("rename_tag", { old, new: newName }),

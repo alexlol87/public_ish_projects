@@ -105,3 +105,25 @@ fn broken_links_in_unsaved_text() {
     let broken = ix.broken_links("[[a]] [[b]] [[nope]] `[[code]]`");
     assert_eq!(broken.iter().map(|l| l.target.as_str()).collect::<Vec<_>>(), ["nope"]);
 }
+
+#[test]
+fn new_note_creates_at_exact_path_and_resolves() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    for (typed, made) in [("acme-shop/ideas", "acme-shop/ideas.md"), ("  new-project/docs/README.md ", "new-project/docs/README.md"), ("overview", "overview.md")] {
+        assert_eq!(ix.new_note_edits(typed).unwrap(), [FileEdit::create(made, "")], "{typed}");
+    }
+    let edits = ix.new_note_edits("new-project/README").unwrap();
+    assert!(!exists(v.path(), "new-project/README.md"), "writes nothing");
+    apply(&edits, v.path()).unwrap();
+    assert_eq!(VaultIndex::open(v.path()).unwrap().resolve("new-project/README"), note("new-project/README.md"));
+}
+
+#[test]
+fn new_note_refuses_bad_paths() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    for bad in ["acme-shop/Overview", "ACME-SHOP/overview.md", "", "  ", "acme-shop/", "/abs", "../x", "a/../x", "templates/x", ".constellation/x.md", "AGENTS.md"] {
+        assert!(ix.new_note_edits(bad).is_err(), "{bad:?}");
+    }
+}

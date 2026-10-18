@@ -99,6 +99,7 @@ function buildLayout(app: HTMLElement) {
   P.undo = h("button", { id: "undo", title: `Undo last rename/move/task (${isMac ? "⌘" : "Ctrl+"}Z outside typing)`, disabled: true, onclick: () => void undo() }, "Undo");
   P.top = h("div", { class: "topbar" }, h("strong", {}, "Constellation"), h("span", { class: "muted vault-name", title: rootPath }, baseName(rootPath) || rootPath),
     h("span", { class: "grow" }), P.undo,
+    h("button", { id: "new-note", title: `New note (${isMac ? "⌘" : "Ctrl+"}N)`, onclick: () => void newNote() }, "New note"),
     h("button", { id: "open-graph", title: `Graph (${isMac ? "⌘" : "Ctrl+"}G)`, onclick: () => void api.openGraph() }, "Graph"),
     h("button", { id: "open-settings", title: "Settings", onclick: () => void settings() }, "Settings"));
   P.search = h("input", { type: "search", id: "search", placeholder: "Search folders, notes, text, #tag", class: "wide" });
@@ -348,12 +349,25 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
         if (readme && !c.appOnly) void openNote(readme.relativePath);
         void renderSide();
       },
-      oncontextmenu: (e: MouseEvent) => !c.isFolder && !c.appOnly && contextMenu(e, [["Rename / move…", () => void renameNote(c.relativePath)]]),
+      oncontextmenu: (e: MouseEvent) => !c.appOnly && contextMenu(e, [c.isFolder ? ["New note here…", () => void newNote(c.relativePath)] : ["Rename / move…", () => void renameNote(c.relativePath)]]),
     }, h("span", { class: "chev" }, c.isFolder ? (open ? "▾" : "▸") : ""), c.name);
     out.push(row);
     if (c.isFolder && open) out.push(...renderTree(c, depth + 1));
   }
   return out;
+}
+
+/** Prompts for a path pre-filled with `folder` (else the active Note's folder), creates the empty Note and opens it. */
+async function newNote(folder = (tabs.active ?? "").split("/").slice(0, -1).join("/")) {
+  const path = await ask("New note", folder ? `${folder}/` : "", "Folder and name. Folders are created as needed; .md is added.");
+  if (!path) return;
+  await flushAll();
+  try {
+    const np = await api.newNote(path);
+    appActionAt = Date.now();
+    np.split("/").slice(0, -1).reduce((d, part) => { d = d ? `${d}/${part}` : part; expanded.add(d); return d; }, "");
+    await openNote(np);
+  } catch (e) { toast(errText(e), true); }
 }
 
 async function renameNote(path: string) {
@@ -492,6 +506,7 @@ function onKey(e: KeyboardEvent) {
   const inEditor = !!t.closest?.(".cm-editor");
   const inField = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
   if (k === "g" && !e.shiftKey) { e.preventDefault(); void api.openGraph(); }
+  else if (k === "n" && !e.shiftKey) { e.preventDefault(); void newNote(); }
   else if (k === "," ) { e.preventDefault(); void settings(); }
   else if (k === "s") { e.preventDefault(); void flushAll(); }
   else if (k === "w") { e.preventDefault(); if (tabs.active) void closeTab(tabs.active); }
