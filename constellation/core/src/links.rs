@@ -81,18 +81,21 @@ pub fn create_note_edits(paths: &PathIndex, target: &str) -> Vec<FileEdit> {
     }
 }
 
-/// The edit that creates an empty Note at the exact Vault path a person typed (`.md` added unless it already ends in it,
-/// folders as needed). Refuses empty, trailing-slash, absolute and `..` paths, app-only places and existing Notes.
+/// The edit that creates an empty Note at the exact Vault path a person typed: trimmed, a leading `./` and doubled `/`
+/// dropped, `.md` added unless it already ends in it, folders as needed. Refuses empty, trailing-slash, absolute,
+/// `.`, `..` and hidden segments, app-only places (checked on the final path, any case) and existing Notes.
 pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
     let t = typed.trim();
-    let name = t.rsplit('/').next().unwrap_or("");
-    if name.is_empty() || t.starts_with('/') || t.split('/').any(|s| s == "..") {
-        return Err(Error(format!("Not a valid Note path: \"{t}\"")));
+    let t = t.strip_prefix("./").unwrap_or(t);
+    let bad = t.starts_with('/') || t.ends_with('/') || t.split('/').any(|s| s == "." || s.starts_with('.'));
+    let t = t.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
+    if bad || t.is_empty() {
+        return Err(Error(format!("Not a valid Note path: \"{}\"", typed.trim())));
     }
-    if is_app_only(t) {
+    let path = if t.to_lowercase().ends_with(".md") { t } else { format!("{t}.md") };
+    if is_app_only(&path) {
         return Err(Error("That place is for the app's own files".into()));
     }
-    let path = if t.to_lowercase().ends_with(".md") { t.to_string() } else { format!("{t}.md") };
     if paths.by_path.contains_key(&strip_md(&path).to_lowercase()) {
         return Err(Error(format!("A Note already exists at {path}")));
     }

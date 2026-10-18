@@ -25,11 +25,14 @@ pub struct FileEdit {
     /// On the undo of a creation: folders the creation made, deepest first; removed too when empty.
     #[serde(default)]
     pub made_dirs: Vec<String>,
+    /// On the undo of a creation: the text the creation wrote; the file is only removed while it still holds exactly this.
+    #[serde(default)]
+    pub only_if: Option<String>,
 }
 
 impl FileEdit {
     pub fn replace(path: &str, range: Range16, text: &str) -> Self {
-        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![] }
+        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![], only_if: None }
     }
 
     pub fn create(path: &str, text: &str) -> Self {
@@ -49,6 +52,9 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
         let file = root.join(&e.path);
         if e.removes_file {
             let old = fs::read_to_string(&file)?;
+            if e.only_if.as_ref().is_some_and(|t| *t != old) {
+                return Err(Error(format!("{} has changed since it was created; not removing it", e.path)));
+            }
             fs::remove_file(&file)?;
             for d in &e.made_dirs {
                 let _ = fs::remove_dir(root.join(d)); // not empty any more: leave it
@@ -56,13 +62,16 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
             inverse.push(FileEdit::create(&e.path, &old));
             continue;
         }
+        if e.creates_file && file.exists() {
+            return Err(Error(format!("{} already exists", e.path)));
+        }
         let made_dirs = if e.creates_file { missing_dirs(root, &e.path) } else { vec![] };
         let old = if e.creates_file { String::new() } else { fs::read_to_string(&file)? };
         let replaced = slice16(&old, e.range).ok_or_else(|| Error(format!("Edit range is outside {}", e.path)))?.to_string();
         let new = replace16(&old, e.range, &e.text).ok_or_else(|| Error(format!("Edit range is outside {}", e.path)))?;
         write_atomic(&file, &new)?;
         inverse.push(if e.creates_file {
-            FileEdit { made_dirs, ..FileEdit::remove(&e.path) }
+            FileEdit { made_dirs, only_if: Some(new), ..FileEdit::remove(&e.path) }
         } else {
             FileEdit::replace(&e.path, Range16::new(e.range.location, len16(&e.text)), &replaced)
         });

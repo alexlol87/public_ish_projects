@@ -96,7 +96,7 @@ const FORMATS: [FormatAction, string, string][] = [
 ];
 
 function buildLayout(app: HTMLElement) {
-  P.undo = h("button", { id: "undo", title: `Undo last rename/move/task (${isMac ? "⌘" : "Ctrl+"}Z outside typing)`, disabled: true, onclick: () => void undo() }, "Undo");
+  P.undo = h("button", { id: "undo", title: `Undo last rename/move/Todo item/new note (${isMac ? "⌘" : "Ctrl+"}Z outside typing)`, disabled: true, onclick: () => void undo() }, "Undo");
   P.top = h("div", { class: "topbar" }, h("strong", {}, "Constellation"), h("span", { class: "muted vault-name", title: rootPath }, baseName(rootPath) || rootPath),
     h("span", { class: "grow" }), P.undo,
     h("button", { id: "open-graph", title: `Graph (${isMac ? "⌘" : "Ctrl+"}G)`, onclick: () => void api.openGraph() }, "Graph"),
@@ -319,7 +319,9 @@ async function refreshBroken() {
 
 async function undo() {
   await flushAll();
-  if (await api.undo()) { appActionAt = Date.now(); toast("Undone"); }
+  try {
+    if (await api.undo()) { appActionAt = Date.now(); toast("Undone"); }
+  } catch (e) { toast(errText(e), true); }
 }
 
 // ---------- sidebar ----------
@@ -359,7 +361,7 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
   return out;
 }
 
-const isAppOnly = (p: string) => !!tree?.children.find((c) => c.name === p.split("/")[0])?.appOnly;
+const isAppOnly = (p: string) => p.startsWith(".") || !!tree?.children.find((c) => c.name === p.split("/")[0])?.appOnly;
 const dirName = (p: string) => p.split("/").slice(0, -1).join("/");
 
 /** Opens every folder above `path` in the tree. */
@@ -369,16 +371,24 @@ function expandAncestors(path: string) {
 
 /** Prompts for a path pre-filled with `folder` (else the active Note's folder, or the Vault root for app-only ones), creates the empty Note and opens it. */
 async function newNote(folder = tabs.active && !isAppOnly(tabs.active) ? dirName(tabs.active) : "") {
-  const path = await ask("New note", folder ? `${folder}/` : "", "Folder and name. Folders are created as needed; .md is added.");
-  if (!path) return;
-  await flushAll();
-  try {
-    const np = await api.newNote(path);
-    appActionAt = Date.now();
-    expandAncestors(np);
-    await openNote(np);
-    editor.focus();
-  } catch (e) { toast(errText(e), true); }
+  let typed = folder ? `${folder}/` : "";
+  for (;;) {
+    const path = await ask("New note", typed, "Folder and name. Folders are created as needed; .md is added.");
+    if (!path) return;
+    await flushAll();
+    try {
+      const np = await api.newNote(path);
+      appActionAt = Date.now();
+      expandAncestors(np);
+      await openNote(np);
+      editor.focus();
+      return;
+    } catch (e) {
+      const msg = errText(e);
+      toast(msg.includes("File name too long") ? "That name is too long for the file system. Shorten it." : msg, true);
+      typed = path; // ask again with what was typed
+    }
+  }
 }
 
 async function openHelp() {
@@ -520,6 +530,7 @@ async function settings() {
 }
 
 function onKey(e: KeyboardEvent) {
+  if (document.querySelector(".modal-back")) return; // a prompt is open: the app shortcuts wait
   const k = e.key.toLowerCase();
   if (e.key === "F1") { e.preventDefault(); void openHelp(); return; }
   if (!mod(e)) return;

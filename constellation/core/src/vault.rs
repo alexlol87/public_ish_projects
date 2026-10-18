@@ -20,9 +20,10 @@ pub struct VaultNode {
 
 const APP_ONLY_TOP: [&str; 5] = ["AGENTS.md", "repos.txt", "tags.md", "templates", ".constellation"];
 
-/// True for the app's own files (top level only) and anything inside its folders.
+/// True for the app's own files (top level only, any case) and anything inside its folders.
 pub fn is_app_only(relative_path: &str) -> bool {
-    APP_ONLY_TOP.contains(&relative_path.split('/').find(|s| !s.is_empty()).unwrap_or(""))
+    let top = relative_path.split('/').find(|s| !s.is_empty()).unwrap_or("");
+    APP_ONLY_TOP.iter().any(|t| t.eq_ignore_ascii_case(top))
 }
 
 /// Archive Notes live in `<project>/archive/` (ADR 0002); hidden in the graph by default, marked in search.

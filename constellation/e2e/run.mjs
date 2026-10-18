@@ -464,6 +464,22 @@ await test("new note: button, folder menu, Ctrl+N, existing path error, undo", a
   await app.press("Enter");
   await app.until(() => document.querySelector(".toast.bad"), "error toast for an existing path");
   ok(disk("acme-shop/overview.md").length > 0, "existing Note unchanged");
+  await app.until(() => document.querySelector(".modal input"), "prompt reopens after the error");
+  eq(await modalValue(), "acme-shop/overview.md", "typed value kept");
+  await app.press("Escape");
+  await sleep(300);
+});
+
+await test("undo of a new note keeps it once it has text", async () => {
+  await app.press("Control", "n");
+  await fillModal("keep-me-note");
+  await app.until(() => document.querySelector(".tab.active")?.title === "keep-me-note.md", "new note is the active tab");
+  await app.type("precious");
+  await sleep(1500); // autosave
+  eq(disk("keep-me-note.md"), "precious", "saved");
+  await app.click("#undo");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast");
+  eq(disk("keep-me-note.md"), "precious", "file kept");
 });
 
 await test("help: button and F1 open the cheat sheet; search does not find it", async () => {

@@ -215,8 +215,8 @@ fn create_note_edits_apply_and_resolve() {
 fn cheat_sheet_names_every_bound_shortcut_and_says_edits_are_overwritten() {
     let text = agent_files::CHEAT_SHEET;
     assert!(text.lines().next().unwrap().contains("overwritten"));
-    // Keep in step with `onKey` and the top bar in ui/src/app.ts.
-    for k in ["Ctrl+G", "Ctrl+N", "Ctrl+S", "Ctrl+W", "Ctrl+Z", "Ctrl+,", "Ctrl+Shift+F", "Ctrl-click", "F1"] {
+    // Keep in step with `onKey` and the top bar in ui/src/app.ts, and `formatKeys` and the history keymap in ui/src/editor/editor.ts.
+    for k in ["Ctrl+G", "Ctrl+N", "Ctrl+S", "Ctrl+W", "Ctrl+Z", "Ctrl+,", "Ctrl+Shift+F", "Ctrl-click", "F1", "Ctrl+Shift+Z", "Ctrl+Y", "Ctrl+B", "Ctrl+I", "Ctrl+U", "Ctrl+Shift+X", "Ctrl+E", "Ctrl+Alt+C", "Ctrl+1", "Ctrl+Shift+8", "Ctrl+Shift+7", "Ctrl+Shift+9", "Ctrl+Shift+.", "Ctrl+K"] {
         assert!(text.contains(k), "cheat sheet misses {k}");
     }
 }

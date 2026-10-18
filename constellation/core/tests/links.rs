@@ -164,3 +164,41 @@ fn undo_of_create_removes_only_the_folders_it_made() {
     apply(&inverse, v.path()).unwrap();
     assert!(v.path().join("empty-before").is_dir(), "pre-existing empty folder stays");
 }
+
+#[test]
+fn new_note_normalises_the_path_and_checks_app_only_on_the_final_one() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    for (typed, made) in [("./ideas", "ideas.md"), ("acme-shop//ideas", "acme-shop/ideas.md"), (" ./a//b/c.md ", "a/b/c.md")] {
+        assert_eq!(ix.new_note_edits(typed).unwrap(), [FileEdit::create(made, "")], "{typed}");
+    }
+    for bad in ["tags", "AGENTS", "agents", "./tags", "TEMPLATES/z", "Templates//z", "./templates/z", "a/./b", ".", "./", "a/.hid/keep", ".obsidian/keep.md", "x/.hid/keep.md", ".x"] {
+        assert!(ix.new_note_edits(bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn create_never_overwrites_an_existing_file() {
+    let v = make_vault(&[("tags.md", "keep me"), (".obsidian/keep.md", "hidden"), ("a.md", "x")]);
+    for p in ["tags.md", ".obsidian/keep.md", "a.md"] {
+        assert!(apply(&[FileEdit::create(p, "")], v.path()).is_err(), "{p}");
+    }
+    assert_eq!(read(v.path(), "tags.md"), "keep me");
+    assert_eq!(read(v.path(), ".obsidian/keep.md"), "hidden");
+    let ix = VaultIndex::open(v.path()).unwrap();
+    assert!(apply(&ix.create_note_edits(".obsidian/keep"), v.path()).is_err());
+    assert_eq!(read(v.path(), ".obsidian/keep.md"), "hidden");
+}
+
+#[test]
+fn undo_of_create_refuses_when_the_note_changed_since() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    let inverse = apply(&ix.new_note_edits("fresh").unwrap(), v.path()).unwrap();
+    write(v.path(), "fresh.md", "later text");
+    assert!(apply(&inverse, v.path()).is_err());
+    assert_eq!(read(v.path(), "fresh.md"), "later text");
+    write(v.path(), "fresh.md", "");
+    apply(&inverse, v.path()).unwrap();
+    assert!(!exists(v.path(), "fresh.md"));
+}

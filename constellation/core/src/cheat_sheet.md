@@ -10,14 +10,28 @@ On macOS, read Ctrl as the Command key.
 | Ctrl+G | Open the graph |
 | Ctrl+S | Save every open Note now |
 | Ctrl+W | Close the current tab |
-| Ctrl+Z | Undo the last app action (rename, move, Bug or Todo tick, new note), outside typing |
+| Ctrl+Z | Undo the last app action (rename, move, Bug or Todo tick, new note) when you have not typed since; while typing it undoes the typing |
+| Ctrl+Shift+Z or Ctrl+Y | Redo typing in the editor (Ctrl+Y is not bound on macOS) |
 | Ctrl+, | Settings |
 | Ctrl+Shift+F | Focus the search box |
 | Click on a Link | Open it (on the line with the cursor, the click moves the cursor instead) |
 | Ctrl-click on a Link | Open it, also on the line with the cursor |
 | Shift-click on a Link | Same as click; it does not open a new window or pane |
 | Ctrl-click on a Tag | Open the Tags tab filtered to that Tag |
-| F1 | Open this cheat sheet (also the Help button) |
+| F1 | Open this cheat sheet in the main window (also the Help button) |
+
+Formatting, in the editor (applying a format that is already there removes it):
+
+| Keys | Does |
+|---|---|
+| Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline |
+| Ctrl+Shift+X | Strikethrough |
+| Ctrl+E | Inline code |
+| Ctrl+Alt+C | Code block |
+| Ctrl+1, Ctrl+2, Ctrl+3 | Heading 1, 2, 3 |
+| Ctrl+Shift+8, Ctrl+Shift+7, Ctrl+Shift+9 | Bullet list, numbered list, task list |
+| Ctrl+Shift+. | Quote |
+| Ctrl+K | Link (`[[ ]]`) |
 
 ## The Vault
 
@@ -32,7 +46,7 @@ On macOS, read Ctrl as the Command key.
 - A Link is `[[folder/note]]`. Add a heading with `[[folder/note#Heading]]`, and a shown name with `[[folder/note|alias]]`.
 - A broken Link, one whose Note does not exist, is red. Click it to create the Note.
 - A Tag is `#label` in the text or frontmatter. Tags nest: `#team/payments`. The Tags tab lists them.
-- Each Note starts with `type:` frontmatter; a Note without it is `type: note`.
+- A new note is empty. A Note without `type:` frontmatter is `type: note`.
 
 ## Actions that change files
 
