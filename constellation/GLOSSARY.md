@@ -1,6 +1,6 @@
 # Constellation
 
-A Linux and macOS app for keeping what a team knows about its projects and microservices in linked markdown notes, so
+A desktop app (Linux and macOS) for keeping what a team knows about its projects and microservices in linked markdown notes, so
 people and agents can answer questions without reading the code.
 
 ## Structure

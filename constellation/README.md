@@ -104,3 +104,7 @@ Build first with `npx tauri build --no-bundle` (the binary is read from `$CARGO_
 default `target/release/`). `npm run e2e -- <part of a test name>` runs a subset; screenshots land in `e2e/out/`
 (git-ignored), failures save one too. The app has two test-only switches that do nothing unless set:
 `CONSTELLATION_E2E_PICK=<dir>` answers the native folder dialog, and the graph canvas exposes `e2e()` for node positions.
+Each run picks free ports and its own Xvfb display, so several can run at once.
+
+`npm run e2e:install` runs this checkout's `install.sh` against the published release in a throwaway HOME (install,
+launch, uninstall). Run it after a release, and before merging changes to `install.sh`.
