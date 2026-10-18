@@ -2,11 +2,25 @@
 //! app applies them as one undoable step and tests can inspect them.
 
 use crate::text::{bytes_at, len16, Range16};
-use crate::vault::write_atomic;
+use crate::vault::write_atomic_as;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
+
+/// The permission bits and symlink target of `old`, for the creation that moves it to `new` (a relative link keeps pointing
+/// at the same file from the new folder).
+pub fn mode_and_link(root: &Path, old: &str, new: &str) -> (Option<u32>, Option<String>) {
+    let Ok(m) = fs::symlink_metadata(root.join(old)) else { return (None, None) };
+    if !m.is_symlink() {
+        return (Some(m.permissions().mode()), None);
+    }
+    let dir = |p: &str| p.rsplit_once('/').map_or("", |d| d.0).to_string();
+    let to = fs::read_link(root.join(old)).ok();
+    let link = to.map(|t| if t.is_relative() && dir(old) != dir(new) { root.join(dir(old)).join(t) } else { t });
+    (None, link.map(|t| t.to_string_lossy().into_owned()))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,11 +45,17 @@ pub struct FileEdit {
     /// On an inverse replace: the text `range` must still hold; otherwise the file changed since and the batch is refused.
     #[serde(default)]
     pub expect: Option<String>,
+    /// On a creation: the permission bits to give the new file (a move keeps them).
+    #[serde(default)]
+    pub mode: Option<u32>,
+    /// On a creation: make the file a symlink to this target instead (a moved symlinked Note stays a link).
+    #[serde(default)]
+    pub link: Option<String>,
 }
 
 impl FileEdit {
     pub fn replace(path: &str, range: Range16, text: &str) -> Self {
-        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![], only_if: None, expect: None }
+        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![], only_if: None, expect: None, mode: None, link: None }
     }
 
     pub fn create(path: &str, text: &str) -> Self {
@@ -55,7 +75,7 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
     let Plan { mut inverse, files } = plan(edits, root)?;
     for (k, f) in files.iter().enumerate() {
         let done = match &f.new {
-            Some(t) => write_atomic(&root.join(&f.path), t),
+            Some(t) => create_or_write(root, f, t),
             None => fs::remove_file(root.join(&f.path)).map_err(Error::from).map(|_| {
                 for d in &f.made_dirs {
                     let _ = fs::remove_dir(root.join(d)); // not empty any more: leave it
@@ -65,7 +85,7 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
         if let Err(err) = done {
             for f in &files[..k] {
                 match &f.old {
-                    Some(t) => drop(write_atomic(&root.join(&f.path), t)),
+                    Some(t) => drop(write_atomic_as(&root.join(&f.path), t, &f.path)),
                     None => drop(fs::remove_file(root.join(&f.path))),
                 }
             }
@@ -83,6 +103,23 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
     Ok(inverse)
 }
 
+fn create_or_write(root: &Path, f: &File, text: &str) -> Result<()> {
+    let path = root.join(&f.path);
+    if f.old.is_none() {
+        if let Some(to) = &f.link {
+            fs::create_dir_all(path.parent().unwrap_or(root))?;
+            symlink(to, &path)?;
+        }
+    }
+    write_atomic_as(&path, text, &f.path)?;
+    if let (None, Some(m)) = (&f.link, f.mode) {
+        if f.old.is_none() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(m))?;
+        }
+    }
+    Ok(())
+}
+
 /// Refuses the whole batch, before anything is written, if a path leaves the Vault, a target (or, for a create, its folder) is
 /// read-only, a create would overwrite a file, a guarded removal would lose text changed since, or a replace's `expect`ed text
 /// is no longer in its range (e.g. undoing after the Note was edited).
@@ -95,12 +132,24 @@ struct File {
     old: Option<String>,
     new: Option<String>,
     made_dirs: Vec<String>,
+    mode: Option<u32>,
+    link: Option<String>,
 }
 
 struct Plan {
     inverse: Vec<FileEdit>,
     /// Files whose text changes, in order of first touch.
     files: Vec<File>,
+}
+
+/// The file's text, or None if it does not exist. Any other read error (e.g. not UTF-8) fails the action: that file must not be overwritten.
+fn read_existing(root: &Path, path: &str) -> Result<Option<String>> {
+    match fs::read_to_string(root.join(path)) {
+        Ok(t) => Ok(Some(t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Err(Error(format!("{path} exists but is not UTF-8 text; nothing was changed"))),
+        Err(e) => Err(Error(format!("{path} can't be read ({e}); nothing was changed"))),
+    }
 }
 
 fn plan(edits: &[FileEdit], root: &Path) -> Result<Plan> {
@@ -113,11 +162,15 @@ fn plan(edits: &[FileEdit], root: &Path) -> Result<Plan> {
     while i < edits.len() {
         let e = &edits[i];
         crate::vault::safe_path(root, &e.path)?;
-        let at = *cur.entry(&e.path).or_insert_with(|| {
-            let old = fs::read_to_string(root.join(&e.path)).ok();
-            files.push(File { path: e.path.clone(), new: old.clone(), old, made_dirs: vec![] });
-            files.len() - 1
-        });
+        let at = match cur.get(e.path.as_str()) {
+            Some(&at) => at,
+            None => {
+                let old = read_existing(root, &e.path)?;
+                files.push(File { path: e.path.clone(), new: old.clone(), old, made_dirs: vec![], mode: None, link: None });
+                cur.insert(&e.path, files.len() - 1);
+                files.len() - 1
+            }
+        };
         let now = files[at].new.clone();
         let mut next = i + 1;
         if e.removes_file {
@@ -128,7 +181,8 @@ fn plan(edits: &[FileEdit], root: &Path) -> Result<Plan> {
             writable(root, &e.path, false)?;
             files[at].made_dirs = e.made_dirs.clone();
             files[at].new = None;
-            inverse.push(FileEdit::create(&e.path, &old));
+            let (mode, link) = mode_and_link(root, &e.path, &e.path);
+            inverse.push(FileEdit { mode, link, ..FileEdit::create(&e.path, &old) });
         } else if e.creates_file {
             if now.is_some() {
                 return Err(Error(format!("{} already exists", e.path)));
@@ -137,6 +191,7 @@ fn plan(edits: &[FileEdit], root: &Path) -> Result<Plan> {
             let made_dirs = missing_dirs(root, &e.path);
             files[at].made_dirs = made_dirs.clone();
             files[at].new = Some(e.text.clone());
+            (files[at].mode, files[at].link) = (e.mode, e.link.clone());
             inverse.push(FileEdit { made_dirs, only_if: Some(e.text.clone()), ..FileEdit::remove(&e.path) });
         } else {
             let Some(old) = now else { return Err(Error(format!("{} was deleted after that action", e.path))) };

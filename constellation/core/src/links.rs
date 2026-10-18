@@ -82,12 +82,12 @@ pub fn create_note_edits(paths: &PathIndex, target: &str) -> Result<Vec<FileEdit
 }
 
 /// A Vault-relative Note path from what a person or Link typed: trimmed, a leading `./` and doubled `/` dropped, `.md`
-/// added unless it already ends in it. Refuses empty, trailing-slash, absolute, backslash, `.`, `..` and hidden segments, `#`, `|`, `[[` and `]]`,
+/// added unless it already ends in it. Refuses control characters, empty, trailing-slash, absolute, backslash, `.`, `..` and hidden segments, `#`, `|`, `[[` and `]]`,
 /// and app-only places (checked on the final path, any case). So the result always stays inside the Vault.
 pub fn clean_note_path(typed: &str) -> Result<String> {
     let t = typed.trim();
     let t = t.strip_prefix("./").unwrap_or(t);
-    let bad = t.starts_with('/') || t.ends_with('/') || t.contains('\\') || t.split('/').any(|s| s == "." || s.starts_with('.'));
+    let bad = t.chars().any(char::is_control) || t.starts_with('/') || t.ends_with('/') || t.contains('\\') || t.split('/').any(|s| s == "." || s.starts_with('.'));
     let t = t.split('/').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
     let bad = bad || t.contains(['#', '|']) || t.contains("[[") || t.contains("]]"); // no Link can point to these
     if bad || t.is_empty() {
@@ -126,8 +126,9 @@ pub fn completions(parsed: &BTreeMap<String, ParsedNote>, paths: &PathIndex, typ
     let lower = typed.to_lowercase();
     if let Some((target, prefix)) = typed.split_once('#') {
         let LinkResolution::Note { path } = paths.resolve(target) else { return vec![] };
+        let Some(note) = parsed.get(&path) else { return vec![] }; // unreadable Note: no headings to offer
         let prefix = prefix.to_lowercase();
-        return parsed[&path]
+        return note
             .headings
             .iter()
             .filter(|h| h.title.to_lowercase().starts_with(&prefix))

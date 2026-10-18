@@ -56,6 +56,9 @@ export const api = {
   renameNote: (path: string, newPath: string) => invoke<string>("rename_note", { path, newPath }),
   renameHeading: (path: string, old: string, newTitle: string) => invoke<void>("rename_heading", { path, old, new: newTitle }),
   renameTag: (old: string, newName: string) => invoke<void>("rename_tag", { old, new: newName }),
+  wasTerminated: () => invoke<boolean>("was_terminated"),
+  saveRecovery: (path: string, text: string) => invoke<void>("save_recovery", { path, text }),
+  recoveryFiles: () => invoke<string[]>("recovery_files"),
   tick: (path: string, text: string, offset: number) => invoke<string[]>("tick", { path, text, offset }),
 };
 
