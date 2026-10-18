@@ -43,6 +43,7 @@ export async function graphView(app: HTMLElement) {
       ...all.map((x) => check(x, sel.length === 0 || sel.includes(x), (on) => {
         const cur = sel.length === 0 ? [...all] : [...sel];
         const next = on ? [...new Set([...cur, x])] : cur.filter((y) => y !== x);
+        if (!next.length) return void renderPanel(); // the last one stays ticked ("none" would mean "all")
         set(next.length === all.length ? [] : next);
       })));
 
@@ -73,7 +74,7 @@ export async function graphView(app: HTMLElement) {
     for (const e of g.edges) { neighbours.get(e.from)?.add(e.to); neighbours.get(e.to)?.add(e.from); }
     layout.update(g.nodes.map((n) => n.id), g.edges.map((e) => [e.from, e.to]));
     heat = 400;
-    refit = true;
+    refit ||= why === "init" || why === "filter" || why === "current-note"; // a Vault change keeps the user's pan/zoom
     requestAnimationFrame(frame);
   }
 

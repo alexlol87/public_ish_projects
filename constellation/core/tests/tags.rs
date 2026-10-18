@@ -63,3 +63,13 @@ fn hit_offsets_are_utf16() {
     let v = make_vault(&[("a.md", "😀é #tag")]);
     assert_eq!(VaultIndex::open(v.path()).unwrap().tag_hits("tag")[0].offset, 4);
 }
+
+#[test]
+fn tag_search_folds_diacritics() {
+    let v = make_vault(&[("a.md", "#tág/ünï here"), ("tags.md", "- #Only-Listed: x\n")]);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    assert_eq!(ix.tag_hits("tag/uni").len(), 1);
+    assert_eq!(ix.tag_hits("tág").len(), 1);
+    assert_eq!(ix.tag_completions("only"), ["only-listed"]);
+    assert_eq!(ix.tag_completions("tag"), ["tág/ünï"].map(String::from));
+}

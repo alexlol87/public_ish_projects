@@ -107,7 +107,9 @@ impl VaultIndex {
     }
 
     pub fn tag_completions(&self, prefix: &str) -> Vec<String> {
-        self.tags.completions(prefix)
+        let listed = std::fs::read_to_string(self.root.join("tags.md")).unwrap_or_default();
+        let extra: Vec<String> = parser::parse(&listed).tags.iter().map(|t| t.name.to_lowercase()).collect();
+        self.tags.completions(prefix, &extra)
     }
 
     /// The graph for `filter`, optionally local to `around`; built from the parsed Notes in memory.

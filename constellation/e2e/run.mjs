@@ -500,6 +500,20 @@ await test("help: button and F1 open the cheat sheet; search does not find it", 
   await search("");
 });
 
+await test("settings: days must be a whole number of 1 or more; the dialog stays open", async () => {
+  await app.click("#open-settings");
+  await app.until(() => document.querySelector("#set-days"), "settings dialog");
+  for (const bad of ["2.7", "-5", "0", ""]) {
+    await app.eval((v) => { document.querySelector("#set-days").value = v; }, bad);
+    await app.click("#set-save");
+    await app.until(() => document.querySelector("#set-error")?.textContent, "inline error for " + bad, 3000);
+    ok(await app.has("#set-days"), "dialog still open for " + bad);
+    await app.eval(() => { document.querySelector("#set-error").textContent = ""; });
+  }
+  ok(await app.has("#switch-open") && await app.has("#switch-create"), "vault switch buttons");
+  await app.press("Escape");
+});
+
 await test("settings: staleness days and theme persist", async () => {
   await openRow("acme-shop/cart-service/README.md");
   await app.click("#open-settings");
