@@ -106,6 +106,8 @@ fn fresh_stale_never_malformed() {
     assert_eq!(Staleness::of(Some("last tuesday"), now), Staleness::Malformed);
     assert_eq!(Staleness::of(Some("2026-13-45"), now), Staleness::Malformed);
     assert_eq!(Staleness::of(Some("2026-6-5"), now), Staleness::Malformed);
+    assert_eq!(Staleness::of(Some("\"2026-06-20\""), now), Staleness::Verified { days: 10 });
+    assert_eq!(Staleness::of(Some("'2026-06-20'"), now), Staleness::Verified { days: 10 });
 }
 
 #[test]
@@ -119,7 +121,8 @@ fn highlight_and_label() {
     assert_eq!(Staleness::Verified { days: 0 }.label(), "verified today");
     assert_eq!(Staleness::Never.label(), "never verified");
     assert_eq!(Staleness::Malformed.label(), "verified date unreadable");
-    assert_eq!(Staleness::Verified { days: -3 }.label(), "verified today"); // future date: clamp
+    assert_eq!(Staleness::Verified { days: -3 }.label(), "date is in the future");
+    assert!(Staleness::Verified { days: -3 }.is_stale(30));
     assert_eq!(serde_json::to_value(Staleness::Verified { days: 5 }).unwrap(), serde_json::json!({"kind": "verified", "days": 5}));
 }
 
@@ -207,6 +210,16 @@ fn repo_staleness_follows_ingest() {
 fn create_note_edits_apply_and_resolve() {
     let v = make_vault(&[("a.md", "x")]);
     let ix = VaultIndex::open(v.path()).unwrap();
-    apply(&ix.create_note_edits("ideas/new"), v.path()).unwrap();
+    apply(&ix.create_note_edits("ideas/new").unwrap(), v.path()).unwrap();
     assert_eq!(read(v.path(), "ideas/new.md"), "");
+}
+
+#[test]
+fn cheat_sheet_names_every_bound_shortcut_and_says_edits_are_overwritten() {
+    let text = agent_files::CHEAT_SHEET;
+    assert!(text.lines().next().unwrap().contains("overwritten"));
+    // Keep in step with `onKey` and the top bar in ui/src/app.ts, and `formatKeys` and the history keymap in ui/src/editor/editor.ts.
+    for k in ["Ctrl+G", "Ctrl+N", "Ctrl+S", "Ctrl+W", "Ctrl+Z", "Ctrl+,", "Ctrl+Shift+F", "Ctrl-click", "F1", "Ctrl+Shift+Z", "Ctrl+Y", "Ctrl+B", "Ctrl+I", "Ctrl+U", "Ctrl+Shift+X", "Ctrl+E", "Ctrl+Alt+C", "Ctrl+1", "Ctrl+Shift+8", "Ctrl+Shift+7", "Ctrl+Shift+9", "Ctrl+Shift+.", "Ctrl+K"] {
+        assert!(text.contains(k), "cheat sheet misses {k}");
+    }
 }

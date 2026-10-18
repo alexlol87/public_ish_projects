@@ -2,9 +2,6 @@ export interface Point { x: number; y: number }
 
 const SPRING = 60, REPULSION = 2000, DAMPING = 0.85, THETA = 0.8, MAX_STEP = 30;
 
-interface Cell { x: number; y: number; half: number; mass: number; sx: number; sy: number; body: number; kids: number[] }
-const cell = (x: number, y: number, half: number): Cell => ({ x, y, half, mass: 0, sx: 0, sy: 0, body: -1, kids: [-1, -1, -1, -1] });
-
 /**
  * Force-directed layout (repulsion, springs, centring), stepped from requestAnimationFrame.
  * Repulsion uses a Barnes-Hut quadtree (O(n log n)), so 5,000 Nodes stay interactive.
@@ -51,6 +48,11 @@ export class ForceLayout {
     return i === undefined ? undefined : { x: this.x[i], y: this.y[i] };
   }
 
+  /** Takes positions computed elsewhere (same ids, same order); pinned Nodes keep theirs. */
+  setPositions(x: Float64Array, y: Float64Array) {
+    for (let i = 0; i < this.ids.length; i++) if (!this.pinned.has(i)) { this.x[i] = x[i]; this.y[i] = y[i]; }
+  }
+
   /** Pins a Node at `p` while the user drags it; it still repels the others. */
   pin(id: string, p: Point) {
     const i = this.index.get(id);
@@ -64,6 +66,19 @@ export class ForceLayout {
     if (i !== undefined) this.pinned.delete(i);
   }
 
+  // Quadtree storage, reused between steps: cell c has centre (cx,cy), half-size ch, mass, centre-of-mass sums
+  // (sx,sy), the one body it holds (-1: none) and four child slots at kids[4c..4c+3] (-1: none).
+  private cap = 0;
+  private cx = new Float64Array(0); private cy = new Float64Array(0); private ch = new Float64Array(0);
+  private cm = new Int32Array(0); private sx = new Float64Array(0); private sy = new Float64Array(0);
+  private body = new Int32Array(0); private kids = new Int32Array(0);
+  private grow(cap: number) {
+    const f = <T extends Float64Array | Int32Array>(a: T, k = 1): T => { const b = new (a.constructor as new (n: number) => T)(cap * k); b.set(a); return b; };
+    this.cx = f(this.cx); this.cy = f(this.cy); this.ch = f(this.ch); this.cm = f(this.cm);
+    this.sx = f(this.sx); this.sy = f(this.sy); this.body = f(this.body); this.kids = f(this.kids, 4);
+    this.cap = cap;
+  }
+
   step() {
     const { x: px, y: py, vx, vy } = this;
     const n = this.ids.length;
@@ -71,47 +86,58 @@ export class ForceLayout {
     // Build the quadtree.
     let side = 1;
     for (let i = 0; i < n; i++) side = Math.max(side, Math.abs(px[i]), Math.abs(py[i]));
-    const cells = [cell(0, 0, side + 1)];
-    const quadrant = (c: Cell, x: number, y: number) => (x >= c.x ? 1 : 0) + (y >= c.y ? 2 : 0);
-    const child = (c: number, q: number) => {
-      if (cells[c].kids[q] >= 0) return cells[c].kids[q];
-      const p = cells[c], h = p.half / 2;
-      cells.push(cell(p.x + (q & 1 ? h : -h), p.y + (q & 2 ? h : -h), h));
-      return (p.kids[q] = cells.length - 1);
+    if (this.cap < 4 * n + 16) this.grow(4 * n + 16);
+    let used = 0;
+    const newCell = (x: number, y: number, half: number) => {
+      if (used === this.cap) this.grow(this.cap * 2);
+      const c = used++;
+      this.cx[c] = x; this.cy[c] = y; this.ch[c] = half; this.cm[c] = 0; this.sx[c] = 0; this.sy[c] = 0; this.body[c] = -1;
+      this.kids.fill(-1, 4 * c, 4 * c + 4);
+      return c;
     };
+    newCell(0, 0, side + 1);
+    const child = (c: number, q: number) => {
+      const k = 4 * c + q;
+      if (this.kids[k] >= 0) return this.kids[k];
+      const h = this.ch[c] / 2;
+      const kid = newCell(this.cx[c] + (q & 1 ? h : -h), this.cy[c] + (q & 2 ? h : -h), h);
+      return (this.kids[k] = kid);
+    };
+    const quadrant = (c: number, x: number, y: number) => (x >= this.cx[c] ? 1 : 0) + (y >= this.cy[c] ? 2 : 0);
     for (let i = 0; i < n; i++) {
       let c = 0, depth = 0;
       for (;;) {
-        const k = cells[c];
-        k.mass++; k.sx += px[i]; k.sy += py[i];
-        if (k.mass === 1) { k.body = i; break; }
-        if (k.body >= 0) {
+        this.cm[c]++; this.sx[c] += px[i]; this.sy[c] += py[i];
+        if (this.cm[c] === 1) { this.body[c] = i; break; }
+        const b = this.body[c];
+        if (b >= 0) {
           if (depth >= 32) break; // coincident bodies: counted in mass, not split further
-          const b = k.body;
-          k.body = -1;
-          const kid = cells[child(c, quadrant(k, px[b], py[b]))];
-          kid.mass = 1; kid.sx = px[b]; kid.sy = py[b]; kid.body = b;
+          this.body[c] = -1;
+          const kid = child(c, quadrant(c, px[b], py[b]));
+          this.cm[kid] = 1; this.sx[kid] = px[b]; this.sy[kid] = py[b]; this.body[kid] = b;
         }
-        c = child(c, quadrant(cells[c], px[i], py[i])); depth++;
+        c = child(c, quadrant(c, px[i], py[i])); depth++;
       }
     }
+    const { cm, sx, sy, ch, body, kids } = this;
     const fx = new Float64Array(n), fy = new Float64Array(n);
-    const stack: number[] = [];
+    const stack = new Int32Array(4 * 40 + 8);
     const t2 = THETA * THETA;
     for (let i = 0; i < n; i++) {
       fx[i] -= px[i] * 0.01; fy[i] -= py[i] * 0.01;
-      stack.push(0);
-      for (let c; (c = stack.pop()) !== undefined; ) {
-        const k = cells[c];
-        if (k.body === i) continue;
-        let dx = px[i] - k.sx / k.mass;
-        const dy = py[i] - k.sy / k.mass;
+      let sp = 0;
+      stack[sp++] = 0;
+      while (sp > 0) {
+        const c = stack[--sp];
+        if (body[c] === i) continue;
+        let dx = px[i] - sx[c] / cm[c];
+        const dy = py[i] - sy[c] / cm[c];
         if (dx === 0 && dy === 0) dx = 0.1;
         const d2 = Math.max(dx * dx + dy * dy, 1);
-        if (k.body >= 0 || 4 * k.half * k.half < t2 * d2) {
-          const d = Math.sqrt(d2), f = (k.mass * REPULSION) / d2;
+        if (body[c] >= 0 || 4 * ch[c] * ch[c] < t2 * d2) {
+          const d = Math.sqrt(d2), f = (cm[c] * REPULSION) / d2;
           fx[i] += (f * dx) / d; fy[i] += (f * dy) / d;
-        } else for (const kid of k.kids) if (kid >= 0) stack.push(kid);
+        } else for (let q = 4 * c; q < 4 * c + 4; q++) if (kids[q] >= 0) stack[sp++] = kids[q];
       }
     }
     for (const [i, j] of this.edges) {

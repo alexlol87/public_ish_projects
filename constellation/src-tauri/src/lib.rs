@@ -198,6 +198,10 @@ fn open_at(app: &AppHandle, st: &AppState, path: &Path) -> Res<String> {
 
 #[tauri::command]
 fn startup(app: AppHandle, st: State<AppState>) -> Option<String> {
+    // A page reload after switching Vaults keeps the one already open.
+    if let Some(o) = st.vault.lock().ok()?.as_ref() {
+        return Some(o.index.root().to_string_lossy().into_owned());
+    }
     let env = std::env::var("CONSTELLATION_VAULT").ok().filter(|s| !s.is_empty());
     let path = env.map(PathBuf::from).or_else(|| vault::reopenable(load_config(&app).last_vault.as_deref()))?;
     open_at(&app, &st, &path).ok()
@@ -424,11 +428,19 @@ fn apply_edits(app: AppHandle, st: State<AppState>, edits: Vec<FileEdit>) -> Res
 #[tauri::command]
 fn undo(app: AppHandle, st: State<AppState>) -> Res<bool> {
     with(&st, |o| {
-        let Some(inverse) = o.undo.pop() else { return Ok(false) };
+        let Some(last) = o.undo.last() else { return Ok(false) };
+        if let Err(e) = edit::check(last, o.index.root()) {
+            o.undo.pop(); // refused: nothing written; drop the step so older ones stay reachable
+            return Err(Error(format!("{e}; that step can't be undone and was dropped")));
+        }
+        let inverse = o.undo.pop().unwrap_or_default();
         let mut paths: Vec<String> = inverse.iter().map(|e| e.path.clone()).collect();
         paths.sort();
         paths.dedup();
         let r = edit::apply(&inverse, o.index.root());
+        if r.is_err() {
+            o.undo.push(inverse); // nothing was written (rolled back): the step stays for another try
+        }
         finish(&app, o, paths, false)?;
         r.map(|_| true)
     })
@@ -443,10 +455,33 @@ fn undo_depth(st: State<AppState>) -> usize {
 #[tauri::command]
 fn create_note(app: AppHandle, st: State<AppState>, target: String) -> Res<String> {
     with(&st, |o| {
-        let edits = o.index.create_note_edits(&target);
+        let edits = o.index.create_note_edits(&target)?;
         let path = edits.first().map(|e| e.path.clone());
         apply(&app, o, edits)?;
         path.ok_or_else(|| Error("The link already resolves".into()))
+    })
+}
+
+/// Writes the built-in cheat sheet (not an undo step, no change event); returns its path.
+#[tauri::command]
+fn open_cheat_sheet(st: State<AppState>) -> Res<String> {
+    with(&st, |o| {
+        let path = agent_files::CHEAT_SHEET_PATH;
+        let text = agent_files::CHEAT_SHEET;
+        let text = if cfg!(target_os = "macos") { text.replace("Ctrl+Shift+", "⌘⇧").replace("Ctrl+Alt+", "⌘⌥").replace("Ctrl+", "⌘").replace("Ctrl-click", "⌘-click") } else { text.to_string() };
+        vault::write_atomic(&o.index.root().join(path), &text)?;
+        Ok(path.to_string())
+    })
+}
+
+/// Creates an empty Note at the typed Vault path; returns its path.
+#[tauri::command]
+fn new_note(app: AppHandle, st: State<AppState>, path: String) -> Res<String> {
+    with(&st, |o| {
+        let edits = o.index.new_note_edits(&path)?;
+        let made = edits[0].path.clone();
+        apply(&app, o, edits)?;
+        Ok(made)
     })
 }
 
@@ -489,7 +524,7 @@ fn rename_tag(app: AppHandle, st: State<AppState>, old: String, new: String) -> 
 #[tauri::command]
 fn tick(app: AppHandle, st: State<AppState>, path: String, text: String, offset: usize) -> Res<Vec<String>> {
     with(&st, |o| {
-        let edits = archiver::tick(&o.index, offset, &text, &path, staleness::today())?;
+        let edits = archiver::tick_saved(&o.index, offset, &text, &path, staleness::today())?;
         apply(&app, o, edits)
     })
 }
@@ -513,6 +548,26 @@ fn image_response(app: &AppHandle, uri: &str) -> Option<tauri::http::Response<Ve
     tauri::http::Response::builder().header("Content-Type", mime).body(std::fs::read(file).ok()?).ok()
 }
 
+static TERMINATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// SIGTERM (logout, shutdown) closes the main window like the user would, so the editor saves its last keystrokes first.
+fn close_on_sigterm(app: AppHandle) {
+    extern "C" fn handler(_: libc::c_int) {
+        TERMINATED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe { libc::signal(libc::SIGTERM, handler as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    std::thread::spawn(move || {
+        while !TERMINATED.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.close();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5)); // the window refused to close (unsaved text): the system wants us gone
+        app.exit(0);
+    });
+}
+
 pub fn run() {
     // Blank/black windows in VMs and on some GPUs come from WebKitGTK's DMABUF renderer.
     #[cfg(target_os = "linux")]
@@ -525,6 +580,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             window_theme(app.handle(), load_config(app.handle()).theme.as_deref().unwrap_or("System"));
+            close_on_sigterm(app.handle().clone());
             Ok(())
         })
         // The graph window must not keep the app alive after the main window is gone.
@@ -569,6 +625,8 @@ pub fn run() {
             undo,
             undo_depth,
             create_note,
+            open_cheat_sheet,
+            new_note,
             rename_note,
             rename_heading,
             rename_tag,

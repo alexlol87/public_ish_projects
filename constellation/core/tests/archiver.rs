@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use constellation_core::archiver::tick;
+use constellation_core::archiver::{tick, tick_saved};
 use constellation_core::edit::apply;
 use constellation_core::{agent_files, FileEdit, Range16, VaultIndex};
 
@@ -118,4 +118,45 @@ fn archive_format_in_agents_md_round_trips_through_the_archiver() {
     };
     assert_eq!(norm(example), norm(&entry));
     assert!(example.contains("- fix: "));
+}
+
+#[test]
+fn undo_is_refused_whole_when_a_replaced_text_was_edited_since() {
+    let v = make_vault(&[("shop/orders-service/bugs.md", BUGS), (ORDERS, "x")]);
+    let root = v.path();
+    let archive = "shop/archive/fixed-bugs.md";
+    write(root, archive, "# Fixed bugs\n");
+    let inverse = apply(&tick_at(root, "shop/orders-service/bugs.md", 10), root).unwrap();
+    let edited = format!("typed\n{}", read(root, archive));
+    write(root, archive, &edited);
+    assert!(apply(&inverse, root).is_err());
+    assert_eq!(read(root, archive), edited); // nothing written, not even the bugs.md half
+    assert!(!read(root, "shop/orders-service/bugs.md").contains("Order total"));
+}
+
+#[test]
+fn tick_saved_refuses_when_the_editor_text_differs_from_disk() {
+    let v = make_vault(&[("shop/orders-service/bugs.md", "- [ ] One\n- [ ] Two\n")]);
+    let root = v.path();
+    let ix = VaultIndex::open(root).unwrap();
+    let p = "shop/orders-service/bugs.md";
+    let editor = read(root, p);
+    apply(&tick_saved(&ix, 2, &editor, p, day()).unwrap(), root).unwrap();
+    // second click on the same stale text must not archive again or hit "Two"
+    assert!(tick_saved(&ix, 2, &editor, p, day()).is_err());
+    assert_eq!(read(root, p), "- [ ] Two\n");
+}
+
+#[test]
+fn tick_saved_maps_editor_offsets_onto_crlf_files() {
+    let v = make_vault(&[("n.md", "# T\r\n- [ ] alpha\r\n- [ ] beta\r\n- [ ] gamma\r\n"), ("shop/r/bugs.md", "# Bugs\r\n\r\n- [ ] First\r\n  detail\r\n- [ ] Second\r\n")]);
+    let root = v.path();
+    let ix = VaultIndex::open(root).unwrap();
+    let lf = "# T\n- [ ] alpha\n- [ ] beta\n- [ ] gamma\n";
+    apply(&tick_saved(&ix, at16(lf, "gamma"), lf, "n.md", day()).unwrap(), root).unwrap();
+    assert_eq!(read(root, "n.md"), "# T\r\n- [ ] alpha\r\n- [ ] beta\r\n- [x] gamma\r\n");
+    let lf = "# Bugs\n\n- [ ] First\n  detail\n- [ ] Second\n";
+    apply(&tick_saved(&ix, at16(lf, "Second"), lf, "shop/r/bugs.md", day()).unwrap(), root).unwrap();
+    assert_eq!(read(root, "shop/r/bugs.md"), "# Bugs\r\n\r\n- [ ] First\r\n  detail\r\n");
+    assert!(read(root, "shop/archive/fixed-bugs.md").contains("### Second"));
 }

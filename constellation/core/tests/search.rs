@@ -155,3 +155,12 @@ fn benchmark_5000_notes() {
         assert!(ms < if cfg!(debug_assertions) { 1000.0 } else { 50.0 }, "{q}: {ms} ms");
     }
 }
+
+#[test]
+fn tag_terms_fold_diacritics() {
+    let v = make_vault(&[("a.md", "#tág/ünï here")]);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    for q in ["#tag/uni", "#tág", "#TAG/ÜNÏ", "#tag"] {
+        assert_eq!(ix.search(q).notes, ["a.md"], "{q}");
+    }
+}

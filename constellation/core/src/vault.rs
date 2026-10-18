@@ -4,7 +4,7 @@ use crate::text::{ci_cmp, is_md};
 use crate::{agent_files, Error, Result};
 use serde::Serialize;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// A folder or markdown Note inside a Vault. `relative_path` is from the Vault root; the root's is "".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -20,9 +20,10 @@ pub struct VaultNode {
 
 const APP_ONLY_TOP: [&str; 5] = ["AGENTS.md", "repos.txt", "tags.md", "templates", ".constellation"];
 
-/// True for the app's own files (top level only) and anything inside its folders.
+/// True for the app's own files (top level only, any case) and anything inside its folders.
 pub fn is_app_only(relative_path: &str) -> bool {
-    APP_ONLY_TOP.contains(&relative_path.split('/').find(|s| !s.is_empty()).unwrap_or(""))
+    let top = relative_path.split('/').find(|s| !s.is_empty()).unwrap_or("");
+    APP_ONLY_TOP.iter().any(|t| t.eq_ignore_ascii_case(top))
 }
 
 /// Archive Notes live in `<project>/archive/` (ADR 0002); hidden in the graph by default, marked in search.
@@ -66,7 +67,11 @@ fn load_folder(dir: &Path, path: &str) -> Result<VaultNode> {
             continue;
         }
         let rel = join(path, &name);
-        if entry.path().is_dir() {
+        // Folder symlinks are not followed: a loop would index the Vault into itself.
+        let ft = entry.file_type()?;
+        if ft.is_symlink() && fs::metadata(entry.path()).is_err() {
+            continue; // dangling: nothing to open
+        } else if ft.is_dir() {
             kids.push(load_folder(&entry.path(), &rel)?);
         } else if is_md(&name) || is_app_only(&rel) {
             kids.push(node(&name, &rel, false, vec![]));
@@ -123,7 +128,7 @@ impl VaultNode {
             return Ok(());
         };
         let (path, sub) = (join(&self.relative_path, name), dir.join(name));
-        if !sub.is_dir() {
+        if !fs::symlink_metadata(&sub).is_ok_and(|m| m.is_dir()) {
             self.children.retain(|c| c.relative_path != path);
         } else if let Some(c) = self.children.iter_mut().find(|c| c.is_folder && c.relative_path == path) {
             c.refresh_folder(rest, &sub)?;
@@ -160,24 +165,59 @@ pub fn reopenable(saved_path: Option<&str>) -> Option<PathBuf> {
     saved_path.map(PathBuf::from).filter(|p| p.is_dir())
 }
 
+/// The one path check for every read and write: `relative` must be plain Vault-relative components, and what it
+/// resolves to (symlinks followed, the deepest existing part canonicalized) must lie inside the canonical `root`.
+pub fn safe_path(root: &Path, relative: &str) -> Result<PathBuf> {
+    let outside = || Error(format!("{relative} is outside the Vault"));
+    if Path::new(relative).components().any(|c| !matches!(c, Component::Normal(_))) {
+        return Err(outside());
+    }
+    let full = root.join(relative);
+    let mut existing = full.as_path();
+    while fs::symlink_metadata(existing).is_err() {
+        existing = existing.parent().ok_or_else(outside)?;
+    }
+    let resolved = fs::canonicalize(existing).map_err(|_| outside())?; // a dangling symlink fails here
+    if resolved.starts_with(fs::canonicalize(root)?) { Ok(full) } else { Err(outside()) }
+}
+
 pub fn read_note(root: &Path, relative_path: &str) -> Result<String> {
-    Ok(fs::read_to_string(root.join(relative_path))?)
+    fs::read_to_string(safe_path(root, relative_path)?).map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidData => Error(format!("{relative_path} is not UTF-8 text; not opened")),
+        _ => e.into(),
+    })
 }
 
 /// Writes `text` to `path`, atomically (temp file in the same folder, then rename), so a crash never leaves half a file.
+/// A symlink is written through (the link stays), a read-only file is refused, and a CRLF file stays CRLF.
 pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    let path = &fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
+    let old = fs::metadata(path).ok();
+    if old.as_ref().is_some_and(|m| m.permissions().readonly()) {
+        return Err(Error(format!("{} is read-only; not saved", name_of(path))));
+    }
+    let crlf = old.is_some() && fs::read(path).is_ok_and(|b| b.windows(2).any(|w| w == b"\r\n"));
     let tmp = path.with_file_name(format!(".{}.tmp", name_of(path)));
-    fs::write(&tmp, text)?;
+    let written = fs::write(&tmp, if crlf { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() });
+    if let Err(e) = written {
+        return Err(match e.kind() {
+            std::io::ErrorKind::PermissionDenied => Error(format!("{}: folder is read-only; not saved", name_of(path))),
+            _ => e.into(),
+        });
+    }
+    if let Some(m) = old {
+        let _ = fs::set_permissions(&tmp, m.permissions());
+    }
     fs::rename(&tmp, path).inspect_err(|_| drop(fs::remove_file(&tmp)))?;
     Ok(())
 }
 
 /// Overwrites a Note's file.
 pub fn write_note(root: &Path, relative_path: &str, text: &str) -> Result<()> {
-    write_atomic(&root.join(relative_path), text)
+    write_atomic(&safe_path(root, relative_path)?, text)
 }
 
 /// Resolves an image path from a Note: Note-relative first, then Vault-relative (a leading `/` means Vault-relative only).

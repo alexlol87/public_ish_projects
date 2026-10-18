@@ -13,6 +13,17 @@ describe("noteTabs", () => {
     expect(tabs.text("a.md")).toBe("A");
   });
 
+  test("reload replaces an edited buffer with the given text", () => {
+    tabs.open("a.md", "A"); tabs.edit("a.md", "mine", 0);
+    const rev = tabs.revision("a.md");
+    tabs.reload("a.md", "fresh");
+    expect(tabs.text("a.md")).toBe("fresh");
+    expect(tabs.hasPendingEdits).toBe(false);
+    expect(tabs.revision("a.md")).toBe(rev + 1);
+    tabs.reload("zzz.md", "x");
+    expect(tabs.text("zzz.md")).toBeUndefined();
+  });
+
   test("closing active tab focuses neighbour and returns pending edits", () => {
     tabs.open("a.md", "A"); tabs.open("b.md", "B");
     tabs.edit("b.md", "B2", 0);
@@ -111,5 +122,40 @@ describe("noteTabs", () => {
     expect(tabs.close("a.md").closed).toBe(false);
     expect(tabs.paths).toEqual(["a.md"]);
     expect(tabs.text("a.md")).toBe("mine");
+  });
+});
+
+describe("noteTabs external delete and CRLF", () => {
+  test("a dirty Note whose file vanished is a conflict (not re-created); discard drops it", () => {
+    tabs.open("a.md", "A"); tabs.edit("a.md", "mine", 0);
+    tabs.diskGone("a.md");
+    expect(tabs.conflict("a.md")).toBeNull();
+    expect(tabs.pending()).toEqual([]);
+    tabs.discard("a.md");
+    expect(tabs.paths).toEqual([]);
+  });
+
+  test("re-create keeps my text for the app to write", () => {
+    tabs.open("a.md", "A"); tabs.edit("a.md", "mine", 0);
+    tabs.diskGone("a.md");
+    expect(tabs.resolveConflict("a.md", false)).toBe("mine");
+    expect(tabs.conflict("a.md")).toBeUndefined();
+  });
+
+  test("a clean Note whose file vanished just closes", () => {
+    tabs.open("a.md", "A"); tabs.diskGone("a.md");
+    expect(tabs.paths).toEqual([]);
+  });
+
+  test("line endings alone are not an outside change", () => {
+    tabs.open("a.md", "x\r\ny"); tabs.edit("a.md", "x\ny!", 0); tabs.saved("a.md", "x\ny!");
+    tabs.diskChanged("a.md", "x\r\ny!");
+    expect(tabs.conflict("a.md")).toBeUndefined();
+  });
+
+  test("unsaved is true from the first edit until the write succeeds", () => {
+    tabs.open("a.md", "A"); expect(tabs.unsaved("a.md")).toBe(false);
+    tabs.edit("a.md", "B", 0); expect(tabs.unsaved("a.md")).toBe(true);
+    tabs.saved("a.md", "B"); expect(tabs.unsaved("a.md")).toBe(false);
   });
 });

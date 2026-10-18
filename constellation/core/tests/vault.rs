@@ -187,7 +187,7 @@ fn file_edit_apply_uses_utf16_offsets_and_inverts() {
     let edit = FileEdit::replace("a.md", Range16::new(4, 3), "TAG!");
     let undo = apply(&[edit], v.path()).unwrap();
     assert_eq!(read(v.path(), "a.md"), "é😀 TAG! end");
-    assert_eq!(undo, [FileEdit::replace("a.md", Range16::new(4, 4), "tag")]);
+    assert_eq!(undo, [FileEdit { expect: Some("TAG!".into()), ..FileEdit::replace("a.md", Range16::new(4, 4), "tag") }]);
     apply(&undo, v.path()).unwrap();
     assert_eq!(read(v.path(), "a.md"), "é😀 tag end");
     // A range inside a surrogate pair is rejected.
@@ -200,4 +200,94 @@ fn index_open_on_scaffold_ignores_app_files() {
     vault::create(v.path()).unwrap();
     let ix = VaultIndex::open(v.path()).unwrap();
     assert_eq!(ix.note_paths(), ["README.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_note_writes_through_a_symlink_and_keeps_it() {
+    let v = make_vault(&[("real.md", "old")]);
+    std::os::unix::fs::symlink(v.path().join("real.md"), v.path().join("link.md")).unwrap();
+    vault::write_note(v.path(), "link.md", "new").unwrap();
+    assert!(fs::symlink_metadata(v.path().join("link.md")).unwrap().file_type().is_symlink());
+    assert_eq!(read(v.path(), "real.md"), "new");
+}
+
+#[cfg(unix)]
+#[test]
+fn write_note_refuses_a_read_only_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = make_vault(&[("ro.md", "old")]);
+    fs::set_permissions(v.path().join("ro.md"), fs::Permissions::from_mode(0o444)).unwrap();
+    let e = vault::write_note(v.path(), "ro.md", "new").unwrap_err();
+    assert!(e.to_string().contains("read-only"), "{e}");
+    assert_eq!(read(v.path(), "ro.md"), "old");
+}
+
+#[test]
+fn write_note_keeps_crlf_line_endings() {
+    let v = make_vault(&[("c.md", "a\r\nb\r\n")]);
+    vault::write_note(v.path(), "c.md", "a\nb\nc\n").unwrap();
+    assert_eq!(read(v.path(), "c.md"), "a\r\nb\r\nc\r\n");
+    let w = make_vault(&[("l.md", "a\nb\n")]);
+    vault::write_note(w.path(), "l.md", "a\nb\nc\n").unwrap();
+    assert_eq!(read(w.path(), "l.md"), "a\nb\nc\n");
+}
+
+#[test]
+fn applied_edits_keep_crlf() {
+    let v = make_vault(&[("c.md", "a\r\nb\r\n")]);
+    apply(&[FileEdit::replace("c.md", Range16::new(0, 1), "x\ny")], v.path()).unwrap();
+    assert_eq!(read(v.path(), "c.md"), "x\r\ny\r\nb\r\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn folder_symlinks_are_not_followed() {
+    let v = make_vault(&[("p/a.md", "A")]);
+    std::os::unix::fs::symlink("..", v.path().join("p/loop")).unwrap();
+    let tree = vault::load(v.path()).unwrap();
+    assert_eq!(tree.note_paths(), ["p/a.md"]);
+}
+
+#[test]
+fn read_note_non_utf8_has_a_readable_message() {
+    let v = make_vault(&[]);
+    fs::write(v.path().join("l.md"), [0x43, 0xe9]).unwrap();
+    let e = vault::read_note(v.path(), "l.md").unwrap_err();
+    assert_eq!(e.to_string(), "l.md is not UTF-8 text; not opened");
+}
+
+#[cfg(unix)]
+#[test]
+fn paths_outside_the_vault_are_refused_for_read_and_write() {
+    let v = make_vault(&[("a.md", "A")]);
+    let out = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(out.path(), v.path().join("out")).unwrap();
+    for bad in ["../x.md", "/etc/hostname", "out/x.md", "out/sub/x.md"] {
+        assert!(vault::write_note(v.path(), bad, "x").is_err(), "write {bad}");
+        assert!(vault::read_note(v.path(), bad).is_err(), "read {bad}");
+    }
+    let edits = [FileEdit::create("out/x.md", "x")];
+    assert!(apply(&edits, v.path()).is_err());
+    assert_eq!(fs::read_dir(out.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_note_symlinks_are_hidden_from_the_tree() {
+    let v = make_vault(&[("a.md", "A")]);
+    std::os::unix::fs::symlink("/nonexistent/x.md", v.path().join("dangling.md")).unwrap();
+    assert_eq!(vault::load(v.path()).unwrap().note_paths(), ["a.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn read_only_folder_save_names_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = make_vault(&[("ro/a.md", "A")]);
+    fs::set_permissions(v.path().join("ro"), fs::Permissions::from_mode(0o555)).unwrap();
+    let e = vault::write_note(v.path(), "ro/a.md", "B");
+    fs::set_permissions(v.path().join("ro"), fs::Permissions::from_mode(0o755)).unwrap();
+    let e = e.unwrap_err().to_string();
+    assert!(e.contains("a.md") && e.contains("folder is read-only; not saved"), "{e}");
 }

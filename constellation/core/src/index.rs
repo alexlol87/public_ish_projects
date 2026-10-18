@@ -107,7 +107,9 @@ impl VaultIndex {
     }
 
     pub fn tag_completions(&self, prefix: &str) -> Vec<String> {
-        self.tags.completions(prefix)
+        let listed = std::fs::read_to_string(self.root.join("tags.md")).unwrap_or_default();
+        let extra: Vec<String> = parser::parse(&listed).tags.iter().map(|t| t.name.to_lowercase()).collect();
+        self.tags.completions(prefix, &extra)
     }
 
     /// The graph for `filter`, optionally local to `around`; built from the parsed Notes in memory.
@@ -134,8 +136,13 @@ impl VaultIndex {
     }
 
     /// The edit that creates the missing Note for a broken Link; none if the Link resolves. Writes nothing.
-    pub fn create_note_edits(&self, target: &str) -> Vec<FileEdit> {
+    pub fn create_note_edits(&self, target: &str) -> Result<Vec<FileEdit>> {
         links::create_note_edits(&self.paths, target)
+    }
+
+    /// The edit that creates an empty Note at an exact typed path, or why it can't. Writes nothing.
+    pub fn new_note_edits(&self, path: &str) -> Result<Vec<FileEdit>> {
+        links::new_note_edits(&self.paths, path)
     }
 
     /// Links in `text` (an open Note's current, maybe unsaved text) that are missing or ambiguous.

@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, type EdgeKind, type GraphFilter, type VaultGraph, type TagNode } from "./api";
-import { ForceLayout } from "./lib/forceLayout";
+import { WorkerLayout } from "./lib/layoutClient";
 import { graphLabels } from "./lib/graphLabels";
 import { applyTheme, palette, THEME_CHOICES, type ThemeChoice } from "./lib/themes";
 import { h, toast } from "./ui";
@@ -20,11 +20,10 @@ export async function graphView(app: HTMLElement) {
   let local = false;
   let current: string | null = await api.getCurrent();
   let g: VaultGraph = { nodes: [], edges: [] };
-  let layout = new ForceLayout([], []);
+  const layout = new WorkerLayout(() => redraw());
   let hover: string | null = null;
   let neighbours = new Map<string, Set<string>>();
   let labels = new Map<string, string>();
-  let heat = 0;
   let refit = false;
   const view = { x: 0, y: 0, k: 1 };
 
@@ -43,6 +42,7 @@ export async function graphView(app: HTMLElement) {
       ...all.map((x) => check(x, sel.length === 0 || sel.includes(x), (on) => {
         const cur = sel.length === 0 ? [...all] : [...sel];
         const next = on ? [...new Set([...cur, x])] : cur.filter((y) => y !== x);
+        if (!next.length) return void renderPanel(); // the last one stays ticked ("none" would mean "all")
         set(next.length === all.length ? [] : next);
       })));
 
@@ -67,14 +67,17 @@ export async function graphView(app: HTMLElement) {
 
   async function reload(why = "?") {
     reloads.push(why);
+    // A Project renamed or removed on disk must not stay in the saved filter (nothing would match, every box unticked): drop it; none left means all.
+    const known = new Set((await api.tree()).children.filter((c) => c.isFolder).map((c) => c.name));
+    if (filter.projects.some((x) => !known.has(x))) { filter.projects = filter.projects.filter((x) => known.has(x)); void api.saveGraphFilter(filter); void renderPanel(); }
     try { g = await api.graph(filter, local ? current : null); } catch (e) { toast(String(e), true); return; }
     neighbours = new Map(g.nodes.map((n) => [n.id, new Set<string>()]));
     labels = graphLabels(g.nodes);
     for (const e of g.edges) { neighbours.get(e.from)?.add(e.to); neighbours.get(e.to)?.add(e.from); }
     layout.update(g.nodes.map((n) => n.id), g.edges.map((e) => [e.from, e.to]));
-    heat = 400;
-    refit = true;
-    requestAnimationFrame(frame);
+    layout.setHeat(400);
+    refit ||= why === "init" || why === "filter" || why === "current-note"; // a Vault change keeps the user's pan/zoom
+    redraw();
   }
 
   // ---- drawing ----
@@ -82,6 +85,7 @@ export async function graphView(app: HTMLElement) {
   const toWorld = (sx: number, sy: number) => [(sx - view.x) / view.k, (sy - view.y) / view.k] as const;
   const radius = (id: string) => 4 + Math.min(10, Math.sqrt(neighbours.get(id)?.size ?? 0) * 1.6);
   let queued = false, fits = 0;
+  const ms = { draw: 0 }; // last frame's cost (e2e introspection)
 
   function draw() {
     const pal = palette(theme);
@@ -100,7 +104,10 @@ export async function graphView(app: HTMLElement) {
     };
     // One path per edge kind and highlight state (thousands of separate strokes are slow); off-screen edges are skipped.
     const paths = new Map<string, { kind: EdgeKind; on: boolean; line: Path2D; head: Path2D }>();
-    for (const e of g.edges) {
+    // Strokes are the slow part of a big graph; while it is still moving, draw a thin sample of the edges.
+    const stride = layout.heat > 0 ? Math.ceil(g.edges.length / 2500) : 1;
+    for (let ei = 0; ei < g.edges.length; ei += stride) {
+      const e = g.edges[ei];
       const a = layout.get(e.from), b = layout.get(e.to);
       if (!a || !b) continue;
       const [x1, y1] = toScreen(a.x, a.y), [x2, y2] = toScreen(b.x, b.y);
@@ -127,20 +134,32 @@ export async function graphView(app: HTMLElement) {
     }
     ctx.setLineDash([]);
     ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "center";
+    // Nodes are batched like edges: one Path2D per fill colour, ghost outline and highlight state.
+    const marks: { x: number; y: number; r: number; on: boolean; fade: number; n: (typeof g.nodes)[number] }[] = [];
+    const fills = new Map<string, { color: string; on: boolean; ghost: boolean; path: Path2D }>();
     for (const n of g.nodes) {
       const p = layout.get(n.id);
       if (!p) continue;
       const [x, y] = toScreen(p.x, p.y), r = radius(n.id) * Math.max(g.nodes.length > 1000 ? 0.25 : 0.6, Math.min(view.k, 2));
       if (x < -50 || y < -50 || x > w + 50 || y > hgt + 50) continue;
-      ctx.globalAlpha = lit(n.id) ? 1 : 0.15;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
-      if (n.kind === "ghost") { ctx.strokeStyle = pal.stale; ctx.lineWidth = 1.5; ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]); }
-      else { ctx.fillStyle = n.kind === "folder" ? pal.folderNode : pal.noteNode; ctx.fill(); }
-      if (n.id === current) { ctx.strokeStyle = pal.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 7); ctx.stroke(); }
+      const on = !!lit(n.id), ghost = n.kind === "ghost", key = (ghost ? "g" : n.kind === "folder" ? "f" : "n") + on;
+      let f = fills.get(key);
+      if (!f) fills.set(key, (f = { color: n.kind === "folder" ? pal.folderNode : pal.noteNode, on, ghost, path: new Path2D() }));
+      if (r < 2 && !ghost) f.path.rect(x - r, y - r, 2 * r, 2 * r); // tiny dots: arcs are slow to fill by the thousand
+      else { f.path.moveTo(x + r, y); f.path.arc(x, y, r, 0, 7); }
       // Labels fade out when zoomed out (and for big graphs), except the hovered Node, its neighbours and the current Note.
       const focus = n.id === hover || near?.has(n.id) || n.id === current;
       const fade = focus ? 1 : (g.nodes.length < 120 || view.k > 1.2 ? 1 : 0) * Math.min(1, Math.max(0, (view.k - 0.45) / 0.3));
-      if (fade > 0) { ctx.globalAlpha *= fade; ctx.fillStyle = pal.text; ctx.fillText(labels.get(n.id) ?? n.name, x, y + r + 12); }
+      if (fade > 0 || n.id === current) marks.push({ x, y, r, on, fade, n });
+    }
+    for (const f of fills.values()) {
+      ctx.globalAlpha = f.on ? 1 : 0.15;
+      if (f.ghost) { ctx.strokeStyle = pal.stale; ctx.lineWidth = 1.5; ctx.setLineDash([3, 2]); ctx.stroke(f.path); ctx.setLineDash([]); }
+      else { ctx.fillStyle = f.color; ctx.fill(f.path); }
+    }
+    for (const { x, y, r, on, fade, n } of marks) {
+      if (n.id === current) { ctx.globalAlpha = on ? 1 : 0.15; ctx.strokeStyle = pal.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 7); ctx.stroke(); }
+      if (fade > 0) { ctx.globalAlpha = (on ? 1 : 0.15) * fade; ctx.fillStyle = pal.text; ctx.fillText(labels.get(n.id) ?? n.name, x, y + r + 12); }
     }
     ctx.globalAlpha = 1;
   }
@@ -159,13 +178,12 @@ export async function graphView(app: HTMLElement) {
 
   function frame() {
     queued = false;
-    // Several layout steps per frame so the graph settles in a second or two; big graphs take longer to draw, so they get
-    // a bigger step budget per drawn frame. Until the user takes over the view, it keeps fitting while it spreads out.
-    const budget = g.nodes.length > 1000 ? 40 : 6;
-    for (let t0 = performance.now(), n = 0; heat > 0 && n < 8 && performance.now() - t0 < budget; n++) { layout.step(); heat--; }
+    // The layout runs in a worker and calls redraw() with each new step. Until the user takes over the view, it keeps fitting while it spreads out.
+    const heat = layout.heat;
     if (refit && (heat === 0 || ++fits % 10 === 0)) { fit(); if (heat === 0) refit = false; }
+    const t1 = performance.now();
     draw();
-    if (heat > 0) { queued = true; requestAnimationFrame(frame); }
+    ms.draw = performance.now() - t1;
   }
   const redraw = () => { if (!queued) { queued = true; requestAnimationFrame(frame); } };
 
@@ -183,7 +201,7 @@ export async function graphView(app: HTMLElement) {
   };
   // Read-only introspection for the e2e harness: where each node is drawn (canvas pixels) and the view transform.
   Object.assign(canvas, {
-    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, label: labels.get(n.id), kind: n.kind, x, y }; }), edges: g.edges.length, hover, local, heat, reloads: [...reloads], drag: drag && { id: drag.id, moved: drag.moved } }),
+    e2e: () => ({ view: { ...view }, nodes: g.nodes.map((n) => { const p = layout.get(n.id); const [x, y] = p ? toScreen(p.x, p.y) : [NaN, NaN]; return { id: n.id, name: n.name, label: labels.get(n.id), kind: n.kind, x, y }; }), edges: g.edges.length, hover, local, heat: layout.heat, ms: { ...ms }, reloads: [...reloads], drag: drag && { id: drag.id, moved: drag.moved } }),
   });
   const pos = (e: MouseEvent) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
   let drag: { id: string | null; moved: boolean; sx: number; sy: number } | null = null;
@@ -194,7 +212,7 @@ export async function graphView(app: HTMLElement) {
     if (drag) {
       if (Math.hypot(x - drag.sx, y - drag.sy) > 3) drag.moved = true;
       if (drag.moved) {
-        if (drag.id) { const [wx, wy] = toWorld(x, y); layout.pin(drag.id, { x: wx, y: wy }); heat = Math.max(heat, 40); } // gentle reheat: neighbours follow, the rest barely moves
+        if (drag.id) { const [wx, wy] = toWorld(x, y); layout.pin(drag.id, { x: wx, y: wy }); layout.setHeat(Math.max(layout.heat, 40)); } // gentle reheat: neighbours follow, the rest barely moves
         else { view.x += x - drag.sx; view.y += y - drag.sy; drag.sx = x; drag.sy = y; }
         redraw();
       }
@@ -206,7 +224,7 @@ export async function graphView(app: HTMLElement) {
   addEventListener("mouseup", () => {
     if (!drag) return;
     const d = drag; drag = null;
-    if (d.moved && d.id) heat = Math.min(heat, 24); // cool down quickly after a drop
+    if (d.moved && d.id) layout.setHeat(Math.min(layout.heat, 24)); // cool down quickly after a drop
     if (!d.moved && d.id) void click(d.id);
   });
   canvas.addEventListener("wheel", (e) => {

@@ -47,7 +47,7 @@ Vault of linked markdown Notes, like Obsidian, with a graph of Projects, Repos, 
 | 35 | Running agents | You run your own agent tool in the Vault. The app only offers **Copy ingest prompt** and **Copy refresh prompt** on a Repo. |
 | 36, 42, 44 | Source location | The Vault sits in your workspace next to the cloned repositories. A **Repo list** file at the Vault root (`repos.txt`, one repository name per line) names the only sibling folders agents may read. It can include non-service repos (e.g. infrastructure), which become Repos without an `endpoints.md`. Notes never store local paths. |
 | 37 | First launch | *Create vault* or *Open vault*. Create writes `README.md`, `AGENTS.md`, `repos.txt`, `tags.md`, `templates/`, `external/` and `clients/`, with no sample data. One Vault is open at a time, and the last one is remembered. |
-| 38 | Hidden files | `AGENTS.md`, `repos.txt`, `tags.md`, `templates/` and `.constellation/` (app settings) show in the file tree but are left out of the graph and search. |
+| 38 | Hidden files | `AGENTS.md`, `repos.txt`, `tags.md`, `templates/` and `.constellation/` (app settings and the generated cheat sheet) show in the file tree but are left out of the graph and search. |
 | 24 | Layout | Three panes. Left: search plus Files and Tags tabs. Middle: editor with tabs. Right: inspector with backlinks, outline, and Calls/Uses in and out. The graph opens in its own window (⌘G). |
 | 25, 40 | Renames | Renaming or moving a Note in the app rewrites every Link to it. Renaming a heading in the app rewrites Links to that heading. Links broken from outside the app show red in the editor and as ghost Nodes in the graph, and clicking one creates the Note. |
 | 26 | External APIs | One Note per API, `external/<name>.md` (type `external-api`), with one heading per Endpoint that we use. |
@@ -280,6 +280,9 @@ selected line.
 | Quote | `> ` | ⇧⌘. |
 | Link | `[[x]]`, with autocomplete of Note and heading names | ⌘K |
 | Table | 2×2 skeleton | none |
+
+App-wide shortcuts: ⌘N opens New note (a sidebar button and the folder menu do the same; it asks for a Vault path and
+creates an empty Note), F1 opens Help (the top-bar button), the in-app cheat sheet at `.constellation/cheat-sheet.md`.
 
 ## 7. `AGENTS.md` (shipped in `Resources/`, written into every new Vault)
 

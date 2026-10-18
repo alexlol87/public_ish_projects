@@ -255,6 +255,20 @@ await test("broken link is red; click creates the Note", async () => {
   ok(fs.existsSync(path.join(vault, "nowhere-note.md")) || fs.readdirSync(vault, { recursive: true }).some((f) => f.endsWith("nowhere-note.md")), "file created");
 });
 
+await test("a link that escapes the Vault is refused with a toast; nothing is created", async () => {
+  write("acme-shop/escape.md", "[[../escaped-note]]\n\nsecond line\n");
+  await openRow("acme-shop/escape.md");
+  await waitDoc("escaped-note");
+  await caret("second");
+  await app.until(() => document.querySelector(".cm-broken"), "broken link styling");
+  await app.click(".cm-broken");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast for an escaping link");
+  const outside = fs.existsSync(path.join(vault, "..", "escaped-note.md"));
+  fs.rmSync(path.join(vault, "acme-shop/escape.md")); // its broken Link would add a ghost to the graph
+  await sleep(800);
+  ok(!outside, "no file outside the Vault");
+});
+
 await test("link and tag autocomplete", async () => {
   write("acme-shop/typing.md", "start\n");
   await openRow("acme-shop/typing.md");
@@ -313,6 +327,17 @@ await test("Tags tab: rename tag (right-click) then undo", async () => {
   await app.click("#undo");
   await sleep(1000);
   ok(disk("external/stripe.md").includes("#payments"), "undone");
+});
+
+await test("a bad tag name is refused with a toast; tags are untouched", async () => {
+  await app.click("#tab-tags");
+  await app.until(() => document.querySelector("#tag-sort"), "tags list");
+  const before = disk("external/stripe.md");
+  await app.rightClick(".side .list .row-item", "#payments");
+  await app.click(".ctx-item", "Rename tag");
+  await fillModal("my tag");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast for a bad tag name");
+  eq(disk("external/stripe.md"), before, "nothing rewritten");
 });
 
 const clearSearch = () => search("");
@@ -405,6 +430,32 @@ await test("task tick moves the item to the archive; Ctrl+Z restores it", async 
   ok(!disk("acme-shop/archive/fixed-bugs.md").includes("Total ignores"), "archive entry removed");
 });
 
+await test("double-clicking a Bug box archives it once and leaves the next item", async () => {
+  fs.mkdirSync(path.join(vault, "dbl/repo"), { recursive: true });
+  fs.writeFileSync(path.join(vault, "dbl/repo/bugs.md"), "# Bugs\n\n- [ ] One\n- [ ] Two\n- [ ] Three\n");
+  await sleep(1500);
+  await openRow("dbl/repo/bugs.md");
+  await app.until(() => document.querySelector(".cm-task"), "checkbox widget");
+  await app.eval(() => { const b = document.querySelector(".cm-task"); b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); setTimeout(() => b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })), 30); });
+  await sleep(1500);
+  eq(disk("dbl/repo/bugs.md"), "# Bugs\n\n- [ ] Two\n- [ ] Three\n", "only One removed");
+  eq((disk("dbl/archive/fixed-bugs.md").match(/### /g) || []).length, 1, "archived once");
+});
+
+await test("undo after the archive was edited is refused, drops the step, and writes nothing", async () => {
+  await app.click(".cm-task");
+  await sleep(1200);
+  const arch = "typed at the top\n" + disk("dbl/archive/fixed-bugs.md");
+  fs.writeFileSync(path.join(vault, "dbl/archive/fixed-bugs.md"), arch);
+  await sleep(800);
+  await app.click("#undo");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast");
+  const msg = await app.eval(() => document.querySelector(".toast.bad").textContent);
+  ok(msg.includes("was dropped"), "says the step was dropped: " + msg);
+  eq(disk("dbl/archive/fixed-bugs.md"), arch, "archive untouched");
+  ok(!disk("dbl/repo/bugs.md").includes("Two"), "bugs.md untouched");
+});
+
 await test("rename and move a Note rewrite links; undo restores", async () => {
   const rootBefore = disk("README.md");
   await app.rightClick(".row-item[title='acme-shop/README.md']");
@@ -426,6 +477,92 @@ await test("rename and move a Note rewrite links; undo restores", async () => {
   await app.click("#undo");
   await sleep(1200);
   ok(fs.existsSync(path.join(vault, "acme-shop/overview.md")), "move undone");
+});
+
+await test("new note: button, folder menu, Ctrl+N, existing path error, undo", async () => {
+  const modalValue = () => app.eval(() => document.querySelector(".modal input").value);
+  const exists = (f) => fs.existsSync(path.join(vault, f));
+  await openRow("acme-shop/overview.md");
+  await app.click("#new-note");
+  await app.until(() => document.querySelector(".modal input"), "dialog");
+  eq(await modalValue(), "acme-shop/", "pre-filled with the active Note's folder");
+  await app.press("Escape");
+  await sleep(300);
+  ok(!(await app.eval(() => !!document.querySelector(".modal"))), "Escape closed the prompt");
+  ok(await app.eval(() => !!document.querySelector(".side > #new-note")), "New note button is at the top of the sidebar");
+  await app.click("#new-note");
+  await fillModal("acme-shop/fresh/idea");
+  await app.until(() => document.querySelector(".tab.active")?.title === "acme-shop/fresh/idea.md", "new note is the active tab");
+  ok(await app.eval(() => !!document.activeElement?.closest(".cm-editor")), "cursor is in the editor");
+  eq(disk("acme-shop/fresh/idea.md"), "", "empty file on disk");
+  await app.until(() => document.querySelector(".row-item[title='acme-shop/fresh/idea.md']"), "shown in the tree");
+  await app.press("Control", "z");
+  await sleep(1200);
+  ok(!exists("acme-shop/fresh"), "Ctrl+Z removed the new Note and the folder it made");
+  ok(exists("acme-shop"), "existing folder stays");
+  await app.rightClick(".row-item[title='clients']");
+  await app.click(".ctx-item", "New note here");
+  await app.until(() => document.querySelector(".modal input"), "dialog");
+  eq(await modalValue(), "clients/", "pre-filled with the right-clicked folder");
+  await app.press("Escape");
+  await sleep(300);
+  await app.rightClick(".row-item[title='templates']");
+  ok(!(await app.eval(() => [...document.querySelectorAll(".ctx-item")].some((e) => e.textContent.includes("New note")))), "no New note here on an app-only folder");
+  await app.press("Escape");
+  await app.press("Control", "n");
+  await app.until(() => document.querySelector(".modal input"), "Ctrl+N prompt");
+  await app.eval(() => { document.querySelector(".modal input").value = "acme-shop/overview.md"; });
+  await app.press("Enter");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast for an existing path");
+  ok(disk("acme-shop/overview.md").length > 0, "existing Note unchanged");
+  await app.until(() => document.querySelector(".modal input"), "prompt reopens after the error");
+  eq(await modalValue(), "acme-shop/overview.md", "typed value kept");
+  await app.press("Escape");
+  await sleep(300);
+});
+
+await test("undo of a new note keeps it once it has text", async () => {
+  await app.press("Control", "n");
+  await fillModal("keep-me-note");
+  await app.until(() => document.querySelector(".tab.active")?.title === "keep-me-note.md", "new note is the active tab");
+  await app.type("precious");
+  await sleep(1500); // autosave
+  eq(disk("keep-me-note.md"), "precious", "saved");
+  await app.click("#undo");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast");
+  eq(disk("keep-me-note.md"), "precious", "file kept");
+});
+
+await test("help: button and F1 open the cheat sheet; search does not find it", async () => {
+  const CS = ".constellation/cheat-sheet.md";
+  await app.click("#open-help");
+  await app.until(() => document.querySelector(".tab.active")?.title === ".constellation/cheat-sheet.md", "cheat sheet is the active tab");
+  ok(disk(CS).includes("Ctrl+G"), "cheat sheet on disk names Ctrl+G");
+  ok((await app.eval(() => document.querySelector(".cm-content").innerText)).includes("Ctrl+G"), "tab shows Ctrl+G");
+  await app.click(".tab.active .x");
+  await app.press("F1");
+  await app.until(() => document.querySelector(".tab.active")?.title === ".constellation/cheat-sheet.md", "F1 opens it again");
+  await search("overwritten");
+  eq((await resultsText()).trim(), "No results", "a phrase only in the cheat sheet finds nothing");
+  await app.eval(`${VIEW}.dispatch({ changes: { from: 0, to: ${VIEW}.state.doc.length, insert: "stale" } })`);
+  await app.click("#open-help");
+  await app.until(() => document.querySelector(".cm-content").innerText.includes("Ctrl+G"), "Help again shows the fresh text");
+  ok(!(await app.eval(() => document.querySelector(".cm-content").innerText)).includes("stale"), "stale buffer replaced");
+  await search("");
+});
+
+await test("settings: days must be a whole number of 1 or more; the dialog stays open", async () => {
+  await app.click("#open-settings");
+  await app.until(() => document.querySelector("#set-days"), "settings dialog");
+  for (const bad of ["2.7", "-5", "0", ""]) {
+    await app.eval((v) => { document.querySelector("#set-days").value = v; }, bad);
+    await app.click("#set-save");
+    await app.until(() => document.querySelector("#set-error")?.textContent, "inline error for " + bad, 3000);
+    ok(await app.has("#set-days"), "dialog still open for " + bad);
+    await app.eval(() => { document.querySelector("#set-error").textContent = ""; });
+  }
+  ok(await app.has("#switch-open") && await app.has("#switch-create"), "vault switch buttons");
+  await app.press("Escape");
 });
 
 await test("settings: staleness days and theme persist", async () => {
@@ -660,6 +797,57 @@ await test("graph: filters (edge kind, archive, tag, local depth)", async () => 
   await shot("11-graph-filters");
 });
 
+const typeAtEnd = async (text) => { await app.click(".cm-content"); await caret(await app.eval(`return ${VIEW}.state.doc.length`)); await app.type(text); };
+const badToasts = () => app.eval(() => [...document.querySelectorAll(".toast.bad")].map((t) => t.textContent));
+
+await test("saving keeps CRLF and symlinks, refuses a read-only file once", async () => {
+  xwin("close", "Constellation graph");
+  await sleep(500);
+  await app.focusWindow(null);
+  xwin("focus", "Constellation");
+  write("odd/crlf.md", "# C\r\n\r\nline one\r\n");
+  write("odd/real.md", "# Real\n\nbody\n");
+  fs.symlinkSync(path.join(vault, "odd/real.md"), path.join(vault, "odd/link.md"));
+  write("odd/ro.md", "# Ro\n\noriginal\n");
+  fs.chmodSync(path.join(vault, "odd/ro.md"), 0o444);
+  await openRow("odd/crlf.md");
+  await caret("line one"); await app.type(" x"); await sleep(1800); // (WebDriver typing drops Shift)
+  eq(disk("odd/crlf.md"), "# C\r\n\r\nline one x\r\n", "CRLF kept");
+  await openRow("odd/link.md");
+  await caret("body"); await app.type(" y"); await sleep(1800);
+  ok(fs.lstatSync(path.join(vault, "odd/link.md")).isSymbolicLink(), "still a symlink");
+  ok(disk("odd/real.md").includes("body y"), "target updated");
+  await openRow("odd/ro.md");
+  await caret("original"); await app.type(" Z"); await sleep(3000);
+  eq(disk("odd/ro.md"), "# Ro\n\noriginal\n", "read-only file untouched");
+  const toasts = await badToasts();
+  eq(toasts.length, 1, "one error toast, got " + JSON.stringify(toasts));
+  ok(/read-only/.test(toasts[0]), "message: " + toasts[0]);
+  ok((await app.eval(() => document.querySelector(".tab.active").textContent)).includes("•"), "tab stays dirty");
+});
+
+await test("external delete of a dirty Note shows a conflict instead of re-creating the file", async () => {
+  write("odd/gone.md", "# Gone\n\ntext\n");
+  write("odd/gone2.md", "# Gone2\n\ntext\n");
+  await openRow("odd/gone.md");
+  await typeAtEnd(" mine");
+  fs.rmSync(path.join(vault, "odd/gone.md"));
+  await bannerShown();
+  ok(/deleted or moved/.test(await app.eval(() => document.querySelector(".banner").textContent)), "delete banner");
+  await sleep(1500);
+  ok(!fs.existsSync(path.join(vault, "odd/gone.md")), "not re-created");
+  await app.click("#reload-disk"); // Discard
+  await sleep(300);
+  ok(!(await tabs()).includes("odd/gone.md"), "tab closed");
+  await openRow("odd/gone2.md");
+  await typeAtEnd(" mine2");
+  fs.rmSync(path.join(vault, "odd/gone2.md"));
+  await bannerShown();
+  await app.click("#keep-mine"); // Re-create here
+  await sleep(700);
+  ok(disk("odd/gone2.md").includes("mine2"), "re-created with my text");
+});
+
 await test("unsaved edits are flushed when the window closes", async () => {
   xwin("close", "Constellation graph");
   await sleep(500);
@@ -684,6 +872,25 @@ await test("relaunch: last vault, theme and staleness days persist", async () =>
   await openRow("acme-shop/cart-service/README.md");
   await app.until(() => document.querySelector("#staleness"), "badge");
   ok(!(await app.eval(() => document.querySelector("#staleness").classList.contains("stale"))), "200-day threshold kept");
+});
+
+await test("closing the window during a conflict asks; Cancel keeps it, Keep mine writes it", async () => {
+  await app.until(() => document.querySelector(".cm-content"), "editor");
+  await openRow("acme-shop/sync.md");
+  await typeAtEnd(" MINE-AT-CLOSE");
+  write(SYNC, "# Theirs 3\n");
+  await bannerShown();
+  ok(xwin("close", "Constellation"), "sent the close request");
+  await app.until(() => document.querySelector("#close-cancel"), "close dialog", 5000);
+  await app.click("#close-cancel");
+  await sleep(500);
+  ok(await app.eval(() => !document.querySelector(".banner").hidden), "window and conflict still there");
+  eq(disk(SYNC), "# Theirs 3\n", "disk untouched");
+  xwin("close", "Constellation");
+  await app.until(() => document.querySelector("#close-keep"), "close dialog again", 5000);
+  await app.click("#close-keep");
+  await sleep(1000);
+  ok(disk(SYNC).includes("MINE-AT-CLOSE"), "mine written on close");
 });
 
 console.log("\nmain window batch done");

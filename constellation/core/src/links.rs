@@ -3,6 +3,8 @@
 use crate::edit::FileEdit;
 use crate::parser::{ParsedNote, WikiLink};
 use crate::text::strip_md;
+use crate::vault::is_app_only;
+use crate::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -71,12 +73,40 @@ impl PathIndex {
 }
 
 /// The edit that creates the missing Note for a broken Link (empty file, folders as needed); none if the Link resolves.
-/// Writes nothing: the caller applies the edits.
-pub fn create_note_edits(paths: &PathIndex, target: &str) -> Vec<FileEdit> {
+/// Refuses a target that is not a valid Vault path (see `clean_note_path`). Writes nothing: the caller applies the edits.
+pub fn create_note_edits(paths: &PathIndex, target: &str) -> Result<Vec<FileEdit>> {
     match paths.resolve(target) {
-        LinkResolution::Broken { create_path } => vec![FileEdit::create(&create_path, "")],
-        LinkResolution::Note { .. } => vec![],
+        LinkResolution::Broken { create_path } => Ok(vec![FileEdit::create(&clean_note_path(&create_path)?, "")]),
+        LinkResolution::Note { .. } => Ok(vec![]),
     }
+}
+
+/// A Vault-relative Note path from what a person or Link typed: trimmed, a leading `./` and doubled `/` dropped, `.md`
+/// added unless it already ends in it. Refuses empty, trailing-slash, absolute, backslash, `.`, `..` and hidden segments, `#`, `|`, `[[` and `]]`,
+/// and app-only places (checked on the final path, any case). So the result always stays inside the Vault.
+pub fn clean_note_path(typed: &str) -> Result<String> {
+    let t = typed.trim();
+    let t = t.strip_prefix("./").unwrap_or(t);
+    let bad = t.starts_with('/') || t.ends_with('/') || t.contains('\\') || t.split('/').any(|s| s == "." || s.starts_with('.'));
+    let t = t.split('/').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
+    let bad = bad || t.contains(['#', '|']) || t.contains("[[") || t.contains("]]"); // no Link can point to these
+    if bad || t.is_empty() {
+        return Err(Error(format!("Not a valid Note path: \"{}\"", typed.trim())));
+    }
+    let path = if t.to_lowercase().ends_with(".md") { t } else { format!("{t}.md") };
+    if is_app_only(&path) {
+        return Err(Error("That place is for the app's own files".into()));
+    }
+    Ok(path)
+}
+
+/// The edit that creates an empty Note at the exact Vault path a person typed (see `clean_note_path`); refuses existing Notes.
+pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
+    let path = clean_note_path(typed)?;
+    if paths.by_path.contains_key(&strip_md(&path).to_lowercase()) {
+        return Err(Error(format!("A Note already exists at {path}")));
+    }
+    Ok(vec![FileEdit::create(&path, "")])
 }
 
 /// Links in other Notes that resolve to `path`, in path then text order.

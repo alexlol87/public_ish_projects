@@ -71,7 +71,21 @@ async function start(app: HTMLElement, root: string) {
   await listen("settings-changed", () => void reloadSettings());
   setInterval(autosave, 250);
   // Unsaved edits are written before the window goes away (the close proceeds once this resolves).
-  await getCurrentWindow().onCloseRequested(async () => { await flushAll(); });
+  await getCurrentWindow().onCloseRequested(async (e) => {
+    await flushAll();
+    if (tabs.hasConflicts || tabs.hasPendingEdits) {
+      const choice = await closeChoice();
+      if (choice === "cancel") return e.preventDefault();
+      if (choice === "keep") {
+        for (const p of tabs.paths) if (tabs.conflict(p) !== undefined) await keepMine(p);
+        await flushAll();
+        if (tabs.hasPendingEdits) { // still not saved (e.g. read-only): do not lose it, and say why
+          toast(tabs.paths.filter((p) => tabs.unsaved(p)).map((p) => lastSaveError.get(p) ?? `${p}: not saved`).join("; "), true);
+          return e.preventDefault();
+        }
+      }
+    }
+  });
   addEventListener("blur", () => void flushAll());
   document.addEventListener("visibilitychange", () => document.hidden && void flushAll());
   document.addEventListener("keydown", onKey, true);
@@ -96,17 +110,20 @@ const FORMATS: [FormatAction, string, string][] = [
 ];
 
 function buildLayout(app: HTMLElement) {
-  P.undo = h("button", { id: "undo", title: `Undo last rename/move/task (${isMac ? "⌘" : "Ctrl+"}Z outside typing)`, disabled: true, onclick: () => void undo() }, "Undo");
+  P.undo = h("button", { id: "undo", title: `Undo last rename/move/Todo item/new note (${isMac ? "⌘" : "Ctrl+"}Z outside typing)`, disabled: true, onclick: () => void undo() }, "Undo");
   P.top = h("div", { class: "topbar" }, h("strong", {}, "Constellation"), h("span", { class: "muted vault-name", title: rootPath }, baseName(rootPath) || rootPath),
     h("span", { class: "grow" }), P.undo,
     h("button", { id: "open-graph", title: `Graph (${isMac ? "⌘" : "Ctrl+"}G)`, onclick: () => void api.openGraph() }, "Graph"),
+    h("button", { id: "open-help", title: "Help (F1)", onclick: () => void openHelp() }, "Help"),
     h("button", { id: "open-settings", title: "Settings", onclick: () => void settings() }, "Settings"));
   P.search = h("input", { type: "search", id: "search", placeholder: "Search folders, notes, text, #tag", class: "wide" });
   let timer: number;
   P.search.addEventListener("input", () => { clearTimeout(timer); timer = window.setTimeout(() => { query = P.search.value.trim(); void renderSide(); }, 120); });
   P.list = h("div", { class: "list" });
   P.results = h("div", { class: "list", hidden: true });
-  P.side = h("div", { class: "side" }, P.search,
+  P.side = h("div", { class: "side" },
+    h("button", { id: "new-note", title: `New note (${isMac ? "⌘" : "Ctrl+"}N)`, onclick: () => void newNote() }, "New note"),
+    P.search,
     h("div", { class: "seg" },
       h("button", { id: "tab-files", onclick: () => { sideTab = "files"; tagView = null; void renderSide(); } }, "Files"),
       h("button", { id: "tab-tags", onclick: () => { sideTab = "tags"; tagView = null; void renderSide(); } }, "Tags")),
@@ -188,16 +205,24 @@ function renderTabs() {
   const names = tabs.paths.map(baseName);
   const label = (p: string) => (names.filter((n) => n === baseName(p)).length > 1 ? p.split("/").slice(-2).join("/").replace(/\.md$/i, "") : baseName(p));
   P.tabbar.replaceChildren(...tabs.paths.map((p) =>
-    h("div", { class: "tab" + (p === tabs.active ? " active" : ""), title: p, onclick: () => { tabs.active = p; showActive(); void refreshInspector(); } },
-      h("span", {}, label(p) + (tabs.pending().includes(p) ? " •" : "")),
+    h("div", { class: "tab" + (p === tabs.active ? " active" : "") + (tabs.conflict(p) !== undefined ? " conflict" : ""), title: p, onclick: () => { tabs.active = p; showActive(); void refreshInspector(); } },
+      h("span", {}, label(p) + (tabs.conflict(p) !== undefined ? " !" : tabs.pending().includes(p) ? " •" : "")),
       h("span", { class: "x", onclick: (e: Event) => { e.stopPropagation(); void closeTab(p); } }, "×"))));
   P.tabbar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 async function closeTab(p: string) {
-  const r = tabs.close(p);
-  if (!r.closed) { toast("Resolve the conflict first (Reload from disk or Keep mine)", true); return; }
-  if (r.flush !== undefined) await api.writeNote(p, r.flush).catch((e) => toast(errText(e), true));
+  if (tabs.conflict(p) !== undefined) { toast("Resolve the conflict first (Reload from disk or Keep mine)", true); return; }
+  if (tabs.unsaved(p)) await save(p);
+  if (tabs.unsaved(p)) { // the write failed (e.g. read-only): never drop the text silently
+    const choice = await closeChoice();
+    if (choice === "cancel") return;
+    if (choice === "keep") {
+      await save(p);
+      if (tabs.unsaved(p)) { toast(lastSaveError.get(p) ?? "Could not save", true); return; }
+    } else tabs.discard(p);
+  }
+  tabs.close(p);
   showActive();
   editor.forget(p);
   void refreshInspector();
@@ -208,6 +233,12 @@ function renderBanner() {
   const disk = p ? tabs.conflict(p) : undefined;
   P.banner.hidden = disk === undefined;
   if (disk === undefined || !p) return;
+  if (disk === null) {
+    P.banner.replaceChildren(h("span", {}, "This note was deleted or moved on disk while you had unsaved edits. "),
+      h("button", { id: "keep-mine", onclick: () => void keepMine(p) }, "Re-create here"),
+      h("button", { id: "reload-disk", onclick: () => { tabs.discard(p); showActive(); editor.forget(p); } }, "Discard"));
+    return;
+  }
   P.banner.replaceChildren(h("span", {}, "This note changed on disk while you had unsaved edits. "),
     h("button", { id: "reload-disk", onclick: () => { tabs.resolveConflict(p, true); showActive(); } }, "Reload from disk"),
     h("button", { id: "keep-mine", onclick: () => void keepMine(p) }, "Keep mine"));
@@ -215,20 +246,41 @@ function renderBanner() {
 
 async function keepMine(p: string) {
   const mine = tabs.resolveConflict(p, false);
-  if (mine !== undefined) { await api.writeNote(p, mine); tabs.saved(p, mine); }
+  if (mine !== undefined) { await save(p); }
   showActive();
 }
+
+const lastSaveError = new Map<string, string>();
 
 async function save(p: string) {
   const text = tabs.text(p);
   if (text === undefined) return;
-  try { await api.writeNote(p, text); tabs.saved(p, text); } catch (e) { toast(errText(e), true); }
+  try { await api.writeNote(p, text); tabs.saved(p, text); lastSaveError.delete(p); } catch (e) {
+    // The same failure on every autosave tick is shown once, until it changes or the save works.
+    const msg = errText(e);
+    if (lastSaveError.get(p) !== msg) toast(msg, true);
+    lastSaveError.set(p, msg);
+  }
 }
 
 async function autosave() {
   const due = tabs.due();
   for (const p of due) await save(p);
   if (due.length) renderTabs();
+}
+
+/** Unsaved or conflicted text at window close: write mine, throw it away, or stay. */
+async function closeChoice(): Promise<"keep" | "discard" | "cancel"> {
+  let out: "keep" | "discard" | "cancel" = "cancel";
+  await modal("Unsaved changes", (close) => {
+    const pick = (c: typeof out) => () => { out = c; close(); };
+    return h("div", {}, h("p", {}, "Some notes have text that is not saved (a conflict with the file on disk, or the file could not be written)."),
+      h("div", { class: "row end" },
+        h("button", { id: "close-cancel", onclick: pick("cancel") }, "Cancel"),
+        h("button", { id: "close-reload", onclick: pick("discard") }, "Reload (discard mine)"),
+        h("button", { id: "close-keep", class: "primary", onclick: pick("keep") }, "Keep mine")));
+  });
+  return out;
 }
 
 async function flushAll() {
@@ -248,14 +300,17 @@ async function openLink(target: string, _newTab: boolean) {
   } catch (e) { toast(errText(e), true); }
 }
 
+let ticking = false;
 async function tickTask(offset: number) {
   const p = tabs.active;
-  if (!p) return;
-  await flushAll();
+  if (!p || ticking) return;
+  ticking = true;
   try {
+    await flushAll();
     await api.tick(p, tabs.text(p) ?? "", offset);
     appActionAt = Date.now();
   } catch (e) { toast(errText(e), true); }
+  finally { setTimeout(() => (ticking = false), 400); } // the next item slides under the cursor: swallow a double-click
 }
 
 // ---------- vault changes ----------
@@ -293,7 +348,7 @@ async function syncTabs(touched: string[]) {
   for (const p of tabs.paths.slice()) {
     if (!touched.some((t) => t === p || p.startsWith(t + "/"))) continue;
     try { tabs.diskChanged(p, await api.readNote(p)); }
-    catch { if (!tabs.pending().includes(p)) tabs.close(p); } // deleted or moved away
+    catch { tabs.diskGone(p); } // deleted or moved away
   }
 }
 
@@ -310,13 +365,20 @@ async function refreshBroken() {
   const p = tabs.active;
   if (!p) return;
   const t = tabs.text(p) ?? "";
-  broken = new Set(await api.brokenTargets(t).catch(() => []));
-  if (tabs.active === p) editor.refreshDecorations();
+  const next = new Set(await api.brokenTargets(t).catch(() => []));
+  const same = next.size === broken.size && [...next].every((x) => broken.has(x)); // a full restyle of a big Note is slow
+  broken = next;
+  if (tabs.active === p && !same) editor.refreshDecorations();
 }
 
 async function undo() {
   await flushAll();
-  if (await api.undo()) { appActionAt = Date.now(); toast("Undone"); }
+  try {
+    if (await api.undo()) { appActionAt = Date.now(); toast("Undone"); }
+  } catch (e) {
+    toast(errText(e), true);
+    void api.undoDepth().then((n) => (P.undo as HTMLButtonElement).disabled = n === 0); // the refused step was dropped
+  }
 }
 
 // ---------- sidebar ----------
@@ -348,7 +410,7 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
         if (readme && !c.appOnly) void openNote(readme.relativePath);
         void renderSide();
       },
-      oncontextmenu: (e: MouseEvent) => !c.isFolder && !c.appOnly && contextMenu(e, [["Rename / move…", () => void renameNote(c.relativePath)]]),
+      oncontextmenu: (e: MouseEvent) => !c.appOnly && contextMenu(e, [c.isFolder ? ["New note here…", () => void newNote(c.relativePath)] : ["Rename / move…", () => void renameNote(c.relativePath)]]),
     }, h("span", { class: "chev" }, c.isFolder ? (open ? "▾" : "▸") : ""), c.name);
     out.push(row);
     if (c.isFolder && open) out.push(...renderTree(c, depth + 1));
@@ -356,10 +418,50 @@ function renderTree(n: VaultNode, depth: number): HTMLElement[] {
   return out;
 }
 
+const isAppOnly = (p: string) => p.startsWith(".") || !!tree?.children.find((c) => c.name === p.split("/")[0])?.appOnly;
+const dirName = (p: string) => p.split("/").slice(0, -1).join("/");
+
+/** Opens every folder above `path` in the tree. */
+function expandAncestors(path: string) {
+  for (let d = dirName(path); d; d = dirName(d)) expanded.add(d);
+}
+
+/** Prompts for a path pre-filled with `folder` (else the active Note's folder, or the Vault root for app-only ones), creates the empty Note and opens it. */
+async function newNote(folder = tabs.active && !isAppOnly(tabs.active) ? dirName(tabs.active) : "") {
+  let typed = folder ? `${folder}/` : "";
+  for (;;) {
+    const path = await ask("New note", typed, "Folder and name. Folders are created as needed; .md is added.");
+    if (!path) return;
+    await flushAll();
+    try {
+      const np = await api.newNote(path);
+      appActionAt = Date.now();
+      expandAncestors(np);
+      await openNote(np);
+      editor.focus();
+      return;
+    } catch (e) {
+      const msg = errText(e);
+      toast(msg.includes("File name too long") ? "That name is too long for the file system. Shorten it." : msg, true);
+      typed = path; // ask again with what was typed
+    }
+  }
+}
+
+async function openHelp() {
+  try {
+    const p = await api.openCheatSheet();
+    await refreshAll(); // first Help creates .constellation/
+    tabs.reload(p, await api.readNote(p)); // an open tab may hold stale or edited text
+    await openNote(p);
+  } catch (e) { toast(errText(e), true); }
+}
+
 async function renameNote(path: string) {
   const to = await ask("Rename or move note", path, "Change the file name, or the folder (not both). Links are rewritten.");
   if (!to || to === path) return;
   await flushAll();
+  if (tabs.unsaved(path)) { toast(`${path} has text that could not be saved. Save or discard it first (close the tab), then rename.`, true); return; }
   try {
     const np = await api.renameNote(path, to);
     appActionAt = Date.now();
@@ -442,7 +544,8 @@ async function refreshInspector() {
       list("Calls", q.callsOut), list("Called by", q.callsIn), list("Used by clients", q.usesIn));
   }
   parts.push(sec(`Backlinks (${r.backlinks.length})`, ...(r.backlinks.length ? r.backlinks.map((b) =>
-    h("div", { class: "row-item", title: b.path, onclick: () => void openNote(b.path, { offset: b.link.range.location }) }, baseName(b.path))) : [h("div", { class: "muted pad small" }, "none")])));
+    h("div", { class: "row-item", title: b.path, onclick: () => void openNote(b.path, { offset: b.link.range.location }) }, baseName(b.path),
+      b.path.includes("/") && h("span", { class: "muted small" }, "  " + b.path.slice(0, b.path.lastIndexOf("/"))))) : [h("div", { class: "muted pad small" }, "none")])));
   parts.push(sec("Outline", ...(r.headings.length ? r.headings.map((hd) =>
     h("div", {
       class: "row-item", style: `padding-left:${8 + (hd.level - 1) * 12}px`,
@@ -470,28 +573,45 @@ async function settings() {
   await modal("Settings", (close) => {
     const sel = h("select", { id: "set-theme" }, ...THEME_CHOICES.map((t) => h("option", { value: t, selected: t === s.theme }, t)));
     const days = h("input", { type: "number", id: "set-days", min: 1, value: String(s.stalenessDays) });
+    const err = h("div", { class: "bad small", id: "set-error" }, "");
+    const switchVault = async (create: boolean) => {
+      const dir = await api.pickFolder();
+      if (!dir) return;
+      await flushAll();
+      if (tabs.hasPendingEdits) return void toast("Resolve the conflict first (Reload from disk or Keep mine)", true);
+      try { await (create ? api.createVault(dir) : api.openVault(dir)); } catch (e) { return void toast(errText(e), true); }
+      location.reload(); // fresh tabs, undo and listeners for the new Vault
+    };
     return h("div", {}, h("label", {}, "Theme ", sel), h("br", {}), h("br", {}),
-      h("label", {}, "Highlight repos not verified for ", days, " days"),
+      h("label", {}, "Highlight repos not verified for ", days, " days"), err,
+      h("div", { class: "row pad" },
+        h("button", { id: "switch-open", onclick: () => void switchVault(false) }, "Open another vault…"),
+        h("button", { id: "switch-create", onclick: () => void switchVault(true) }, "Create vault…")),
       h("div", { class: "row end" }, h("button", { onclick: close }, "Cancel"),
         h("button", { class: "primary", id: "set-save", onclick: async () => {
+          const n = Number(days.value);
+          if (!days.value.trim() || !Number.isInteger(n) || n < 1 || n > 36500) { err.textContent = "Days must be a whole number from 1 to 36500."; return; }
           try {
-            await api.setSettings({ theme: sel.value, stalenessDays: Math.max(1, Number(days.value) || 30) });
+            await api.setSettings({ theme: sel.value, stalenessDays: n });
             theme = sel.value as ThemeChoice; applyTheme(theme);
             await emit("settings-changed");
             void refreshInspector();
-          } catch (e) { toast(errText(e), true); }
+          } catch (e) { err.textContent = errText(e); return; } // stay open to fix it
           close();
         } }, "Save")));
   });
 }
 
 function onKey(e: KeyboardEvent) {
+  if (document.querySelector(".modal-back")) return; // a prompt is open: the app shortcuts wait
   const k = e.key.toLowerCase();
+  if (e.key === "F1") { e.preventDefault(); void openHelp(); return; }
   if (!mod(e)) return;
   const t = e.target as HTMLElement;
   const inEditor = !!t.closest?.(".cm-editor");
   const inField = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
   if (k === "g" && !e.shiftKey) { e.preventDefault(); void api.openGraph(); }
+  else if (k === "n" && !e.shiftKey) { e.preventDefault(); void newNote(); }
   else if (k === "," ) { e.preventDefault(); void settings(); }
   else if (k === "s") { e.preventDefault(); void flushAll(); }
   else if (k === "w") { e.preventDefault(); if (tabs.active) void closeTab(tabs.active); }

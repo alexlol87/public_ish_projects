@@ -2,7 +2,7 @@
 //! Owned by `VaultIndex`, which feeds it the parsed Notes.
 
 use crate::parser::TagRef;
-use crate::text::{lines, Line};
+use crate::text::{fold, lines, Line};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -20,7 +20,7 @@ pub struct Hit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
-    /// Full lowercase path, e.g. "team/payments".
+    /// Full lowercase path (its most common spelling), e.g. "team/payments".
     pub tag: String,
     /// Last path component.
     pub name: String,
@@ -53,6 +53,7 @@ fn with_parents(tag: &str) -> impl Iterator<Item = &str> {
 }
 
 fn matches(tag: &str, query: &str) -> bool {
+    let (tag, query) = (&fold(tag), &fold(query));
     tag == query || tag.strip_prefix(query).is_some_and(|r| r.starts_with('/'))
 }
 
@@ -74,26 +75,34 @@ impl TagIndex {
 
     /// Foldable tree of every Tag with its Note count, parents rolled up.
     pub fn tree(&self, sort: Sort) -> Vec<Node> {
-        let mut notes_of: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+        // Keyed by the folded Tag; shown as its most common spelling.
+        let mut notes_of: HashMap<String, BTreeSet<&str>> = HashMap::new();
+        let mut spellings: HashMap<String, BTreeMap<&str, usize>> = HashMap::new();
         for (path, occs) in &self.notes {
             for t in occs.iter().flat_map(|o| with_parents(&o.tag)) {
-                notes_of.entry(t).or_default().insert(path);
+                let key = fold(t);
+                notes_of.entry(key.clone()).or_default().insert(path);
+                *spellings.entry(key).or_default().entry(t).or_default() += 1;
             }
         }
+        let shown: HashMap<&str, &str> = spellings.iter().map(|(k, m)| (k.as_str(), m.iter().max_by_key(|(s, n)| (**n, std::cmp::Reverse(**s))).map(|(s, _)| *s).unwrap())).collect();
         let mut kids: HashMap<&str, Vec<&str>> = HashMap::new();
-        for &t in notes_of.keys() {
+        for t in notes_of.keys() {
             kids.entry(t.rsplit_once('/').map_or("", |(p, _)| p)).or_default().push(t);
         }
-        fn build(parent: &str, kids: &HashMap<&str, Vec<&str>>, counts: &HashMap<&str, BTreeSet<&str>>, sort: Sort) -> Vec<Node> {
+        fn build(parent: &str, kids: &HashMap<&str, Vec<&str>>, counts: &HashMap<String, BTreeSet<&str>>, shown: &HashMap<&str, &str>, sort: Sort) -> Vec<Node> {
             let mut out: Vec<Node> = kids
                 .get(parent)
                 .into_iter()
                 .flatten()
-                .map(|&t| Node {
-                    tag: t.to_string(),
-                    name: t.rsplit('/').next().unwrap_or(t).to_string(),
-                    count: counts[t].len(),
-                    children: build(t, kids, counts, sort),
+                .map(|&t| {
+                    let s = shown[t];
+                    Node {
+                        tag: s.to_string(),
+                        name: s.rsplit('/').next().unwrap_or(s).to_string(),
+                        count: counts[t].len(),
+                        children: build(t, kids, counts, shown, sort),
+                    }
                 })
                 .collect();
             out.sort_by(|a, b| {
@@ -102,7 +111,7 @@ impl TagIndex {
             });
             out
         }
-        build("", &kids, &notes_of, sort)
+        build("", &kids, &notes_of, &shown, sort)
     }
 
     /// Notes holding the Tag (or a child Tag), one hit per line, ordered by path then position.
@@ -121,10 +130,11 @@ impl TagIndex {
     }
 
     /// Existing Tags (and their parents) starting with `prefix`, for `#` autocomplete.
-    pub fn completions(&self, prefix: &str) -> Vec<String> {
-        let q = prefix.to_lowercase();
-        let all: BTreeSet<&str> = self.notes.values().flatten().flat_map(|o| with_parents(&o.tag)).collect();
+    /// `extra` are Tags known from elsewhere (tags.md).
+    pub fn completions(&self, prefix: &str, extra: &[String]) -> Vec<String> {
+        let q = fold(prefix);
+        let all: BTreeSet<&str> = self.notes.values().flatten().map(|o| o.tag.as_str()).chain(extra.iter().map(String::as_str)).flat_map(with_parents).collect();
         // An exact match offers nothing new and loops the popup.
-        all.into_iter().filter(|t| t.starts_with(&q) && *t != q).map(String::from).collect()
+        all.into_iter().filter(|t| fold(t).starts_with(&q) && fold(t) != q).map(String::from).collect()
     }
 }
