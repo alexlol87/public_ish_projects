@@ -420,12 +420,13 @@ await test("double-clicking a Bug box archives it once and leaves the next item"
 await test("undo after the archive was edited is refused, drops the step, and writes nothing", async () => {
   await app.click(".cm-task");
   await sleep(1200);
-  const arch = disk("dbl/archive/fixed-bugs.md") + "\nedited elsewhere\n";
+  const arch = "typed at the top\n" + disk("dbl/archive/fixed-bugs.md");
   fs.writeFileSync(path.join(vault, "dbl/archive/fixed-bugs.md"), arch);
   await sleep(800);
   await app.click("#undo");
   await app.until(() => document.querySelector(".toast.bad"), "error toast");
-  ok((await app.eval(() => document.querySelector(".toast.bad").textContent)).includes("was dropped"), "says the step was dropped");
+  const msg = await app.eval(() => document.querySelector(".toast.bad").textContent);
+  ok(msg.includes("was dropped"), "says the step was dropped: " + msg);
   eq(disk("dbl/archive/fixed-bugs.md"), arch, "archive untouched");
   ok(!disk("dbl/repo/bugs.md").includes("Two"), "bugs.md untouched");
 });

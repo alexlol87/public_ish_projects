@@ -254,14 +254,14 @@ async function openLink(target: string, _newTab: boolean) {
 let ticking = false;
 async function tickTask(offset: number) {
   const p = tabs.active;
-  if (!p || ticking) return; // a second click before the reload would hit stale offsets
+  if (!p || ticking) return;
   ticking = true;
   try {
     await flushAll();
     await api.tick(p, tabs.text(p) ?? "", offset);
     appActionAt = Date.now();
   } catch (e) { toast(errText(e), true); }
-  finally { ticking = false; }
+  finally { setTimeout(() => (ticking = false), 400); } // the next item slides under the cursor: swallow a double-click
 }
 
 // ---------- vault changes ----------
