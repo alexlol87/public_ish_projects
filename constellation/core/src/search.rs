@@ -122,7 +122,7 @@ impl SearchIndex {
         let tags = tags
             .iter()
             .flat_map(|t| {
-                let lower = t.name.to_lowercase();
+                let lower = fold(&t.name);
                 lower.match_indices('/').map(|(i, _)| lower[..i].to_string()).chain([lower.clone()]).collect::<Vec<_>>()
             })
             .collect();
@@ -137,7 +137,7 @@ impl SearchIndex {
         // `#tag` terms filter Notes (a parent Tag matches its children); the rest is the text query.
         let (tag_words, words): (Vec<&str>, Vec<&str>) =
             query.split_whitespace().partition(|w| w.strip_prefix('#').is_some_and(is_tag_name));
-        let wanted: Vec<String> = tag_words.iter().map(|w| w[1..].to_lowercase()).collect();
+        let wanted: Vec<String> = tag_words.iter().map(|w| fold(&w[1..])).collect();
         let q = fold(&words.join(" "));
         let mut r = Results::default();
         let notes: Vec<(&String, &Entry)> = self.notes.iter().filter(|(_, e)| wanted.iter().all(|t| e.tags.contains(t))).collect();
