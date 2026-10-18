@@ -82,13 +82,14 @@ pub fn create_note_edits(paths: &PathIndex, target: &str) -> Result<Vec<FileEdit
 }
 
 /// A Vault-relative Note path from what a person or Link typed: trimmed, a leading `./` and doubled `/` dropped, `.md`
-/// added unless it already ends in it. Refuses empty, trailing-slash, absolute, backslash, `.`, `..` and hidden segments,
+/// added unless it already ends in it. Refuses empty, trailing-slash, absolute, backslash, `.`, `..` and hidden segments, `#`, `|`, `[[` and `]]`,
 /// and app-only places (checked on the final path, any case). So the result always stays inside the Vault.
 pub fn clean_note_path(typed: &str) -> Result<String> {
     let t = typed.trim();
     let t = t.strip_prefix("./").unwrap_or(t);
     let bad = t.starts_with('/') || t.ends_with('/') || t.contains('\\') || t.split('/').any(|s| s == "." || s.starts_with('.'));
-    let t = t.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
+    let t = t.split('/').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
+    let bad = bad || t.contains(['#', '|']) || t.contains("[[") || t.contains("]]"); // no Link can point to these
     if bad || t.is_empty() {
         return Err(Error(format!("Not a valid Note path: \"{}\"", typed.trim())));
     }

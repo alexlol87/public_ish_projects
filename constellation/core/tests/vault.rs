@@ -256,3 +256,38 @@ fn read_note_non_utf8_has_a_readable_message() {
     let e = vault::read_note(v.path(), "l.md").unwrap_err();
     assert_eq!(e.to_string(), "l.md is not UTF-8 text; not opened");
 }
+
+#[cfg(unix)]
+#[test]
+fn paths_outside_the_vault_are_refused_for_read_and_write() {
+    let v = make_vault(&[("a.md", "A")]);
+    let out = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(out.path(), v.path().join("out")).unwrap();
+    for bad in ["../x.md", "/etc/hostname", "out/x.md", "out/sub/x.md"] {
+        assert!(vault::write_note(v.path(), bad, "x").is_err(), "write {bad}");
+        assert!(vault::read_note(v.path(), bad).is_err(), "read {bad}");
+    }
+    let edits = [FileEdit::create("out/x.md", "x")];
+    assert!(apply(&edits, v.path()).is_err());
+    assert_eq!(fs::read_dir(out.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_note_symlinks_are_hidden_from_the_tree() {
+    let v = make_vault(&[("a.md", "A")]);
+    std::os::unix::fs::symlink("/nonexistent/x.md", v.path().join("dangling.md")).unwrap();
+    assert_eq!(vault::load(v.path()).unwrap().note_paths(), ["a.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn read_only_folder_save_names_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = make_vault(&[("ro/a.md", "A")]);
+    fs::set_permissions(v.path().join("ro"), fs::Permissions::from_mode(0o555)).unwrap();
+    let e = vault::write_note(v.path(), "ro/a.md", "B");
+    fs::set_permissions(v.path().join("ro"), fs::Permissions::from_mode(0o755)).unwrap();
+    let e = e.unwrap_err().to_string();
+    assert!(e.contains("a.md") && e.contains("folder is read-only; not saved"), "{e}");
+}

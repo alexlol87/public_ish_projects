@@ -123,7 +123,7 @@ fn new_note_creates_at_exact_path_and_resolves() {
 fn new_note_refuses_bad_paths() {
     let v = make_vault(&FILES);
     let ix = VaultIndex::open(v.path()).unwrap();
-    for bad in ["acme-shop/Overview", "ACME-SHOP/overview.md", "", "  ", "acme-shop/", "/abs", "../x", "a/../x", "templates/x", ".constellation/x.md", "AGENTS.md"] {
+    for bad in ["acme-shop/Overview", "ACME-SHOP/overview.md", "", "  ", "acme-shop/", "/abs", "../x", "a/../x", "templates/x", ".constellation/x.md", "AGENTS.md", "acme-shop/a#b", "acme-shop/x|y", "acme-shop/[[open", "acme-shop/br]]ack"] {
         assert!(ix.new_note_edits(bad).is_err(), "{bad:?}");
     }
 }
@@ -230,4 +230,11 @@ fn a_failed_create_leaves_no_folders_behind() {
     assert!(apply(&[e], v.path()).is_err());
     assert!(!exists(v.path(), "fresh"), "folders the create made are removed");
     assert!(exists(v.path(), "acme-shop"));
+}
+
+#[test]
+fn new_note_trims_each_segment() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    assert_eq!(ix.new_note_edits(" fresh / trail ").unwrap(), [FileEdit::create("fresh/trail.md", "")]);
 }

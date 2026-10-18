@@ -231,7 +231,7 @@ pub fn build(tree: &VaultNode, parsed: &BTreeMap<String, ParsedNote>, paths: &Pa
     }
     walk(tree, include_archive, &mut nodes, &mut edges, &mut node_at);
 
-    let mut ghosts = HashSet::new();
+    let mut ghosts = HashMap::new();
     let mut seen = HashSet::new();
     let mut folded: HashMap<(EdgeKind, String, String), usize> = HashMap::new();
     for (p, note) in parsed.iter().filter(|(p, _)| include_archive || !is_archive(p)) {
@@ -270,8 +270,10 @@ pub fn build(tree: &VaultNode, parsed: &BTreeMap<String, ParsedNote>, paths: &Pa
                 LinkResolution::Note { path } if !include_archive && is_archive(&path) => continue,
                 LinkResolution::Note { path } => path,
                 LinkResolution::Broken { create_path } => {
-                    let id = format!("ghost:{}", create_path.to_lowercase());
-                    if ghosts.insert(id.clone()) {
+                    // Same ghost whatever the case, but the id keeps the first Link's case: it is the create path.
+                    let fresh = !ghosts.contains_key(&create_path.to_lowercase());
+                    let id = ghosts.entry(create_path.to_lowercase()).or_insert_with(|| format!("ghost:{create_path}")).clone();
+                    if fresh {
                         let name = crate::text::strip_md(&create_path).to_string();
                         nodes.push(GraphNode { id: id.clone(), name, kind: NodeKind::Ghost, note_type: None, tags: vec![] });
                     }

@@ -6,7 +6,7 @@ use crate::vault::write_atomic;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Component, Path};
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,9 +93,7 @@ pub fn check(edits: &[FileEdit], root: &Path) -> Result<()> {
         None => fs::read_to_string(root.join(p)).ok(),
     };
     for e in edits {
-        if Path::new(&e.path).components().any(|c| !matches!(c, Component::Normal(_))) {
-            return Err(Error(format!("{} is outside the Vault", e.path)));
-        }
+        crate::vault::safe_path(root, &e.path)?;
         let now = current(&texts, &e.path);
         if e.removes_file {
             if e.only_if.is_some() && now != e.only_if {
