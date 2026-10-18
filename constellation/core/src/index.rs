@@ -136,7 +136,7 @@ impl VaultIndex {
     }
 
     /// The edit that creates the missing Note for a broken Link; none if the Link resolves. Writes nothing.
-    pub fn create_note_edits(&self, target: &str) -> Vec<FileEdit> {
+    pub fn create_note_edits(&self, target: &str) -> Result<Vec<FileEdit>> {
         links::create_note_edits(&self.paths, target)
     }
 

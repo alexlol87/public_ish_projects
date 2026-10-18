@@ -1,8 +1,8 @@
 //! Renames and moves that rewrite every Link (or Tag) pointing at the old name. They return `FileEdit`s and write nothing.
 
-use crate::links::{LinkResolution, PathIndex};
+use crate::links::{clean_note_path, LinkResolution, PathIndex};
 use crate::parser::{self, WikiLink};
-use crate::text::{replace_all16, slice16, strip_md, Range16};
+use crate::text::{byte_at, len16, replace_all16, slice16, strip_md, Range16};
 use crate::{Error, FileEdit, Result, VaultIndex};
 use std::collections::BTreeMap;
 use std::fs;
@@ -10,6 +10,9 @@ use std::fs;
 type Rewrites = BTreeMap<String, Vec<(Range16, String)>>;
 
 pub fn rename_note(index: &VaultIndex, path: &str, new_name: &str) -> Result<Vec<FileEdit>> {
+    if new_name.contains('/') {
+        return Err(Error("A Note name cannot contain /".into()));
+    }
     let name = if new_name.ends_with(".md") { new_name.to_string() } else { format!("{new_name}.md") };
     let new = path.rsplit_once('/').map_or(name.clone(), |(dir, _)| format!("{dir}/{name}"));
     move_note(index, path, &new)
@@ -22,6 +25,7 @@ pub fn move_note_to_folder(index: &VaultIndex, path: &str, folder: &str) -> Resu
 }
 
 fn move_note(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEdit>> {
+    let new = &clean_note_path(new)?;
     let before = index.note_paths();
     if !before.iter().any(|p| p == old) {
         return Err(Error(format!("No such Note: {old}")));
@@ -63,6 +67,14 @@ fn move_note(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEdit>> 
 pub fn rename_heading(index: &VaultIndex, old: &str, new: &str, note_path: &str) -> Result<Vec<FileEdit>> {
     let text = fs::read_to_string(index.root().join(note_path))?;
     let h = parser::parse(&text).headings.into_iter().find(|h| h.title == old).ok_or_else(|| Error(format!("No heading {old}")))?;
+    let new = new.trim();
+    if new.is_empty() || ["[[", "]]", "|", "#"].iter().any(|c| new.contains(c)) {
+        return Err(Error("A heading title cannot be empty or contain [[ ]] | #".into()));
+    }
+    let parsed = parser::parse(&text);
+    if parsed.headings.iter().any(|x| x.range != h.range && x.title.to_lowercase() == new.to_lowercase()) {
+        return Err(Error(format!("This Note already has a heading \"{new}\"")));
+    }
     let line = format!("{} {new}", "#".repeat(h.level));
     let extra = BTreeMap::from([(note_path.to_string(), vec![(h.range, line)])]);
     let heading_to = |h: &str| if h.to_lowercase() == old.to_lowercase() { new.to_string() } else { h.to_string() };
@@ -71,20 +83,34 @@ pub fn rename_heading(index: &VaultIndex, old: &str, new: &str, note_path: &str)
 
 /// Renames a Tag and its children (`a/b` -> `c` also turns `a/b/x` into `c/x`) in text and frontmatter, case-insensitively.
 pub fn rename_tag(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEdit>> {
+    let new = new.trim().strip_prefix('#').unwrap_or(new.trim());
+    if !parser::is_tag_name(new) {
+        return Err(Error(format!("Not a valid Tag name: \"{new}\" (letters, digits, _ - and / between parts)")));
+    }
     let o = old.to_lowercase();
     let mut rewrites = Rewrites::new();
     for p in index.note_paths() {
         let text = fs::read_to_string(index.root().join(&p))?;
-        let reps: Vec<_> = parser::parse(&text)
-            .tags
-            .into_iter()
-            .filter(|t| {
-                let l = t.name.to_lowercase();
-                l == o || l.strip_prefix(&o).is_some_and(|r| r.starts_with('/'))
-            })
+        let tags = parser::parse(&text).tags;
+        let hit = |n: &str| {
+            let l = n.to_lowercase();
+            l == o || l.strip_prefix(&o).is_some_and(|r| r.starts_with('/'))
+        };
+        let in_text = |t: &parser::TagRef| slice16(&text, t.range).is_some_and(|s| s.starts_with('#'));
+        // Frontmatter list items that would repeat a Tag already in the list are dropped, not renamed.
+        let mut seen: std::collections::HashSet<_> = tags.iter().filter(|t| !in_text(t) && !hit(&t.name)).map(|t| t.name.to_lowercase()).collect();
+        let reps: Vec<_> = tags
+            .iter()
+            .filter(|t| hit(&t.name))
             .map(|t| {
-                let hash = if slice16(&text, t.range).is_some_and(|s| s.starts_with('#')) { "#" } else { "" };
-                (t.range, format!("{hash}{new}{}", t.name.chars().skip(old.chars().count()).collect::<String>()))
+                let name = format!("{new}{}", t.name.chars().skip(old.chars().count()).collect::<String>());
+                if in_text(t) {
+                    (t.range, format!("#{name}"))
+                } else if seen.insert(name.to_lowercase()) {
+                    (t.range, name)
+                } else {
+                    (item_with_separator(&text, t.range), String::new())
+                }
             })
             .collect();
         if !reps.is_empty() {
@@ -92,6 +118,27 @@ pub fn rename_tag(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEd
         }
     }
     Ok(to_edits(rewrites))
+}
+
+/// `r` (a frontmatter Tag item) widened over its quotes and one list separator, or its whole `- item` line.
+fn item_with_separator(text: &str, r: Range16) -> Range16 {
+    let (mut a, mut b) = (byte_at(text, r.location).unwrap_or(0), byte_at(text, r.end()).unwrap_or(0));
+    let ls = text[..a].rfind('\n').map_or(0, |i| i + 1);
+    let le = text[b..].find('\n').map_or(text.len(), |i| b + i);
+    if text[ls..le].trim_start().starts_with('-') {
+        (a, b) = (ls, (le + 1).min(text.len()));
+    } else {
+        let q = |c: char| c == '"' || c == '\'';
+        a -= text[ls..a].len() - text[ls..a].trim_end_matches(q).len();
+        b += text[b..le].len() - text[b..le].trim_start_matches(q).len();
+        let after = text[b..le].trim_start();
+        if let Some(rest) = after.strip_prefix(',') {
+            b = le - rest.trim_start().len();
+        } else if text[ls..a].trim_end().ends_with(',') {
+            a = ls + text[ls..a].trim_end().len() - 1;
+        }
+    }
+    Range16::new(len16(&text[..a]), len16(&text[a..b]))
 }
 
 /// Replacements per Note whose Links resolve to `target` (plus `extra`, e.g. a heading line).

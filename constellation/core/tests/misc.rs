@@ -210,7 +210,7 @@ fn repo_staleness_follows_ingest() {
 fn create_note_edits_apply_and_resolve() {
     let v = make_vault(&[("a.md", "x")]);
     let ix = VaultIndex::open(v.path()).unwrap();
-    apply(&ix.create_note_edits("ideas/new"), v.path()).unwrap();
+    apply(&ix.create_note_edits("ideas/new").unwrap(), v.path()).unwrap();
     assert_eq!(read(v.path(), "ideas/new.md"), "");
 }
 

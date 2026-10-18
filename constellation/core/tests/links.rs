@@ -58,7 +58,7 @@ fn app_only_files_are_not_link_targets() {
 fn create_note_makes_file_and_resolves() {
     let v = make_vault(&FILES);
     let ix = VaultIndex::open(v.path()).unwrap();
-    let edits = ix.create_note_edits("ideas/new");
+    let edits = ix.create_note_edits("ideas/new").unwrap();
     assert_eq!(edits, [FileEdit::create("ideas/new.md", "")]);
     assert!(!exists(v.path(), "ideas/new.md"), "returns edits, writes nothing");
     apply(&edits, v.path()).unwrap();
@@ -71,7 +71,7 @@ fn create_note_makes_file_and_resolves() {
 #[test]
 fn create_note_for_a_resolved_link_is_no_edits() {
     let v = make_vault(&FILES);
-    assert!(VaultIndex::open(v.path()).unwrap().create_note_edits("overview").is_empty());
+    assert!(VaultIndex::open(v.path()).unwrap().create_note_edits("overview").unwrap().is_empty());
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn undo_of_create_removes_only_the_folders_it_made() {
     let v = make_vault(&FILES);
     for edits in [
         VaultIndex::open(v.path()).unwrap().new_note_edits("acme-shop/deep/er/n").unwrap(),
-        VaultIndex::open(v.path()).unwrap().create_note_edits("acme-shop/deep/er/n"),
+        VaultIndex::open(v.path()).unwrap().create_note_edits("acme-shop/deep/er/n").unwrap(),
     ] {
         let inverse = apply(&edits, v.path()).unwrap();
         assert!(exists(v.path(), "acme-shop/deep/er/n.md"));
@@ -186,7 +186,7 @@ fn create_never_overwrites_an_existing_file() {
     assert_eq!(read(v.path(), "tags.md"), "keep me");
     assert_eq!(read(v.path(), ".obsidian/keep.md"), "hidden");
     let ix = VaultIndex::open(v.path()).unwrap();
-    assert!(apply(&ix.create_note_edits(".obsidian/keep"), v.path()).is_err());
+    assert!(ix.create_note_edits(".obsidian/keep").is_err());
     assert_eq!(read(v.path(), ".obsidian/keep.md"), "hidden");
 }
 
@@ -201,4 +201,33 @@ fn undo_of_create_refuses_when_the_note_changed_since() {
     write(v.path(), "fresh.md", "");
     apply(&inverse, v.path()).unwrap();
     assert!(!exists(v.path(), "fresh.md"));
+}
+
+#[test]
+fn broken_link_create_refuses_paths_that_leave_the_vault_or_are_not_notes() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    for bad in ["../x", "/tmp/abs", "a/../../x", ".hid/x", "templates/x", "a\\b", "", ".md", "a/.md"] {
+        assert!(ix.create_note_edits(bad).is_err(), "{bad:?}");
+    }
+    assert!(ix.create_note_edits("ideas/ok").is_ok());
+}
+
+#[test]
+fn edits_that_escape_the_vault_are_refused_before_anything_is_written() {
+    let v = make_vault(&FILES);
+    for p in ["../x.md", "/tmp/abs-x.md", "a/../../x.md"] {
+        assert!(apply(&[FileEdit::create("ok-first.md", ""), FileEdit::create(p, "")], v.path()).is_err(), "{p}");
+    }
+    assert!(!exists(v.path(), "ok-first.md"));
+}
+
+#[test]
+fn a_failed_create_leaves_no_folders_behind() {
+    let v = make_vault(&FILES);
+    let long = "x".repeat(300);
+    let e = FileEdit::create(&format!("fresh/deep/{long}.md"), "");
+    assert!(apply(&[e], v.path()).is_err());
+    assert!(!exists(v.path(), "fresh"), "folders the create made are removed");
+    assert!(exists(v.path(), "acme-shop"));
 }

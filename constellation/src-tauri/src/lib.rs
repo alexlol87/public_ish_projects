@@ -452,7 +452,7 @@ fn undo_depth(st: State<AppState>) -> usize {
 #[tauri::command]
 fn create_note(app: AppHandle, st: State<AppState>, target: String) -> Res<String> {
     with(&st, |o| {
-        let edits = o.index.create_note_edits(&target);
+        let edits = o.index.create_note_edits(&target)?;
         let path = edits.first().map(|e| e.path.clone());
         apply(&app, o, edits)?;
         path.ok_or_else(|| Error("The link already resolves".into()))

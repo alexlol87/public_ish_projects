@@ -6,7 +6,7 @@ use crate::vault::write_atomic;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +67,12 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
         let old = if e.creates_file { String::new() } else { fs::read_to_string(&file)? };
         let replaced = slice16(&old, e.range).ok_or_else(|| Error(format!("Edit range is outside {}", e.path)))?.to_string();
         let new = replace16(&old, e.range, &e.text).ok_or_else(|| Error(format!("Edit range is outside {}", e.path)))?;
-        write_atomic(&file, &new)?;
+        if let Err(err) = write_atomic(&file, &new) {
+            for d in &made_dirs {
+                let _ = fs::remove_dir(root.join(d)); // a failed create leaves no folders behind
+            }
+            return Err(err);
+        }
         inverse.push(if e.creates_file {
             FileEdit { made_dirs, only_if: Some(new), ..FileEdit::remove(&e.path) }
         } else {
@@ -78,7 +83,7 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
     Ok(inverse)
 }
 
-/// Refuses the whole batch, before anything is written, if a create would overwrite a file, a guarded removal would
+/// Refuses the whole batch, before anything is written, if a path leaves the Vault, a create would overwrite a file, a guarded removal would
 /// lose text changed since, or a replace's `expect`ed text is no longer in its range (e.g. undoing after the Note was
 /// edited). Replays the batch in memory so each edit is checked against the text the earlier ones leave.
 pub fn check(edits: &[FileEdit], root: &Path) -> Result<()> {
@@ -88,6 +93,9 @@ pub fn check(edits: &[FileEdit], root: &Path) -> Result<()> {
         None => fs::read_to_string(root.join(p)).ok(),
     };
     for e in edits {
+        if Path::new(&e.path).components().any(|c| !matches!(c, Component::Normal(_))) {
+            return Err(Error(format!("{} is outside the Vault", e.path)));
+        }
         let now = current(&texts, &e.path);
         if e.removes_file {
             if e.only_if.is_some() && now != e.only_if {
