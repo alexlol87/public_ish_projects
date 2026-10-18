@@ -187,7 +187,7 @@ fn file_edit_apply_uses_utf16_offsets_and_inverts() {
     let edit = FileEdit::replace("a.md", Range16::new(4, 3), "TAG!");
     let undo = apply(&[edit], v.path()).unwrap();
     assert_eq!(read(v.path(), "a.md"), "é😀 TAG! end");
-    assert_eq!(undo, [FileEdit::replace("a.md", Range16::new(4, 4), "tag")]);
+    assert_eq!(undo, [FileEdit { expect: Some("TAG!".into()), ..FileEdit::replace("a.md", Range16::new(4, 4), "tag") }]);
     apply(&undo, v.path()).unwrap();
     assert_eq!(read(v.path(), "a.md"), "é😀 tag end");
     // A range inside a surrogate pair is rejected.

@@ -425,7 +425,10 @@ fn apply_edits(app: AppHandle, st: State<AppState>, edits: Vec<FileEdit>) -> Res
 fn undo(app: AppHandle, st: State<AppState>) -> Res<bool> {
     with(&st, |o| {
         let Some(last) = o.undo.last() else { return Ok(false) };
-        edit::check(last, o.index.root())?; // refused: nothing written, the step stays
+        if let Err(e) = edit::check(last, o.index.root()) {
+            o.undo.pop(); // refused: nothing written; drop the step so older ones stay reachable
+            return Err(Error(format!("{e}; that step can't be undone and was dropped")));
+        }
         let inverse = o.undo.pop().unwrap_or_default();
         let mut paths: Vec<String> = inverse.iter().map(|e| e.path.clone()).collect();
         paths.sort();
@@ -514,7 +517,7 @@ fn rename_tag(app: AppHandle, st: State<AppState>, old: String, new: String) -> 
 #[tauri::command]
 fn tick(app: AppHandle, st: State<AppState>, path: String, text: String, offset: usize) -> Res<Vec<String>> {
     with(&st, |o| {
-        let edits = archiver::tick(&o.index, offset, &text, &path, staleness::today())?;
+        let edits = archiver::tick_saved(&o.index, offset, &text, &path, staleness::today())?;
         apply(&app, o, edits)
     })
 }

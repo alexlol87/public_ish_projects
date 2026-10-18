@@ -251,14 +251,17 @@ async function openLink(target: string, _newTab: boolean) {
   } catch (e) { toast(errText(e), true); }
 }
 
+let ticking = false;
 async function tickTask(offset: number) {
   const p = tabs.active;
-  if (!p) return;
-  await flushAll();
+  if (!p || ticking) return;
+  ticking = true;
   try {
+    await flushAll();
     await api.tick(p, tabs.text(p) ?? "", offset);
     appActionAt = Date.now();
   } catch (e) { toast(errText(e), true); }
+  finally { setTimeout(() => (ticking = false), 400); } // the next item slides under the cursor: swallow a double-click
 }
 
 // ---------- vault changes ----------
@@ -321,7 +324,10 @@ async function undo() {
   await flushAll();
   try {
     if (await api.undo()) { appActionAt = Date.now(); toast("Undone"); }
-  } catch (e) { toast(errText(e), true); }
+  } catch (e) {
+    toast(errText(e), true);
+    void api.undoDepth().then((n) => (P.undo as HTMLButtonElement).disabled = n === 0); // the refused step was dropped
+  }
 }
 
 // ---------- sidebar ----------

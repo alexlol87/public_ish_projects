@@ -2,7 +2,7 @@
 
 use crate::links::LinkResolution;
 use crate::text::{len16, strip_md, Range16};
-use crate::{parser, FileEdit, Result, VaultIndex};
+use crate::{parser, Error, FileEdit, Result, VaultIndex};
 use chrono::NaiveDate;
 use regex::Regex;
 use std::fs;
@@ -13,6 +13,21 @@ static TASK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([ \t]*)[-*+] \[([
 
 fn indent(s: &str) -> usize {
     s.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+/// `tick` on the Note as saved on disk. `editor_text` is the open buffer (CRLF read as LF) and must equal the disk text,
+/// else the click is refused: a stale buffer (second click before the reload, unsaved or conflicting text) must not
+/// pick offsets in the wrong text. Offsets are mapped onto CRLF files.
+pub fn tick_saved(index: &VaultIndex, offset: usize, editor_text: &str, path: &str, on: NaiveDate) -> Result<Vec<FileEdit>> {
+    let disk = fs::read_to_string(index.root().join(path))?;
+    let lf = disk.replace("\r\n", "\n");
+    if lf != editor_text.replace("\r\n", "\n") {
+        return Err(Error(format!("{path} has changes that are not saved yet; try again in a moment")));
+    }
+    let Some(at) = crate::text::byte_at(&lf, offset) else { return Ok(vec![]) };
+    // ponytail: assumes uniform line endings; a mixed file maps offsets a little off
+    let crs = if lf.len() == disk.len() { 0 } else { lf[..at].matches('\n').count() };
+    tick(index, offset + crs, &disk, path, on)
 }
 
 /// A click on a task checkbox. `offset` is any UTF-16 offset on the task's line in `text` (the open buffer of `path`).
