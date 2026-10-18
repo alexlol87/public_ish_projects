@@ -1,7 +1,8 @@
 import { history, undo, redo } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, test } from "vitest";
-import { buildDecorations, type DecoOptions } from "./decorations";
+import { buildDecorations, livePreview, type DecoOptions } from "./decorations";
 import { formatKeys, formatTransaction } from "./editor";
 import { applyFormat } from "../lib/formatActions";
 
@@ -135,5 +136,33 @@ describe("format actions in the editor", () => {
   test("shortcuts cover the PLAN 6.2 table", () => {
     expect(Object.keys(formatKeys)).toHaveLength(14);
     expect(formatKeys["Mod-Shift-x"]).toBe("strikethrough");
+  });
+});
+
+describe("incremental decorations", () => {
+  // The live-preview field updates only the touched lines on an edit; it must always equal a full rebuild.
+  const dump = (set: DecorationSet, len: number) => {
+    const out: string[] = [];
+    set.between(0, len, (from, to, d) => { out.push(`${from}-${to}:${d.spec.class ?? d.spec.widget?.constructor.name ?? "hide"}`); });
+    return out;
+  };
+  const palette = ["# Head", "plain **bold** and [[gone]] #tag", "```", "code **x**", "---", "| a | b |", "|---|---|", "| 1 | 2 |", "> quote", "- [ ] task", "", "![i](p.png)", "_it_ `c`", "---\ntype: x\n---"];
+  test("random edits and cursor moves equal a full rebuild", () => {
+    let seed = 7;
+    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >> 8) % n; };
+    const field = livePreview(opts);
+    for (let round = 0; round < 300; round++) {
+      let doc = Array.from({ length: 4 + rnd(12) }, () => palette[rnd(palette.length)]).join("\n");
+      let state = EditorState.create({ doc, extensions: [field], selection: { anchor: rnd(doc.length + 1) } });
+      for (let step = 0; step < 25; step++) {
+        const len = state.doc.length, a = rnd(len + 1);
+        const spec = rnd(3) === 0 ? { selection: { anchor: rnd(len + 1), head: rnd(len + 1) } }
+          : { changes: { from: a, to: Math.min(len, a + rnd(4)), insert: ["", "x", "\n", "`", "```\n", "|", "**", "#", palette[rnd(palette.length)]][rnd(9)] } };
+        state = state.update(spec).state;
+        const full = buildDecorations(state, opts);
+        expect(dump(state.field(field).all, state.doc.length)).toEqual(dump(full.all, state.doc.length));
+        expect(dump(state.field(field).atomic, state.doc.length)).toEqual(dump(full.atomic, state.doc.length));
+      }
+    }
   });
 });

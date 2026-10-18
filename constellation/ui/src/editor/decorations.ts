@@ -1,6 +1,6 @@
-import { EditorState, StateEffect, StateField, type Range } from "@codemirror/state";
+import { EditorState, StateEffect, StateField, type Range, type Text, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { lineRangeCovering, style, type StyleRole } from "../lib/styler";
+import { lineRangeCovering, style, type StyledRange, type StyleRole } from "../lib/styler";
 
 export interface DecoOptions {
   resolveImage(path: string): string;
@@ -100,10 +100,8 @@ function roleDecoration(role: StyleRole, o: DecoOptions): Decoration | null {
 
 export interface Built { all: DecorationSet; atomic: DecorationSet }
 
-/** Live-preview decorations: the styler's ranges, with markers hidden except on lines touched by the selection. */
-export function buildDecorations(state: EditorState, o: DecoOptions): Built {
-  const text = state.doc.toString();
-  const { styled, hidden } = style(text, lineRangeCovering(state.selection.main, text));
+/** Decoration ranges for styler output; `offset` is where the styled text starts in `doc`. */
+function toRanges(doc: Text, styled: StyledRange[], hidden: { from: number; to: number }[], offset: number, o: DecoOptions) {
   const all: Range<Decoration>[] = [];
   const atomic: Range<Decoration>[] = [];
   const widgets = new Set<string>(); // ranges replaced by a widget; their `hidden` entry is redundant
@@ -111,8 +109,9 @@ export function buildDecorations(state: EditorState, o: DecoOptions): Built {
     all.push(d.range(from, to));
     atomic.push(d.range(from, to));
   };
-  for (const { from, to, role } of styled) {
-    const lineStart = state.doc.lineAt(from).from;
+  for (const s of styled) {
+    const { role } = s, from = s.from + offset, to = s.to + offset;
+    const lineStart = doc.lineAt(from).from;
     if (role.kind === "taskBox" || role.kind === "image" || role.kind === "table" || role.kind === "frontmatter") widgets.add(`${from}-${to}`);
     if (role.kind === "taskBox") replace(from, to, Decoration.replace({ widget: new CheckboxWidget(role.checked, o.onTickTask) }));
     else if (role.kind === "image") replace(from, to, Decoration.replace({ widget: new ImageWidget(o.resolveImage(role.path), role.alt) }));
@@ -128,15 +127,99 @@ export function buildDecorations(state: EditorState, o: DecoOptions): Built {
       if (d && to > from) all.push(d.range(from, to));
     }
   }
-  for (const { from, to } of hidden) if (to > from && !widgets.has(`${from}-${to}`)) replace(from, to, hide);
+  for (const h of hidden) {
+    const from = h.from + offset, to = h.to + offset;
+    if (to > from && !widgets.has(`${from}-${to}`)) replace(from, to, hide);
+  }
+  return { all, atomic };
+}
+
+/** Live-preview decorations: the styler's ranges, with markers hidden except on lines touched by the selection. */
+export function buildDecorations(state: EditorState, o: DecoOptions): Built {
+  const text = state.doc.toString();
+  const { styled, hidden } = style(text, lineRangeCovering(state.selection.main, text));
+  const { all, atomic } = toRanges(state.doc, styled, hidden, 0, o);
   return { all: Decoration.set(all, true), atomic: Decoration.set(atomic, true) };
+}
+
+/** Fence lines (```) starting before `pos`, outside frontmatter. */
+function fencesBefore(doc: Text, pos: number): number {
+  let n = 0;
+  const first = frontmatterEnd(doc) + 1;
+  if (pos <= 0 || first > doc.lineAt(pos - 1).number) return 0;
+  for (const l of doc.iterLines(first, doc.lineAt(pos - 1).number + 1)) if (l.startsWith("```")) n++;
+  return n;
+}
+
+/** Line number of the line closing a frontmatter block opened on line 1, else 0. */
+function frontmatterEnd(doc: Text): number {
+  if (doc.line(1).text !== "---") return 0;
+  let n = 1;
+  for (const l of doc.iterLines(2)) { n++; if (/^(---|\.\.\.)\r?$/.test(l)) return n; }
+  return 0;
+}
+
+/**
+ * The same result as `buildDecorations`, but only the lines the transaction touched (the edit, the old and new
+ * cursor lines, whole tables) are restyled; the rest is mapped through the change. null: do a full rebuild
+ * (several edits, fences or frontmatter involved).
+ */
+function updateDecorations(v: Built, tr: Transaction, o: DecoOptions): Built | null {
+  const doc = tr.state.doc, old = tr.startState.doc;
+  const edits: number[][] = [];
+  tr.changes.iterChangedRanges((a, b, c, d) => edits.push([a, b, c, d]));
+  if (edits.length > 1) return null;
+  const sel = (from: number, to: number) => ({ from, to: to > from ? to - 1 : to });
+  const m = (p: number) => tr.changes.mapPos(p);
+  const s0 = tr.startState.selection.main, s1 = tr.state.selection.main;
+  const spans = [sel(m(s0.from), m(s0.to)), sel(s1.from, s1.to)];
+  if (edits.length) spans.push({ from: edits[0][2], to: edits[0][3] });
+  const lineStartOf = (n: number) => doc.line(n).from;
+  let regions = spans.map((s) => {
+    let a = doc.lineAt(s.from).number, b = doc.lineAt(s.to).number;
+    const pipe = (n: number) => doc.line(n).text.trim().startsWith("|");
+    while (a > 1 && pipe(a - 1)) a--;
+    while (b < doc.lines && pipe(b + 1)) b++;
+    return [a, b];
+  }).sort((x, y) => x[0] - y[0]);
+  regions = regions.reduce<number[][]>((acc, r) => {
+    const last = acc[acc.length - 1];
+    if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]); else acc.push(r);
+    return acc;
+  }, []);
+  const fmNew = frontmatterEnd(doc), fmOld = edits.length ? frontmatterEnd(old) : 0;
+  if (fmNew && regions[0][0] <= fmNew + 1) return null;
+  if (edits.length) {
+    const [a, b, c, d] = edits[0];
+    if (fmOld && old.lineAt(a).number <= fmOld + 1) return null;
+    const last = regions.find((r) => r[0] <= doc.lineAt(d).number && doc.lineAt(d).number <= r[1])!;
+    const rTo = last[1] < doc.lines ? lineStartOf(last[1] + 1) : doc.length;
+    const oldTo = Math.min(old.length, rTo - (d - c - (b - a)));
+    if (fencesBefore(doc, rTo) % 2 !== fencesBefore(old, oldTo) % 2) return null; // every line below changed meaning
+  }
+  const cursor = { from: doc.lineAt(s1.from).from, to: Math.min(doc.length, doc.lineAt(s1.to > s1.from ? s1.to - 1 : s1.to).to + 1) };
+  const added = { all: [] as Range<Decoration>[], atomic: [] as Range<Decoration>[] };
+  const spansOut: [number, number][] = [];
+  for (const [a, b] of regions) {
+    const from = lineStartOf(a), to = b < doc.lines ? lineStartOf(b + 1) : doc.length;
+    const { styled, hidden } = style(doc.sliceString(from, to), { from: cursor.from - from, to: cursor.to - from }, { inFence: fencesBefore(doc, from) % 2 === 1, atStart: from === 0 });
+    const r = toRanges(doc, styled, hidden, from, o);
+    added.all.push(...r.all); added.atomic.push(...r.atomic);
+    spansOut.push([from, to]);
+  }
+  const filter = (from: number) => spansOut.every(([a, b]) => from < a || from >= b);
+  const lo = spansOut[0][0], hi = spansOut[spansOut.length - 1][1];
+  const upd = (set: DecorationSet, add: Range<Decoration>[]) =>
+    set.map(tr.changes).update({ add, sort: true, filter, filterFrom: lo, filterTo: hi });
+  return { all: upd(v.all, added.all), atomic: upd(v.atomic, added.atomic) };
 }
 
 export function livePreview(o: DecoOptions) {
   const field = StateField.define<Built>({
     create: (state) => buildDecorations(state, o),
     update: (v, tr) =>
-      tr.docChanged || tr.selection || tr.effects.some((e) => e.is(refreshEffect)) ? buildDecorations(tr.state, o) : v,
+      tr.effects.some((e) => e.is(refreshEffect)) ? buildDecorations(tr.state, o)
+        : tr.docChanged || tr.selection ? updateDecorations(v, tr, o) ?? buildDecorations(tr.state, o) : v,
     provide: (f) => [
       EditorView.decorations.from(f, (v) => v.all),
       EditorView.atomicRanges.of((view) => view.state.field(f).atomic),

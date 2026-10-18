@@ -110,11 +110,12 @@ function styleInline(s: string, offset: number, out: StyleResult, hidden: Range[
  * Pure markdown-to-ranges mapper, line based. `cursorLine` is the range of the line(s) holding the
  * selection (see `lineRange`); markers there are not hidden. null means no line is active.
  */
-export function style(text: string, cursorLine: Range | null = null): StyleResult {
+export function style(text: string, cursorLine: Range | null = null, ctx: { inFence?: boolean; atStart?: boolean } = {}): StyleResult {
   const out: StyleResult = { styled: [], hidden: [] };
   const lines = text.split("\n");
   const touches = (r: Range, c: Range | null) => !!c && (overlap(c, r) || c.from === r.from);
-  let inFence = false;
+  let inFence = ctx.inFence ?? false;
+  const atStart = ctx.atStart ?? true; // false: `text` is a slice from mid-document, so line 0 cannot open frontmatter
   let loc = 0;
   let t: ReturnType<typeof table>;
   let fm: number;
@@ -128,7 +129,7 @@ export function style(text: string, cursorLine: Range | null = null): StyleResul
     const hidden: Range[] = [];
     loc = full.to;
 
-    if (li === 0 && content === "---" && (fm = frontmatterEnd(lines)) > 0) {
+    if (atStart && li === 0 && content === "---" && (fm = frontmatterEnd(lines)) > 0) {
       const end = lines.slice(0, fm + 1).reduce((n, l) => n + l.length + 1, 0);
       const block = { from: 0, to: Math.min(end - 1, text.length) };
       if (touches({ from: 0, to: end }, cursorLine)) {
