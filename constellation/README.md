@@ -48,7 +48,7 @@ my-vault/
                                future.md, bugs.md, todo.md, adr/NNNN-<slug>.md
 ```
 
-Folder symlinks are not followed (a loop would index the Vault into itself); Note files that are symlinks are, and saving writes through to the target.
+Folder symlinks are not followed (a loop would index the Vault into itself); Note files that are symlinks are followed, and saving writes through to the target, but a Note symlink pointing outside the Vault is refused (read and write).
 
 - Notes are plain `.md` files with small YAML frontmatter (`type` is required, a Note without it is `type: note`) and
   Obsidian `[[wikilinks]]` (`[[path#Heading]]`, `[[path|alias]]`).

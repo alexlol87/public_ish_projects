@@ -71,11 +71,11 @@ fn link_edges_and_ghost_nodes() {
             "README.md>acme/overview.md",
             "acme/overview.md>acme/cart/api.md",
             "acme/cart/api.md>acme/overview.md",
-            "acme/overview.md>ghost:missing one.md"
+            "acme/overview.md>ghost:Missing One.md"
         ])
     );
     let ghosts: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Ghost).map(|n| n.id.as_str()).collect();
-    assert_eq!(ghosts, ["ghost:missing one.md"]);
+    assert_eq!(ghosts, ["ghost:Missing One.md"]);
 }
 
 #[test]
@@ -85,12 +85,12 @@ fn folder_opens_readme() {
     assert_eq!(g.open_path("empty"), None);
     assert_eq!(g.open_path("acme/overview.md").as_deref(), Some("acme/overview.md"));
     assert_eq!(g.open_path("").as_deref(), Some("README.md"));
-    assert_eq!(g.open_path("ghost:missing one.md"), None);
+    assert_eq!(g.open_path("ghost:Missing One.md"), None);
 }
 
 #[test]
 fn neighbours() {
-    assert_eq!(plain_graph().neighbours("acme/overview.md"), ["README.md", "acme", "acme/cart/api.md", "ghost:missing one.md"]);
+    assert_eq!(plain_graph().neighbours("acme/overview.md"), ["README.md", "acme", "acme/cart/api.md", "ghost:Missing One.md"]);
 }
 
 #[test]
@@ -286,4 +286,10 @@ fn five_thousand_note_vault_stays_usable() {
     assert!(g.nodes.len() > 5000);
     assert!(local.nodes.len() < g.nodes.len());
     assert!(start.elapsed().as_secs_f64() < if cfg!(debug_assertions) { 10.0 } else { 1.0 });
+}
+
+#[test]
+fn ghost_keeps_the_links_case_for_the_create_path() {
+    let g = graph_of(&[("a.md", "[[Acme-Shop/README]] and [[acme-shop/readme]]")]);
+    assert_eq!(ids_of(&g, NodeKind::Ghost), strs(["ghost:Acme-Shop/README.md"]));
 }

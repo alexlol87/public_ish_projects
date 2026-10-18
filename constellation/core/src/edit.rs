@@ -6,7 +6,7 @@ use crate::vault::write_atomic;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Component, Path};
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,9 +112,7 @@ fn plan(edits: &[FileEdit], root: &Path) -> Result<Plan> {
     let mut i = 0;
     while i < edits.len() {
         let e = &edits[i];
-        if Path::new(&e.path).components().any(|c| !matches!(c, Component::Normal(_))) {
-            return Err(Error(format!("{} is outside the Vault", e.path)));
-        }
+        crate::vault::safe_path(root, &e.path)?;
         let at = *cur.entry(&e.path).or_insert_with(|| {
             let old = fs::read_to_string(root.join(&e.path)).ok();
             files.push(File { path: e.path.clone(), new: old.clone(), old, made_dirs: vec![] });
