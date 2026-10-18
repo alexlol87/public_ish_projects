@@ -29,7 +29,7 @@ export function xwin(action, title) {
   return r.status === 0;
 }
 
-export const KEYS = { Control: "", Shift: "", Alt: "", Enter: "", Escape: "", Backspace: "", ArrowDown: "", ArrowUp: "", ArrowLeft: "", ArrowRight: "", Tab: "", Home: "", End: "", Delete: "" };
+export const KEYS = { Control: "", Shift: "", Alt: "", Enter: "", Escape: "", Backspace: "", ArrowDown: "", ArrowUp: "", ArrowLeft: "", ArrowRight: "", Tab: "", Home: "", End: "", Delete: "", F1: "\uE031" };
 
 async function wd(method, p, body) {
   const r = await fetch(BASE + p, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });

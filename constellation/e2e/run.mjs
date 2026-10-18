@@ -460,6 +460,20 @@ await test("new note: button, folder menu, Ctrl+N, existing path error, undo", a
   ok(disk("acme-shop/overview.md").length > 0, "existing Note unchanged");
 });
 
+await test("help: button and F1 open the cheat sheet; search does not find it", async () => {
+  const CS = ".constellation/cheat-sheet.md";
+  await app.click("#open-help");
+  await app.until(() => document.querySelector(".tab.active")?.title === ".constellation/cheat-sheet.md", "cheat sheet is the active tab");
+  ok(disk(CS).includes("Ctrl+G"), "cheat sheet on disk names Ctrl+G");
+  ok((await app.eval(() => document.querySelector(".cm-content").innerText)).includes("Ctrl+G"), "tab shows Ctrl+G");
+  await app.click(".tab.active .x");
+  await app.press("F1");
+  await app.until(() => document.querySelector(".tab.active")?.title === ".constellation/cheat-sheet.md", "F1 opens it again");
+  await search("overwritten");
+  ok(!(await resultsText()).includes("cheat-sheet"), "search skips the cheat sheet");
+  await search("");
+});
+
 await test("settings: staleness days and theme persist", async () => {
   await openRow("acme-shop/cart-service/README.md");
   await app.click("#open-settings");

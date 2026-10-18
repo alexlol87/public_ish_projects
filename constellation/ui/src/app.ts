@@ -101,6 +101,7 @@ function buildLayout(app: HTMLElement) {
     h("span", { class: "grow" }), P.undo,
     h("button", { id: "new-note", title: `New note (${isMac ? "⌘" : "Ctrl+"}N)`, onclick: () => void newNote() }, "New note"),
     h("button", { id: "open-graph", title: `Graph (${isMac ? "⌘" : "Ctrl+"}G)`, onclick: () => void api.openGraph() }, "Graph"),
+    h("button", { id: "open-help", title: "Help (F1)", onclick: () => void openHelp() }, "Help"),
     h("button", { id: "open-settings", title: "Settings", onclick: () => void settings() }, "Settings"));
   P.search = h("input", { type: "search", id: "search", placeholder: "Search folders, notes, text, #tag", class: "wide" });
   let timer: number;
@@ -370,6 +371,13 @@ async function newNote(folder = (tabs.active ?? "").split("/").slice(0, -1).join
   } catch (e) { toast(errText(e), true); }
 }
 
+async function openHelp() {
+  try {
+    const p = await api.openCheatSheet();
+    await openNote(p);
+  } catch (e) { toast(errText(e), true); }
+}
+
 async function renameNote(path: string) {
   const to = await ask("Rename or move note", path, "Change the file name, or the folder (not both). Links are rewritten.");
   if (!to || to === path) return;
@@ -501,6 +509,7 @@ async function settings() {
 
 function onKey(e: KeyboardEvent) {
   const k = e.key.toLowerCase();
+  if (e.key === "F1") { e.preventDefault(); void openHelp(); return; }
   if (!mod(e)) return;
   const t = e.target as HTMLElement;
   const inEditor = !!t.closest?.(".cm-editor");

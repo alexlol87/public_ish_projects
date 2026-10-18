@@ -210,3 +210,13 @@ fn create_note_edits_apply_and_resolve() {
     apply(&ix.create_note_edits("ideas/new"), v.path()).unwrap();
     assert_eq!(read(v.path(), "ideas/new.md"), "");
 }
+
+#[test]
+fn cheat_sheet_names_every_bound_shortcut_and_says_edits_are_overwritten() {
+    let text = agent_files::CHEAT_SHEET;
+    assert!(text.lines().next().unwrap().contains("overwritten"));
+    // Keep in step with `onKey` and the top bar in ui/src/app.ts.
+    for k in ["Ctrl+G", "Ctrl+N", "Ctrl+S", "Ctrl+W", "Ctrl+Z", "Ctrl+,", "Ctrl+Shift+F", "Ctrl-click", "F1"] {
+        assert!(text.contains(k), "cheat sheet misses {k}");
+    }
+}

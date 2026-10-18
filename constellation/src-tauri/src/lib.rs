@@ -450,6 +450,18 @@ fn create_note(app: AppHandle, st: State<AppState>, target: String) -> Res<Strin
     })
 }
 
+/// Writes the built-in cheat sheet (not an undo step, no change event); returns its path.
+#[tauri::command]
+fn open_cheat_sheet(st: State<AppState>) -> Res<String> {
+    with(&st, |o| {
+        let path = ".constellation/cheat-sheet.md";
+        let text = agent_files::CHEAT_SHEET;
+        let text = if cfg!(target_os = "macos") { text.replace("Ctrl+", "⌘").replace("Ctrl-click", "⌘-click") } else { text.to_string() };
+        vault::write_atomic(&o.index.root().join(path), &text)?;
+        Ok(path.to_string())
+    })
+}
+
 /// Creates an empty Note at the typed Vault path; returns its path.
 #[tauri::command]
 fn new_note(app: AppHandle, st: State<AppState>, path: String) -> Res<String> {
@@ -580,6 +592,7 @@ pub fn run() {
             undo,
             undo_depth,
             create_note,
+            open_cheat_sheet,
             new_note,
             rename_note,
             rename_heading,
