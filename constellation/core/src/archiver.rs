@@ -22,7 +22,7 @@ pub fn tick_saved(index: &VaultIndex, offset: usize, editor_text: &str, path: &s
     let disk = fs::read_to_string(index.root().join(path))?;
     let lf = disk.replace("\r\n", "\n");
     if lf != editor_text.replace("\r\n", "\n") {
-        return Err(Error(format!("{path} has changes that are not saved yet; try again in a moment")));
+        return Err(Error(format!("{path} changed since it was shown here; try again in a moment")));
     }
     let Some(at) = crate::text::byte_at(&lf, offset) else { return Ok(vec![]) };
     // ponytail: assumes uniform line endings; a mixed file maps offsets a little off

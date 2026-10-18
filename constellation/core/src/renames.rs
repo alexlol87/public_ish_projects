@@ -2,7 +2,7 @@
 
 use crate::links::{clean_note_path, LinkResolution, PathIndex};
 use crate::parser::{self, WikiLink};
-use crate::text::{byte_at, len16, replace_all16, slice16, strip_md, Range16};
+use crate::text::{byte_at, bytes_at, len16, replace_all16, slice16, strip_md, Range16};
 use crate::{Error, FileEdit, Result, VaultIndex};
 use std::collections::BTreeMap;
 use std::fs;
@@ -153,11 +153,16 @@ fn rewrite_links(
     for p in index.note_paths() {
         let text = fs::read_to_string(index.root().join(&p))?;
         let mut reps = extra.get(&p).cloned().unwrap_or_default();
-        for l in parser::parse(&text).links.iter().filter(|l| index.path_index().resolve(&l.target) == want) {
+        let parsed = parser::parse(&text);
+        let mut links: Vec<_> = parsed.links.iter().filter(|l| index.path_index().resolve(&l.target) == want).collect();
+        links.sort_by_key(|l| l.range.location);
+        let offs: Vec<usize> = links.iter().flat_map(|l| [l.range.location, l.range.end()]).collect();
+        let bytes = bytes_at(&text, &offs); // one pass instead of a scan per Link
+        for (k, l) in links.into_iter().enumerate() {
             let heading = l.heading.as_ref().map(|h| format!("#{}", heading_to(h))).unwrap_or_default();
             let alias = l.alias.as_ref().map(|a| format!("|{a}")).unwrap_or_default();
             let s = format!("[[{}{heading}{alias}]]", new_target(l));
-            if slice16(&text, l.range) != Some(s.as_str()) {
+            if bytes.as_ref().map(|b| &text[b[2 * k]..b[2 * k + 1]]) != Some(s.as_str()) {
                 reps.push((l.range, s));
             }
         }

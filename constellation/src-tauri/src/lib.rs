@@ -438,6 +438,9 @@ fn undo(app: AppHandle, st: State<AppState>) -> Res<bool> {
         paths.sort();
         paths.dedup();
         let r = edit::apply(&inverse, o.index.root());
+        if r.is_err() {
+            o.undo.push(inverse); // nothing was written (rolled back): the step stays for another try
+        }
         finish(&app, o, paths, false)?;
         r.map(|_| true)
     })
@@ -545,6 +548,26 @@ fn image_response(app: &AppHandle, uri: &str) -> Option<tauri::http::Response<Ve
     tauri::http::Response::builder().header("Content-Type", mime).body(std::fs::read(file).ok()?).ok()
 }
 
+static TERMINATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// SIGTERM (logout, shutdown) closes the main window like the user would, so the editor saves its last keystrokes first.
+fn close_on_sigterm(app: AppHandle) {
+    extern "C" fn handler(_: libc::c_int) {
+        TERMINATED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe { libc::signal(libc::SIGTERM, handler as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    std::thread::spawn(move || {
+        while !TERMINATED.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.close();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5)); // the window refused to close (unsaved text): the system wants us gone
+        app.exit(0);
+    });
+}
+
 pub fn run() {
     // Blank/black windows in VMs and on some GPUs come from WebKitGTK's DMABUF renderer.
     #[cfg(target_os = "linux")]
@@ -557,6 +580,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             window_theme(app.handle(), load_config(app.handle()).theme.as_deref().unwrap_or("System"));
+            close_on_sigterm(app.handle().clone());
             Ok(())
         })
         // The graph window must not keep the app alive after the main window is gone.

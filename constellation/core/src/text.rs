@@ -42,6 +42,33 @@ pub fn byte_at(s: &str, off: usize) -> Option<usize> {
     (n == off).then_some(s.len())
 }
 
+/// Byte index of each UTF-16 offset in `offs` (ascending), in one pass.
+pub fn bytes_at(s: &str, offs: &[usize]) -> Option<Vec<usize>> {
+    let mut out = Vec::with_capacity(offs.len());
+    let mut it = offs.iter().peekable();
+    let mut n = 0;
+    for (i, c) in s.char_indices() {
+        while let Some(&&o) = it.peek() {
+            if o < n {
+                return None; // inside a surrogate pair, or out of order
+            }
+            if o > n {
+                break;
+            }
+            out.push(i);
+            it.next();
+        }
+        n += c.len_utf16();
+    }
+    for &o in it {
+        if o != n {
+            return None;
+        }
+        out.push(s.len());
+    }
+    Some(out)
+}
+
 pub fn slice16(s: &str, r: Range16) -> Option<&str> {
     s.get(byte_at(s, r.location)?..byte_at(s, r.end())?)
 }
@@ -51,11 +78,19 @@ pub fn replace16(s: &str, r: Range16, with: &str) -> Option<String> {
     Some([&s[..a], with, &s[b..]].concat())
 }
 
-/// Applies replacements (non-overlapping) to `text`, back to front so earlier ranges stay valid.
+/// Applies replacements (non-overlapping) to `text`, in one pass.
 pub fn replace_all16(text: &str, reps: &[(Range16, String)]) -> String {
     let mut sorted: Vec<_> = reps.iter().collect();
-    sorted.sort_by_key(|(r, _)| std::cmp::Reverse(r.location));
-    sorted.into_iter().fold(text.to_string(), |t, (r, s)| replace16(&t, *r, s).unwrap_or(t))
+    sorted.sort_by_key(|(r, _)| r.location);
+    let offs: Vec<usize> = sorted.iter().flat_map(|(r, _)| [r.location, r.end()]).collect();
+    let Some(b) = bytes_at(text, &offs) else { return text.to_string() };
+    let (mut out, mut from) = (String::with_capacity(text.len()), 0);
+    for (k, (_, s)) in sorted.into_iter().enumerate() {
+        out.push_str(&text[from..b[2 * k]]);
+        out.push_str(s);
+        from = b[2 * k + 1];
+    }
+    out + &text[from..]
 }
 
 /// One line of a text without its terminator (`\n` or `\r\n`); `start` is its UTF-16 offset.
