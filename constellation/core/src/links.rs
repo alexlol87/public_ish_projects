@@ -81,7 +81,7 @@ pub fn create_note_edits(paths: &PathIndex, target: &str) -> Vec<FileEdit> {
     }
 }
 
-/// The edit that creates an empty Note at the exact Vault path a person typed (`.md` added when there is no extension,
+/// The edit that creates an empty Note at the exact Vault path a person typed (`.md` added unless it already ends in it,
 /// folders as needed). Refuses empty, trailing-slash, absolute and `..` paths, app-only places and existing Notes.
 pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
     let t = typed.trim();
@@ -92,8 +92,8 @@ pub fn new_note_edits(paths: &PathIndex, typed: &str) -> Result<Vec<FileEdit>> {
     if is_app_only(t) {
         return Err(Error("That place is for the app's own files".into()));
     }
-    let path = if std::path::Path::new(name).extension().is_some() { t.to_string() } else { format!("{t}.md") };
-    if matches!(paths.resolve(&path), LinkResolution::Note { path: p } if p.eq_ignore_ascii_case(&path)) {
+    let path = if t.to_lowercase().ends_with(".md") { t.to_string() } else { format!("{t}.md") };
+    if paths.by_path.contains_key(&strip_md(&path).to_lowercase()) {
         return Err(Error(format!("A Note already exists at {path}")));
     }
     Ok(vec![FileEdit::create(&path, "")])

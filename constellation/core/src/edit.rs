@@ -22,11 +22,14 @@ pub struct FileEdit {
     /// Undo of a creation: applying deletes the file.
     #[serde(default)]
     pub removes_file: bool,
+    /// On the undo of a creation: folders the creation made, deepest first; removed too when empty.
+    #[serde(default)]
+    pub made_dirs: Vec<String>,
 }
 
 impl FileEdit {
     pub fn replace(path: &str, range: Range16, text: &str) -> Self {
-        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false }
+        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![] }
     }
 
     pub fn create(path: &str, text: &str) -> Self {
@@ -47,19 +50,30 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
         if e.removes_file {
             let old = fs::read_to_string(&file)?;
             fs::remove_file(&file)?;
+            for d in &e.made_dirs {
+                let _ = fs::remove_dir(root.join(d)); // not empty any more: leave it
+            }
             inverse.push(FileEdit::create(&e.path, &old));
             continue;
         }
+        let made_dirs = if e.creates_file { missing_dirs(root, &e.path) } else { vec![] };
         let old = if e.creates_file { String::new() } else { fs::read_to_string(&file)? };
         let replaced = slice16(&old, e.range).ok_or_else(|| Error(format!("Edit range is outside {}", e.path)))?.to_string();
         let new = replace16(&old, e.range, &e.text).ok_or_else(|| Error(format!("Edit range is outside {}", e.path)))?;
         write_atomic(&file, &new)?;
         inverse.push(if e.creates_file {
-            FileEdit::remove(&e.path)
+            FileEdit { made_dirs, ..FileEdit::remove(&e.path) }
         } else {
             FileEdit::replace(&e.path, Range16::new(e.range.location, len16(&e.text)), &replaced)
         });
     }
     inverse.reverse();
     Ok(inverse)
+}
+
+/// Folders above `path` that do not exist yet, deepest first.
+fn missing_dirs(root: &Path, path: &str) -> Vec<String> {
+    let mut dirs: Vec<String> = Path::new(path).ancestors().skip(1).filter(|a| !a.as_os_str().is_empty()).map(|a| a.to_string_lossy().into_owned()).collect();
+    dirs.retain(|d| !root.join(d).exists());
+    dirs
 }

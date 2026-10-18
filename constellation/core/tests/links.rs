@@ -127,3 +127,40 @@ fn new_note_refuses_bad_paths() {
         assert!(ix.new_note_edits(bad).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn new_note_refuses_case_variant_of_one_of_two_same_named_notes() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    assert!(ix.new_note_edits("CLIENTS/Notes").is_err());
+    assert!(ix.new_note_edits("Acme-Shop/NOTES.md").is_err());
+    assert!(ix.new_note_edits("Notes").is_ok(), "no Note at the root yet");
+}
+
+#[test]
+fn new_note_adds_md_unless_it_already_ends_in_md() {
+    let v = make_vault(&FILES);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    for (typed, made) in [("v1.2", "v1.2.md"), ("x/Plan.MD", "x/Plan.MD"), ("a.txt", "a.txt.md")] {
+        assert_eq!(ix.new_note_edits(typed).unwrap(), [FileEdit::create(made, "")], "{typed}");
+    }
+}
+
+#[test]
+fn undo_of_create_removes_only_the_folders_it_made() {
+    let v = make_vault(&FILES);
+    for edits in [
+        VaultIndex::open(v.path()).unwrap().new_note_edits("acme-shop/deep/er/n").unwrap(),
+        VaultIndex::open(v.path()).unwrap().create_note_edits("acme-shop/deep/er/n"),
+    ] {
+        let inverse = apply(&edits, v.path()).unwrap();
+        assert!(exists(v.path(), "acme-shop/deep/er/n.md"));
+        apply(&inverse, v.path()).unwrap();
+        assert!(!exists(v.path(), "acme-shop/deep"), "made folders are gone");
+        assert!(exists(v.path(), "acme-shop/overview.md"), "existing folder stays");
+    }
+    std::fs::create_dir_all(v.path().join("empty-before")).unwrap();
+    let inverse = apply(&[FileEdit::create("empty-before/n.md", "")], v.path()).unwrap();
+    apply(&inverse, v.path()).unwrap();
+    assert!(v.path().join("empty-before").is_dir(), "pre-existing empty folder stays");
+}
