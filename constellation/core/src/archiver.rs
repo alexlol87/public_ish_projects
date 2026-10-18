@@ -5,7 +5,6 @@ use crate::text::{len16, strip_md, Range16};
 use crate::{parser, Error, FileEdit, Result, VaultIndex};
 use chrono::NaiveDate;
 use regex::Regex;
-use std::fs;
 use std::sync::LazyLock;
 
 // groups: 1 indent, 2 box char, 3 rest of the line
@@ -19,7 +18,7 @@ fn indent(s: &str) -> usize {
 /// else the click is refused: a stale buffer (second click before the reload, unsaved or conflicting text) must not
 /// pick offsets in the wrong text. Offsets are mapped onto CRLF files.
 pub fn tick_saved(index: &VaultIndex, offset: usize, editor_text: &str, path: &str, on: NaiveDate) -> Result<Vec<FileEdit>> {
-    let disk = fs::read_to_string(index.root().join(path))?;
+    let disk = crate::vault::read_note(index.root(), path)?;
     let lf = disk.replace("\r\n", "\n");
     if lf != editor_text.replace("\r\n", "\n") {
         return Err(Error(format!("{path} changed since it was shown here; try again in a moment")));
@@ -83,7 +82,7 @@ pub fn tick(index: &VaultIndex, offset: usize, text: &str, path: &str, on: Naive
     let bug = file == "bugs.md";
     let archive = format!("{}/archive/{}", parts[0], if bug { "fixed-bugs.md" } else { "done-todos.md" });
     let mut edits = vec![FileEdit::replace(path, Range16::new(at16(item.start), at16(item.end) - at16(item.start)), "")];
-    if let Ok(old) = fs::read_to_string(index.root().join(&archive)) {
+    if let Ok(old) = crate::vault::read_note(index.root(), &archive) {
         let sep = if old.is_empty() {
             ""
         } else if old.ends_with('\n') {

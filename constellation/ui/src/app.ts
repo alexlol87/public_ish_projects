@@ -73,6 +73,11 @@ async function start(app: HTMLElement, root: string) {
   // Unsaved edits are written before the window goes away (the close proceeds once this resolves).
   await getCurrentWindow().onCloseRequested(async (e) => {
     await flushAll();
+    if (tabs.hasPendingEdits && (await api.wasTerminated())) {
+      // Killed by a signal with text that can't be saved: no time to ask, keep a copy.
+      for (const p of tabs.paths.filter((p) => tabs.unsaved(p))) await api.saveRecovery(p, tabs.text(p) ?? "").catch(() => {});
+      return;
+    }
     if (tabs.hasConflicts || tabs.hasPendingEdits) {
       const choice = await closeChoice();
       if (choice === "cancel") return e.preventDefault();
@@ -91,6 +96,8 @@ async function start(app: HTMLElement, root: string) {
   document.addEventListener("keydown", onKey, true);
   const readme = tree?.children.find((c) => !c.isFolder && c.name.toLowerCase() === "readme.md");
   if (readme) await openNote(readme.relativePath);
+  const rec = await api.recoveryFiles();
+  if (rec.length) toast(`Unsaved text from the last session was kept in ${rec.join(", ")}`, true);
 }
 
 async function reloadSettings() {

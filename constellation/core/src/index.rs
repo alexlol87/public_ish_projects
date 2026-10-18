@@ -39,7 +39,7 @@ impl VaultIndex {
             ix.load_note(&p);
         }
         ix.search.set_folders(ix.tree.folder_paths());
-        ix.paths = PathIndex::new(&ix.parsed.keys().collect::<Vec<_>>());
+        ix.paths = PathIndex::new(&ix.tree.note_paths());
         Ok(ix)
     }
 
@@ -60,7 +60,7 @@ impl VaultIndex {
         &self.parsed
     }
 
-    /// An unreadable (e.g. non-UTF-8) Note is left out of every index.
+    /// An unreadable (e.g. non-UTF-8) Note is left out of the content indexes, but its path still resolves (`PathIndex`).
     fn load_note(&mut self, path: &str) {
         let Ok(text) = vault::read_note(&self.root, path) else { return };
         let note = parser::parse(&text);
@@ -90,7 +90,7 @@ impl VaultIndex {
             }
         }
         self.search.set_folders(self.tree.folder_paths());
-        self.paths = PathIndex::new(&self.parsed.keys().collect::<Vec<_>>());
+        self.paths = PathIndex::new(&alive);
         Ok(())
     }
 
@@ -107,7 +107,7 @@ impl VaultIndex {
     }
 
     pub fn tag_completions(&self, prefix: &str) -> Vec<String> {
-        let listed = std::fs::read_to_string(self.root.join("tags.md")).unwrap_or_default();
+        let listed = vault::read_note(&self.root, "tags.md").unwrap_or_default();
         let extra: Vec<String> = parser::parse(&listed).tags.iter().map(|t| t.name.to_lowercase()).collect();
         self.tags.completions(prefix, &extra)
     }

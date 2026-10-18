@@ -184,6 +184,7 @@ pub fn safe_path(root: &Path, relative: &str) -> Result<PathBuf> {
 pub fn read_note(root: &Path, relative_path: &str) -> Result<String> {
     fs::read_to_string(safe_path(root, relative_path)?).map_err(|e| match e.kind() {
         std::io::ErrorKind::InvalidData => Error(format!("{relative_path} is not UTF-8 text; not opened")),
+        std::io::ErrorKind::NotFound => Error(format!("{relative_path} does not exist")),
         _ => e.into(),
     })
 }
@@ -191,20 +192,25 @@ pub fn read_note(root: &Path, relative_path: &str) -> Result<String> {
 /// Writes `text` to `path`, atomically (temp file in the same folder, then rename), so a crash never leaves half a file.
 /// A symlink is written through (the link stays), a read-only file is refused, and a CRLF file stays CRLF.
 pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    write_atomic_as(path, text, &name_of(path))
+}
+
+/// `write_atomic` whose errors name the file as `shown` (the Note's own path, not where a symlink leads).
+pub fn write_atomic_as(path: &Path, text: &str, shown: &str) -> Result<()> {
     let path = &fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
     let old = fs::metadata(path).ok();
     if old.as_ref().is_some_and(|m| m.permissions().readonly()) {
-        return Err(Error(format!("{} is read-only; not saved", name_of(path))));
+        return Err(Error(format!("{shown} is read-only; not saved")));
     }
     let crlf = old.is_some() && fs::read(path).is_ok_and(|b| b.windows(2).any(|w| w == b"\r\n"));
     let tmp = path.with_file_name(format!(".{}.tmp", name_of(path)));
     let written = fs::write(&tmp, if crlf { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() });
     if let Err(e) = written {
         return Err(match e.kind() {
-            std::io::ErrorKind::PermissionDenied => Error(format!("{}: folder is read-only; not saved", name_of(path))),
+            std::io::ErrorKind::PermissionDenied => Error(format!("{shown}: folder is read-only; not saved")),
             _ => e.into(),
         });
     }
@@ -217,7 +223,7 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
 
 /// Overwrites a Note's file.
 pub fn write_note(root: &Path, relative_path: &str, text: &str) -> Result<()> {
-    write_atomic(&safe_path(root, relative_path)?, text)
+    write_atomic_as(&safe_path(root, relative_path)?, text, relative_path)
 }
 
 /// Resolves an image path from a Note: Note-relative first, then Vault-relative (a leading `/` means Vault-relative only).
