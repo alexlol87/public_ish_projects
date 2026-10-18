@@ -158,3 +158,9 @@ fn json_shape_is_camel_case_with_type() {
     assert_eq!(v["links"][0]["range"]["location"], 19);
     assert_eq!(v["links"][0]["alias"], "x");
 }
+
+#[test]
+fn hash_inside_wiki_link_is_not_a_tag() {
+    assert!(names("See [[#Sec]] and [[#Sec|alias]].").is_empty());
+    assert_eq!(names("[[#Sec]] #real"), ["real"]);
+}

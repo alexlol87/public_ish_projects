@@ -20,6 +20,8 @@ export class NoteTabs {
   conflict(path: string) { return this.conflicts.get(path); }
   /** Bumps each time the text is replaced from disk; the app uses it to reset the editor's document. */
   revision(path: string) { return this.revisions.get(path) ?? 0; }
+  /** True while `path` holds text that is not on disk (failed or waiting to save, or in conflict). */
+  unsaved(path: string) { return this.lastEdit.has(path); }
   get hasConflicts() { return this.conflicts.size > 0; }
   get hasPendingEdits() { return this.lastEdit.size > 0; }
 

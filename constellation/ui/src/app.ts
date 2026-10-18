@@ -79,7 +79,10 @@ async function start(app: HTMLElement, root: string) {
       if (choice === "keep") {
         for (const p of tabs.paths) if (tabs.conflict(p) !== undefined) await keepMine(p);
         await flushAll();
-        if (tabs.hasPendingEdits) return e.preventDefault(); // still not saved (e.g. read-only): do not lose it
+        if (tabs.hasPendingEdits) { // still not saved (e.g. read-only): do not lose it, and say why
+          toast(tabs.paths.filter((p) => tabs.unsaved(p)).map((p) => lastSaveError.get(p) ?? `${p}: not saved`).join("; "), true);
+          return e.preventDefault();
+        }
       }
     }
   });
@@ -209,9 +212,17 @@ function renderTabs() {
 }
 
 async function closeTab(p: string) {
-  const r = tabs.close(p);
-  if (!r.closed) { toast("Resolve the conflict first (Reload from disk or Keep mine)", true); return; }
-  if (r.flush !== undefined) await api.writeNote(p, r.flush).catch((e) => toast(errText(e), true));
+  if (tabs.conflict(p) !== undefined) { toast("Resolve the conflict first (Reload from disk or Keep mine)", true); return; }
+  if (tabs.unsaved(p)) await save(p);
+  if (tabs.unsaved(p)) { // the write failed (e.g. read-only): never drop the text silently
+    const choice = await closeChoice();
+    if (choice === "cancel") return;
+    if (choice === "keep") {
+      await save(p);
+      if (tabs.unsaved(p)) { toast(lastSaveError.get(p) ?? "Could not save", true); return; }
+    } else tabs.discard(p);
+  }
+  tabs.close(p);
   showActive();
   editor.forget(p);
   void refreshInspector();
@@ -448,6 +459,7 @@ async function renameNote(path: string) {
   const to = await ask("Rename or move note", path, "Change the file name, or the folder (not both). Links are rewritten.");
   if (!to || to === path) return;
   await flushAll();
+  if (tabs.unsaved(path)) { toast(`${path} has text that could not be saved. Save or discard it first (close the tab), then rename.`, true); return; }
   try {
     const np = await api.renameNote(path, to);
     appActionAt = Date.now();
@@ -576,13 +588,13 @@ async function settings() {
       h("div", { class: "row end" }, h("button", { onclick: close }, "Cancel"),
         h("button", { class: "primary", id: "set-save", onclick: async () => {
           const n = Number(days.value);
-          if (!days.value.trim() || !Number.isInteger(n) || n < 1) { err.textContent = "Days must be a whole number, 1 or more."; return; }
+          if (!days.value.trim() || !Number.isInteger(n) || n < 1 || n > 36500) { err.textContent = "Days must be a whole number from 1 to 36500."; return; }
           try {
             await api.setSettings({ theme: sel.value, stalenessDays: n });
             theme = sel.value as ThemeChoice; applyTheme(theme);
             await emit("settings-changed");
             void refreshInspector();
-          } catch (e) { toast(errText(e), true); }
+          } catch (e) { err.textContent = errText(e); return; } // stay open to fix it
           close();
         } }, "Save")));
   });
