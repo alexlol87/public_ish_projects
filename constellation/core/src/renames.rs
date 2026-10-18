@@ -5,9 +5,11 @@ use crate::parser::{self, WikiLink};
 use crate::text::{byte_at, bytes_at, fold, len16, replace_all16, slice16, strip_md, Range16};
 use crate::{Error, FileEdit, Result, VaultIndex};
 use std::collections::BTreeMap;
-use std::fs;
 
-static SELF_LINK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\[\[#([^\[\]|]*)(\|[^\[\]]*)?\]\]").unwrap());
+/// A Note's text for a rewrite; a Note that vanished or can't be read stops the whole action before anything is written.
+fn read(index: &VaultIndex, path: &str) -> Result<String> {
+    crate::vault::read_note(index.root(), path).map_err(|e| Error(format!("{e}; nothing was changed")))
+}
 
 type Rewrites = BTreeMap<String, Vec<(Range16, String)>>;
 
@@ -29,6 +31,7 @@ pub fn move_note_to_folder(index: &VaultIndex, path: &str, folder: &str) -> Resu
 fn move_note(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEdit>> {
     let new = &clean_note_path(new)?;
     let before = index.note_paths();
+    let all = index.tree().note_paths(); // unreadable Notes too: they still take names
     if !before.iter().any(|p| p == old) {
         return Err(Error(format!("No such Note: {old}")));
     }
@@ -38,7 +41,7 @@ fn move_note(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEdit>> 
     if index.root().join(new).exists() {
         return Err(Error(format!("{new} already exists")));
     }
-    let after = PathIndex::new(&before.iter().map(|p| if p == old { new } else { p }).collect::<Vec<_>>());
+    let after = PathIndex::new(&all.iter().map(|p| if p == old { new } else { p }).collect::<Vec<_>>());
     let new_note = LinkResolution::note(new);
     let new_name = strip_md(new.rsplit('/').next().unwrap_or(new));
     let new_target = |link: &WikiLink| {
@@ -56,18 +59,19 @@ fn move_note(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEdit>> 
     };
     let rewrites = rewrite_links(index, old, &new_target, &|h| h.to_string(), BTreeMap::new())?;
     // A move is create-new + remove-old; the moved Note's own Link rewrites are folded into the new file's text.
-    let text = fs::read_to_string(index.root().join(old))?;
+    let text = read(index, old)?;
     let moved = rewrites.get(old).map_or(text.clone(), |r| replace_all16(&text, r));
     let others = rewrites.into_iter().filter(|(p, _)| p != old).collect();
     let mut edits = to_edits(others);
-    edits.push(FileEdit::create(new, &moved));
+    let (mode, link) = crate::edit::mode_and_link(index.root(), old, new);
+    edits.push(FileEdit { mode, link, ..FileEdit::create(new, &moved) });
     edits.push(FileEdit::remove(old));
     Ok(edits)
 }
 
 /// Renames the first heading titled `old` in `note_path` and rewrites `[[note#old]]` Links (Calls and Uses included).
 pub fn rename_heading(index: &VaultIndex, old: &str, new: &str, note_path: &str) -> Result<Vec<FileEdit>> {
-    let text = fs::read_to_string(index.root().join(note_path))?;
+    let text = read(index, note_path)?;
     let h = parser::parse(&text).headings.into_iter().find(|h| h.title == old).ok_or_else(|| Error(format!("No heading {old}")))?;
     let new = new.trim();
     if new.is_empty() || ["[[", "]]", "|", "#"].iter().any(|c| new.contains(c)) {
@@ -80,11 +84,8 @@ pub fn rename_heading(index: &VaultIndex, old: &str, new: &str, note_path: &str)
     let line = format!("{} {new}", "#".repeat(h.level));
     let mut reps = vec![(h.range, line)];
     // `[[#Heading]]` has no Note part, so the Link parser skips it; rewrite those in this Note directly.
-    for c in SELF_LINK.captures_iter(&text) {
-        if c[1].to_lowercase() == old.to_lowercase() {
-            let m = c.get(0).unwrap();
-            reps.push((Range16::new(len16(&text[..m.start()]), len16(m.as_str())), format!("[[#{new}{}]]", c.get(2).map_or("", |a| a.as_str()))));
-        }
+    for l in parsed.self_links.iter().filter(|l| l.heading.as_ref().is_some_and(|x| x.to_lowercase() == old.to_lowercase())) {
+        reps.push((l.range, format!("[[#{new}{}]]", l.alias.as_ref().map_or(String::new(), |a| format!("|{a}")))));
     }
     let extra = BTreeMap::from([(note_path.to_string(), reps)]);
     let heading_to = |h: &str| if h.to_lowercase() == old.to_lowercase() { new.to_string() } else { h.to_string() };
@@ -110,21 +111,22 @@ pub fn rename_tag(index: &VaultIndex, old: &str, new: &str) -> Result<Vec<FileEd
     }
     let mut rewrites = Rewrites::new();
     for p in files {
-        let text = fs::read_to_string(index.root().join(&p))?;
+        let text = read(index, &p)?;
         let tags = parser::parse(&text).tags;
         let hit = |n: &str| rest_of(n).is_some();
         let in_text = |t: &parser::TagRef| slice16(&text, t.range).is_some_and(|s| s.starts_with('#'));
-        // Frontmatter list items that would repeat a Tag already in the list are dropped, not renamed.
-        let mut seen: std::collections::HashSet<_> = tags.iter().filter(|t| !in_text(t) && !hit(&t.name)).map(|t| t.name.to_lowercase()).collect();
+        // Frontmatter list items (and tags.md lines) that would repeat a Tag already listed are dropped, not renamed.
+        let list = p == "tags.md";
+        let mut seen: std::collections::HashSet<_> = tags.iter().filter(|t| (list || !in_text(t)) && !hit(&t.name)).map(|t| t.name.to_lowercase()).collect();
         let reps: Vec<_> = tags
             .iter()
             .filter(|t| hit(&t.name))
             .map(|t| {
                 let name = format!("{new}{}", rest_of(&t.name).unwrap_or_default());
-                if in_text(t) {
+                if in_text(t) && !list {
                     (t.range, format!("#{name}"))
                 } else if seen.insert(name.to_lowercase()) {
-                    (t.range, name)
+                    (t.range, if in_text(t) { format!("#{name}") } else { name })
                 } else {
                     (item_with_separator(&text, t.range), String::new())
                 }
@@ -168,7 +170,7 @@ fn rewrite_links(
 ) -> Result<Rewrites> {
     let (mut out, want) = (Rewrites::new(), LinkResolution::note(target));
     for p in index.note_paths() {
-        let text = fs::read_to_string(index.root().join(&p))?;
+        let text = read(index, &p)?;
         let mut reps = extra.get(&p).cloned().unwrap_or_default();
         let parsed = parser::parse(&text);
         let mut links: Vec<_> = parsed.links.iter().filter(|l| index.path_index().resolve(&l.target) == want).collect();

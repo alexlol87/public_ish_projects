@@ -80,9 +80,9 @@ struct Settings {
 }
 
 fn staleness_days(root: &Path) -> i64 {
-    std::fs::read(root.join(".constellation/settings.json"))
+    vault::read_note(root, ".constellation/settings.json")
         .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v["stalenessDays"].as_i64())
         .unwrap_or(staleness::DEFAULT_THRESHOLD)
 }
@@ -121,7 +121,7 @@ fn set_settings(app: AppHandle, st: State<AppState>, settings: Settings) -> Res<
     save_config(&app, &c)?;
     if let Some(o) = st.vault.lock().map_err(err)?.as_ref() {
         let json = serde_json::json!({ "stalenessDays": settings.staleness_days.max(1) }).to_string();
-        vault::write_atomic(&o.index.root().join(".constellation/settings.json"), &json)?;
+        vault::write_note(o.index.root(), ".constellation/settings.json", &json)?;
     }
     Ok(())
 }
@@ -135,7 +135,7 @@ fn emit_changed(app: &AppHandle, paths: &[String], own: bool) {
 /// Records what we wrote at `paths`, re-indexes them and tells the windows.
 fn finish(app: &AppHandle, o: &mut Open, paths: Vec<String>, own: bool) -> Res<()> {
     for p in &paths {
-        o.own.insert(p.clone(), std::fs::read_to_string(o.index.root().join(p)).ok());
+        o.own.insert(p.clone(), vault::read_note(o.index.root(), p).ok());
         o.stamps.insert(p.clone(), stamp(o.index.root(), p));
     }
     o.index.ingest(&paths)?;
@@ -170,7 +170,7 @@ fn watch(app: &AppHandle, root: &Path) -> Res<Debouncer<RecommendedWatcher>> {
             o.stamps.insert(p.clone(), stamp(&base, p));
         }
         paths.retain(|p| {
-            let now = std::fs::read_to_string(base.join(p)).ok();
+            let now = vault::read_note(&base, p).ok();
             // An echo of our own write: same content as we left it.
             !(o.own.get(p).is_some_and(|w| *w == now) && o.own.remove(p).is_some())
         });
@@ -430,6 +430,10 @@ fn undo(app: AppHandle, st: State<AppState>) -> Res<bool> {
     with(&st, |o| {
         let Some(last) = o.undo.last() else { return Ok(false) };
         if let Err(e) = edit::check(last, o.index.root()) {
+            if e.0.contains("read-only") {
+                // Nothing was written and the files are still as the step left them: keep it for another try.
+                return Err(Error(format!("{}; the step is kept: fix permissions and try again", e.0.trim_end_matches("; nothing was changed"))));
+            }
             o.undo.pop(); // refused: nothing written; drop the step so older ones stay reachable
             return Err(Error(format!("{e}; that step can't be undone and was dropped")));
         }
@@ -469,7 +473,7 @@ fn open_cheat_sheet(st: State<AppState>) -> Res<String> {
         let path = agent_files::CHEAT_SHEET_PATH;
         let text = agent_files::CHEAT_SHEET;
         let text = if cfg!(target_os = "macos") { text.replace("Ctrl+Shift+", "⌘⇧").replace("Ctrl+Alt+", "⌘⌥").replace("Ctrl+", "⌘").replace("Ctrl-click", "⌘-click") } else { text.to_string() };
-        vault::write_atomic(&o.index.root().join(path), &text)?;
+        vault::write_note(o.index.root(), path, &text)?;
         Ok(path.to_string())
     })
 }
@@ -548,14 +552,50 @@ fn image_response(app: &AppHandle, uri: &str) -> Option<tauri::http::Response<Ve
     tauri::http::Response::builder().header("Content-Type", mime).body(std::fs::read(file).ok()?).ok()
 }
 
+/// The window is closing because of a signal: unsaved text that can't be saved goes to a recovery copy instead of a prompt.
+#[tauri::command]
+fn was_terminated() -> bool {
+    TERMINATED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Keeps unsaved text of Note `path` in `.constellation/recovery/<path>`.
+#[tauri::command]
+fn save_recovery(app: AppHandle, st: State<AppState>, path: String, text: String) -> Res<()> {
+    with(&st, |o| {
+        let rel = format!("{RECOVERY}/{path}");
+        vault::write_note(o.index.root(), &rel, &text)?;
+        finish(&app, o, vec![rel], true)
+    })
+}
+
+const RECOVERY: &str = ".constellation/recovery";
+
+/// Recovery copies left by an earlier session (Vault-relative paths).
+#[tauri::command]
+fn recovery_files(st: State<AppState>) -> Res<Vec<String>> {
+    fn walk(n: &VaultNode, out: &mut Vec<String>) {
+        for c in &n.children {
+            if c.is_folder { walk(c, out) } else { out.push(c.relative_path.clone()) }
+        }
+    }
+    with(&st, |o| {
+        let mut out = vec![];
+        let dir = o.index.tree().children.iter().find(|c| c.relative_path == ".constellation").and_then(|c| c.children.iter().find(|c| c.relative_path == RECOVERY));
+        dir.into_iter().for_each(|d| walk(d, &mut out));
+        Ok(out)
+    })
+}
+
 static TERMINATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// SIGTERM (logout, shutdown) closes the main window like the user would, so the editor saves its last keystrokes first.
-fn close_on_sigterm(app: AppHandle) {
+/// SIGTERM (logout, shutdown), SIGHUP (terminal closed) and SIGINT close the main window like the user would, so the editor saves its last keystrokes first.
+fn close_on_signal(app: AppHandle) {
     extern "C" fn handler(_: libc::c_int) {
         TERMINATED.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    unsafe { libc::signal(libc::SIGTERM, handler as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+        unsafe { libc::signal(sig, handler as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    }
     std::thread::spawn(move || {
         while !TERMINATED.load(std::sync::atomic::Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -580,7 +620,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             window_theme(app.handle(), load_config(app.handle()).theme.as_deref().unwrap_or("System"));
-            close_on_sigterm(app.handle().clone());
+            close_on_signal(app.handle().clone());
             Ok(())
         })
         // The graph window must not keep the app alive after the main window is gone.
@@ -630,7 +670,10 @@ pub fn run() {
             rename_note,
             rename_heading,
             rename_tag,
-            tick
+            tick,
+            was_terminated,
+            save_recovery,
+            recovery_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running Constellation");

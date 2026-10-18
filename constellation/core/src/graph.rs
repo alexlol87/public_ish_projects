@@ -185,18 +185,16 @@ impl Default for GraphFilter {
 }
 
 impl GraphFilter {
-    fn file(root: &Path) -> std::path::PathBuf {
-        root.join(".constellation/graph.json")
-    }
+    const FILE: &'static str = ".constellation/graph.json";
 
     /// The saved filter, or the default if there is none or it is unreadable.
     pub fn load(root: &Path) -> Self {
-        std::fs::read(Self::file(root)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        crate::vault::read_note(root, Self::FILE).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
         let json = serde_json::to_string(self).map_err(|e| crate::Error(e.to_string()))?;
-        crate::vault::write_atomic(&Self::file(root), &json)
+        crate::vault::write_note(root, Self::FILE, &json)
     }
 }
 
