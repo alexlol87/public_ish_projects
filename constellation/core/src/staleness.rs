@@ -18,7 +18,7 @@ pub enum Staleness {
 impl Staleness {
     /// `now` is today's date in UTC.
     pub fn of(verified_on: Option<&str>, now: NaiveDate) -> Self {
-        let Some(s) = verified_on.map(str::trim).filter(|s| !s.is_empty()) else { return Self::Never };
+        let Some(s) = verified_on.map(|s| s.trim().trim_matches(['"', '\''])).filter(|s| !s.is_empty()) else { return Self::Never };
         // The round trip rejects loose forms such as "2026-6-5".
         match NaiveDate::parse_from_str(s, "%Y-%m-%d") {
             Ok(d) if d.format("%Y-%m-%d").to_string() == s => Self::Verified { days: (now - d).num_days() },
@@ -28,12 +28,13 @@ impl Staleness {
 
     /// Past the threshold, never verified, or unreadable.
     pub fn is_stale(&self, threshold: i64) -> bool {
-        !matches!(self, Self::Verified { days } if *days <= threshold)
+        !matches!(self, Self::Verified { days } if (0..=threshold).contains(days))
     }
 
     pub fn label(&self) -> String {
         match self {
-            Self::Verified { days } if *days <= 0 => "verified today".into(),
+            Self::Verified { days } if *days < 0 => "date is in the future".into(),
+            Self::Verified { days } if *days == 0 => "verified today".into(),
             Self::Verified { days } => format!("verified {days} day{} ago", if *days == 1 { "" } else { "s" }),
             Self::Never => "never verified".into(),
             Self::Malformed => "verified date unreadable".into(),

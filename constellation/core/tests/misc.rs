@@ -106,6 +106,8 @@ fn fresh_stale_never_malformed() {
     assert_eq!(Staleness::of(Some("last tuesday"), now), Staleness::Malformed);
     assert_eq!(Staleness::of(Some("2026-13-45"), now), Staleness::Malformed);
     assert_eq!(Staleness::of(Some("2026-6-5"), now), Staleness::Malformed);
+    assert_eq!(Staleness::of(Some("\"2026-06-20\""), now), Staleness::Verified { days: 10 });
+    assert_eq!(Staleness::of(Some("'2026-06-20'"), now), Staleness::Verified { days: 10 });
 }
 
 #[test]
@@ -119,7 +121,8 @@ fn highlight_and_label() {
     assert_eq!(Staleness::Verified { days: 0 }.label(), "verified today");
     assert_eq!(Staleness::Never.label(), "never verified");
     assert_eq!(Staleness::Malformed.label(), "verified date unreadable");
-    assert_eq!(Staleness::Verified { days: -3 }.label(), "verified today"); // future date: clamp
+    assert_eq!(Staleness::Verified { days: -3 }.label(), "date is in the future");
+    assert!(Staleness::Verified { days: -3 }.is_stale(30));
     assert_eq!(serde_json::to_value(Staleness::Verified { days: 5 }).unwrap(), serde_json::json!({"kind": "verified", "days": 5}));
 }
 

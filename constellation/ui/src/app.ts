@@ -492,7 +492,8 @@ async function refreshInspector() {
       list("Calls", q.callsOut), list("Called by", q.callsIn), list("Used by clients", q.usesIn));
   }
   parts.push(sec(`Backlinks (${r.backlinks.length})`, ...(r.backlinks.length ? r.backlinks.map((b) =>
-    h("div", { class: "row-item", title: b.path, onclick: () => void openNote(b.path, { offset: b.link.range.location }) }, baseName(b.path))) : [h("div", { class: "muted pad small" }, "none")])));
+    h("div", { class: "row-item", title: b.path, onclick: () => void openNote(b.path, { offset: b.link.range.location }) }, baseName(b.path),
+      b.path.includes("/") && h("span", { class: "muted small" }, "  " + b.path.slice(0, b.path.lastIndexOf("/"))))) : [h("div", { class: "muted pad small" }, "none")])));
   parts.push(sec("Outline", ...(r.headings.length ? r.headings.map((hd) =>
     h("div", {
       class: "row-item", style: `padding-left:${8 + (hd.level - 1) * 12}px`,
@@ -520,12 +521,26 @@ async function settings() {
   await modal("Settings", (close) => {
     const sel = h("select", { id: "set-theme" }, ...THEME_CHOICES.map((t) => h("option", { value: t, selected: t === s.theme }, t)));
     const days = h("input", { type: "number", id: "set-days", min: 1, value: String(s.stalenessDays) });
+    const err = h("div", { class: "bad small", id: "set-error" }, "");
+    const switchVault = async (create: boolean) => {
+      const dir = await api.pickFolder();
+      if (!dir) return;
+      await flushAll();
+      if (tabs.hasPendingEdits) return void toast("Resolve the conflict first (Reload from disk or Keep mine)", true);
+      try { await (create ? api.createVault(dir) : api.openVault(dir)); } catch (e) { return void toast(errText(e), true); }
+      location.reload(); // fresh tabs, undo and listeners for the new Vault
+    };
     return h("div", {}, h("label", {}, "Theme ", sel), h("br", {}), h("br", {}),
-      h("label", {}, "Highlight repos not verified for ", days, " days"),
+      h("label", {}, "Highlight repos not verified for ", days, " days"), err,
+      h("div", { class: "row pad" },
+        h("button", { id: "switch-open", onclick: () => void switchVault(false) }, "Open another vault…"),
+        h("button", { id: "switch-create", onclick: () => void switchVault(true) }, "Create vault…")),
       h("div", { class: "row end" }, h("button", { onclick: close }, "Cancel"),
         h("button", { class: "primary", id: "set-save", onclick: async () => {
+          const n = Number(days.value);
+          if (!days.value.trim() || !Number.isInteger(n) || n < 1) { err.textContent = "Days must be a whole number, 1 or more."; return; }
           try {
-            await api.setSettings({ theme: sel.value, stalenessDays: Math.max(1, Number(days.value) || 30) });
+            await api.setSettings({ theme: sel.value, stalenessDays: n });
             theme = sel.value as ThemeChoice; applyTheme(theme);
             await emit("settings-changed");
             void refreshInspector();

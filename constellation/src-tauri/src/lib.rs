@@ -198,6 +198,10 @@ fn open_at(app: &AppHandle, st: &AppState, path: &Path) -> Res<String> {
 
 #[tauri::command]
 fn startup(app: AppHandle, st: State<AppState>) -> Option<String> {
+    // A page reload after switching Vaults keeps the one already open.
+    if let Some(o) = st.vault.lock().ok()?.as_ref() {
+        return Some(o.index.root().to_string_lossy().into_owned());
+    }
     let env = std::env::var("CONSTELLATION_VAULT").ok().filter(|s| !s.is_empty());
     let path = env.map(PathBuf::from).or_else(|| vault::reopenable(load_config(&app).last_vault.as_deref()))?;
     open_at(&app, &st, &path).ok()

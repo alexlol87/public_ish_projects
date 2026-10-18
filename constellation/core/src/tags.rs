@@ -2,7 +2,7 @@
 //! Owned by `VaultIndex`, which feeds it the parsed Notes.
 
 use crate::parser::TagRef;
-use crate::text::{lines, Line};
+use crate::text::{fold, lines, Line};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -53,6 +53,7 @@ fn with_parents(tag: &str) -> impl Iterator<Item = &str> {
 }
 
 fn matches(tag: &str, query: &str) -> bool {
+    let (tag, query) = (&fold(tag), &fold(query));
     tag == query || tag.strip_prefix(query).is_some_and(|r| r.starts_with('/'))
 }
 
@@ -121,10 +122,11 @@ impl TagIndex {
     }
 
     /// Existing Tags (and their parents) starting with `prefix`, for `#` autocomplete.
-    pub fn completions(&self, prefix: &str) -> Vec<String> {
-        let q = prefix.to_lowercase();
-        let all: BTreeSet<&str> = self.notes.values().flatten().flat_map(|o| with_parents(&o.tag)).collect();
+    /// `extra` are Tags known from elsewhere (tags.md).
+    pub fn completions(&self, prefix: &str, extra: &[String]) -> Vec<String> {
+        let q = fold(prefix);
+        let all: BTreeSet<&str> = self.notes.values().flatten().map(|o| o.tag.as_str()).chain(extra.iter().map(String::as_str)).flat_map(with_parents).collect();
         // An exact match offers nothing new and loops the popup.
-        all.into_iter().filter(|t| t.starts_with(&q) && *t != q).map(String::from).collect()
+        all.into_iter().filter(|t| fold(t).starts_with(&q) && fold(t) != q).map(String::from).collect()
     }
 }
