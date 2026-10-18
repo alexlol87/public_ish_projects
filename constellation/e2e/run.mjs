@@ -797,6 +797,57 @@ await test("graph: filters (edge kind, archive, tag, local depth)", async () => 
   await shot("11-graph-filters");
 });
 
+const typeAtEnd = async (text) => { await app.click(".cm-content"); await caret(await app.eval(`return ${VIEW}.state.doc.length`)); await app.type(text); };
+const badToasts = () => app.eval(() => [...document.querySelectorAll(".toast.bad")].map((t) => t.textContent));
+
+await test("saving keeps CRLF and symlinks, refuses a read-only file once", async () => {
+  xwin("close", "Constellation graph");
+  await sleep(500);
+  await app.focusWindow(null);
+  xwin("focus", "Constellation");
+  write("odd/crlf.md", "# C\r\n\r\nline one\r\n");
+  write("odd/real.md", "# Real\n\nbody\n");
+  fs.symlinkSync(path.join(vault, "odd/real.md"), path.join(vault, "odd/link.md"));
+  write("odd/ro.md", "# Ro\n\noriginal\n");
+  fs.chmodSync(path.join(vault, "odd/ro.md"), 0o444);
+  await openRow("odd/crlf.md");
+  await caret("line one"); await app.type(" x"); await sleep(1800); // (WebDriver typing drops Shift)
+  eq(disk("odd/crlf.md"), "# C\r\n\r\nline one x\r\n", "CRLF kept");
+  await openRow("odd/link.md");
+  await caret("body"); await app.type(" y"); await sleep(1800);
+  ok(fs.lstatSync(path.join(vault, "odd/link.md")).isSymbolicLink(), "still a symlink");
+  ok(disk("odd/real.md").includes("body y"), "target updated");
+  await openRow("odd/ro.md");
+  await caret("original"); await app.type(" Z"); await sleep(3000);
+  eq(disk("odd/ro.md"), "# Ro\n\noriginal\n", "read-only file untouched");
+  const toasts = await badToasts();
+  eq(toasts.length, 1, "one error toast, got " + JSON.stringify(toasts));
+  ok(/read-only/.test(toasts[0]), "message: " + toasts[0]);
+  ok((await app.eval(() => document.querySelector(".tab.active").textContent)).includes("•"), "tab stays dirty");
+});
+
+await test("external delete of a dirty Note shows a conflict instead of re-creating the file", async () => {
+  write("odd/gone.md", "# Gone\n\ntext\n");
+  write("odd/gone2.md", "# Gone2\n\ntext\n");
+  await openRow("odd/gone.md");
+  await typeAtEnd(" mine");
+  fs.rmSync(path.join(vault, "odd/gone.md"));
+  await bannerShown();
+  ok(/deleted or moved/.test(await app.eval(() => document.querySelector(".banner").textContent)), "delete banner");
+  await sleep(1500);
+  ok(!fs.existsSync(path.join(vault, "odd/gone.md")), "not re-created");
+  await app.click("#reload-disk"); // Discard
+  await sleep(300);
+  ok(!(await tabs()).includes("odd/gone.md"), "tab closed");
+  await openRow("odd/gone2.md");
+  await typeAtEnd(" mine2");
+  fs.rmSync(path.join(vault, "odd/gone2.md"));
+  await bannerShown();
+  await app.click("#keep-mine"); // Re-create here
+  await sleep(700);
+  ok(disk("odd/gone2.md").includes("mine2"), "re-created with my text");
+});
+
 await test("unsaved edits are flushed when the window closes", async () => {
   xwin("close", "Constellation graph");
   await sleep(500);
@@ -821,6 +872,25 @@ await test("relaunch: last vault, theme and staleness days persist", async () =>
   await openRow("acme-shop/cart-service/README.md");
   await app.until(() => document.querySelector("#staleness"), "badge");
   ok(!(await app.eval(() => document.querySelector("#staleness").classList.contains("stale"))), "200-day threshold kept");
+});
+
+await test("closing the window during a conflict asks; Cancel keeps it, Keep mine writes it", async () => {
+  await app.until(() => document.querySelector(".cm-content"), "editor");
+  await openRow("acme-shop/sync.md");
+  await typeAtEnd(" MINE-AT-CLOSE");
+  write(SYNC, "# Theirs 3\n");
+  await bannerShown();
+  ok(xwin("close", "Constellation"), "sent the close request");
+  await app.until(() => document.querySelector("#close-cancel"), "close dialog", 5000);
+  await app.click("#close-cancel");
+  await sleep(500);
+  ok(await app.eval(() => !document.querySelector(".banner").hidden), "window and conflict still there");
+  eq(disk(SYNC), "# Theirs 3\n", "disk untouched");
+  xwin("close", "Constellation");
+  await app.until(() => document.querySelector("#close-keep"), "close dialog again", 5000);
+  await app.click("#close-keep");
+  await sleep(1000);
+  ok(disk(SYNC).includes("MINE-AT-CLOSE"), "mine written on close");
 });
 
 console.log("\nmain window batch done");

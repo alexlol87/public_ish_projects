@@ -1,5 +1,7 @@
 export const AUTOSAVE_DELAY_MS = 1000;
 
+const lf = (s: string) => s.replace(/\r\n/g, "\n");
+
 /**
  * Open Notes (tabs), their text and unsaved edits. Pure state, no IO: the app reads and writes files
  * (through the backend), owns the timer, and tells us the results.
@@ -10,11 +12,11 @@ export class NoteTabs {
   private texts = new Map<string, string>();
   private lastEdit = new Map<string, number>(); // present = unsaved
   private onDisk = new Map<string, string>(); // last text read or written; tells our own save echoes from outside edits
-  private conflicts = new Map<string, string>(); // disk text waiting for the "Reload from disk / Keep mine" choice
+  private conflicts = new Map<string, string | null>(); // disk text (null: file gone) waiting for the "Reload from disk / Keep mine" choice
   private revisions = new Map<string, number>();
 
   text(path: string) { return this.texts.get(path); }
-  /** Disk text of a Note with unsaved edits that also changed on disk (show the banner), else undefined. */
+  /** Disk text of a Note with unsaved edits that also changed on disk (null: deleted or moved away; show the banner), else undefined. */
   conflict(path: string) { return this.conflicts.get(path); }
   /** Bumps each time the text is replaced from disk; the app uses it to reset the editor's document. */
   revision(path: string) { return this.revisions.get(path) ?? 0; }
@@ -55,9 +57,22 @@ export class NoteTabs {
 
   /** FS watcher reported `path` changed; `diskText` is what is there now. Clean Notes reload silently, dirty ones conflict. */
   diskChanged(path: string, diskText: string) {
-    if (!this.texts.has(path) || diskText === this.onDisk.get(path)) return;
+    if (!this.texts.has(path) || lf(diskText) === lf(this.onDisk.get(path) ?? "")) return;
     if (this.lastEdit.has(path)) this.conflicts.set(path, diskText);
     else this.adopt(path, diskText);
+  }
+
+  /** `path` was deleted or moved away: a clean Note closes, a dirty one waits for "re-create here / discard". */
+  diskGone(path: string) {
+    if (this.lastEdit.has(path)) this.conflicts.set(path, null);
+    else this.close(path);
+  }
+
+  /** Drops my unsaved text and closes the tab. */
+  discard(path: string) {
+    this.conflicts.delete(path);
+    this.lastEdit.delete(path);
+    this.close(path);
   }
 
   /** `reload`: take the disk text. Otherwise keep mine and return it, for the app to write over the disk text (then `saved`). */
@@ -65,8 +80,8 @@ export class NoteTabs {
     const disk = this.conflicts.get(path);
     if (disk === undefined) return;
     this.conflicts.delete(path);
-    if (reload) return void this.adopt(path, disk);
-    this.onDisk.set(path, disk);
+    if (reload && disk !== null) return void this.adopt(path, disk);
+    this.onDisk.set(path, disk ?? "");
     return this.texts.get(path);
   }
 
