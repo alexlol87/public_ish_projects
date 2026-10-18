@@ -107,6 +107,7 @@ static LINK: LazyLock<Regex> = LazyLock::new(|| re(r"\[\[([^\[\]|#]+)(?:#([^\[\]
 static TAG: LazyLock<Regex> = LazyLock::new(|| re(&format!("#({TAG_NAME})")));
 static TAG_FULL: LazyLock<Regex> = LazyLock::new(|| re(&format!("^{TAG_NAME}$")));
 static TYPED_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"#([\p{L}\p{N}_/-]*)$"));
+static WIKI: LazyLock<Regex> = LazyLock::new(|| re(r"\[\[[^\[\]]*\]\]"));
 static LINK_URL: LazyLock<Regex> = LazyLock::new(|| re(r"\]\([^)]*\)"));
 static HEX: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"));
 static ENDPOINT: LazyLock<Regex> = LazyLock::new(|| re(r"^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /"));
@@ -143,9 +144,9 @@ fn range16(s: &str, bytes: Range<usize>, base: usize) -> Range16 {
     Range16::new(base + len16(&s[..bytes.start]), len16(&s[bytes]))
 }
 
-/// Inline `#tag` ranges (with the `#`) in one line, outside inline code and `](url)` parts; offsets are from the line start.
+/// Inline `#tag` ranges (with the `#`) in one line, outside inline code, `[[...]]` and `](url)` parts; offsets are from the line start.
 pub fn inline_tags(s: &str) -> Vec<TagRef> {
-    let skip: Vec<_> = byte_ranges(&CODE, s).into_iter().chain(byte_ranges(&LINK_URL, s)).collect();
+    let skip: Vec<_> = byte_ranges(&CODE, s).into_iter().chain(byte_ranges(&LINK_URL, s)).chain(byte_ranges(&WIKI, s)).collect();
     TAG.captures_iter(s)
         .filter_map(|c| {
             let (m, name) = (c.get(0)?, c.get(1)?.as_str());

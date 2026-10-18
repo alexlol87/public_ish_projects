@@ -68,6 +68,9 @@ export async function graphView(app: HTMLElement) {
 
   async function reload(why = "?") {
     reloads.push(why);
+    // A Project renamed or removed on disk must not stay in the saved filter (nothing would match, every box unticked): drop it; none left means all.
+    const known = new Set((await api.tree()).children.filter((c) => c.isFolder).map((c) => c.name));
+    if (filter.projects.some((x) => !known.has(x))) { filter.projects = filter.projects.filter((x) => known.has(x)); void api.saveGraphFilter(filter); void renderPanel(); }
     try { g = await api.graph(filter, local ? current : null); } catch (e) { toast(String(e), true); return; }
     neighbours = new Map(g.nodes.map((n) => [n.id, new Set<string>()]));
     labels = graphLabels(g.nodes);

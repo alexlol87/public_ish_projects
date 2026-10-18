@@ -152,4 +152,10 @@ describe("noteTabs external delete and CRLF", () => {
     tabs.diskChanged("a.md", "x\r\ny!");
     expect(tabs.conflict("a.md")).toBeUndefined();
   });
+
+  test("unsaved is true from the first edit until the write succeeds", () => {
+    tabs.open("a.md", "A"); expect(tabs.unsaved("a.md")).toBe(false);
+    tabs.edit("a.md", "B", 0); expect(tabs.unsaved("a.md")).toBe(true);
+    tabs.saved("a.md", "B"); expect(tabs.unsaved("a.md")).toBe(false);
+  });
 });

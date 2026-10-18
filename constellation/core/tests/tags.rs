@@ -73,3 +73,15 @@ fn tag_search_folds_diacritics() {
     assert_eq!(ix.tag_completions("only"), ["only-listed"]);
     assert_eq!(ix.tag_completions("tag"), ["tág/ünï"].map(String::from));
 }
+
+#[test]
+fn diacritic_spellings_group_in_the_tree_with_the_most_common_spelling() {
+    let v = make_vault(&[("a.md", "#tag/uni #tág/ünï"), ("b.md", "#tag/uni and #straße"), ("c.md", "#strasse")]);
+    let ix = VaultIndex::open(v.path()).unwrap();
+    let tree = ix.tag_tree(Sort::Name);
+    assert_eq!(tag_names(&tree), ["strasse", "tag"]);
+    assert_eq!(tag_names(&tree[1].children), ["tag/uni"]);
+    assert_eq!(tree[1].children[0].count, 2);
+    assert_eq!(ix.tag_hits("tag/uni").len(), 2);
+    assert_eq!(ix.tag_hits("strasse").len(), 2);
+}

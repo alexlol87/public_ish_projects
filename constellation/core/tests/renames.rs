@@ -181,3 +181,25 @@ fn rename_heading_refuses_bad_titles_and_duplicates() {
     assert!(rename_heading(&ix, "Totals", "cart", "acme/cart.md").is_err(), "title already in the Note");
     assert!(rename_heading(&ix, "Totals", "TOTALS", "acme/cart.md").is_ok(), "case change of itself is fine");
 }
+
+#[test]
+fn rename_tag_follows_folded_spelling_and_updates_tags_md() {
+    let v = make_vault(&[
+        ("a.md", "#tag/uni and #tág/ünï/x and #straße/y"),
+        ("tags.md", "# Tags\n\n- #tag/uni: unit\n- #other: o\n"),
+    ]);
+    let root = v.path();
+    apply(&rename_tag(&open(&v), "tag/uni", "x").unwrap(), root).unwrap();
+    assert_eq!(read(root, "a.md"), "#x and #x/x and #straße/y");
+    assert_eq!(read(root, "tags.md"), "# Tags\n\n- #x: unit\n- #other: o\n");
+    apply(&rename_tag(&open(&v), "strasse", "z").unwrap(), root).unwrap();
+    assert_eq!(read(root, "a.md"), "#x and #x/x and #z/y");
+}
+
+#[test]
+fn rename_heading_rewrites_same_note_anchor_links() {
+    let v = make_vault(&[("t.md", "# T\n\n## Sec\n\nSee [[#Sec]] and [[#sec|al]] and [[t#Sec]].\n")]);
+    let root = v.path();
+    apply(&rename_heading(&open(&v), "Sec", "Section", "t.md").unwrap(), root).unwrap();
+    assert_eq!(read(root, "t.md"), "# T\n\n## Section\n\nSee [[#Section]] and [[#Section|al]] and [[t#Section]].\n");
+}
