@@ -71,7 +71,18 @@ async function start(app: HTMLElement, root: string) {
   await listen("settings-changed", () => void reloadSettings());
   setInterval(autosave, 250);
   // Unsaved edits are written before the window goes away (the close proceeds once this resolves).
-  await getCurrentWindow().onCloseRequested(async () => { await flushAll(); });
+  await getCurrentWindow().onCloseRequested(async (e) => {
+    await flushAll();
+    if (tabs.hasConflicts || tabs.hasPendingEdits) {
+      const choice = await closeChoice();
+      if (choice === "cancel") return e.preventDefault();
+      if (choice === "keep") {
+        for (const p of tabs.paths) if (tabs.conflict(p) !== undefined) await keepMine(p);
+        await flushAll();
+        if (tabs.hasPendingEdits) return e.preventDefault(); // still not saved (e.g. read-only): do not lose it
+      }
+    }
+  });
   addEventListener("blur", () => void flushAll());
   document.addEventListener("visibilitychange", () => document.hidden && void flushAll());
   document.addEventListener("keydown", onKey, true);
@@ -191,8 +202,8 @@ function renderTabs() {
   const names = tabs.paths.map(baseName);
   const label = (p: string) => (names.filter((n) => n === baseName(p)).length > 1 ? p.split("/").slice(-2).join("/").replace(/\.md$/i, "") : baseName(p));
   P.tabbar.replaceChildren(...tabs.paths.map((p) =>
-    h("div", { class: "tab" + (p === tabs.active ? " active" : ""), title: p, onclick: () => { tabs.active = p; showActive(); void refreshInspector(); } },
-      h("span", {}, label(p) + (tabs.pending().includes(p) ? " •" : "")),
+    h("div", { class: "tab" + (p === tabs.active ? " active" : "") + (tabs.conflict(p) !== undefined ? " conflict" : ""), title: p, onclick: () => { tabs.active = p; showActive(); void refreshInspector(); } },
+      h("span", {}, label(p) + (tabs.conflict(p) !== undefined ? " !" : tabs.pending().includes(p) ? " •" : "")),
       h("span", { class: "x", onclick: (e: Event) => { e.stopPropagation(); void closeTab(p); } }, "×"))));
   P.tabbar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
@@ -211,6 +222,12 @@ function renderBanner() {
   const disk = p ? tabs.conflict(p) : undefined;
   P.banner.hidden = disk === undefined;
   if (disk === undefined || !p) return;
+  if (disk === null) {
+    P.banner.replaceChildren(h("span", {}, "This note was deleted or moved on disk while you had unsaved edits. "),
+      h("button", { id: "keep-mine", onclick: () => void keepMine(p) }, "Re-create here"),
+      h("button", { id: "reload-disk", onclick: () => { tabs.discard(p); showActive(); editor.forget(p); } }, "Discard"));
+    return;
+  }
   P.banner.replaceChildren(h("span", {}, "This note changed on disk while you had unsaved edits. "),
     h("button", { id: "reload-disk", onclick: () => { tabs.resolveConflict(p, true); showActive(); } }, "Reload from disk"),
     h("button", { id: "keep-mine", onclick: () => void keepMine(p) }, "Keep mine"));
@@ -218,20 +235,41 @@ function renderBanner() {
 
 async function keepMine(p: string) {
   const mine = tabs.resolveConflict(p, false);
-  if (mine !== undefined) { await api.writeNote(p, mine); tabs.saved(p, mine); }
+  if (mine !== undefined) { await save(p); }
   showActive();
 }
+
+const lastSaveError = new Map<string, string>();
 
 async function save(p: string) {
   const text = tabs.text(p);
   if (text === undefined) return;
-  try { await api.writeNote(p, text); tabs.saved(p, text); } catch (e) { toast(errText(e), true); }
+  try { await api.writeNote(p, text); tabs.saved(p, text); lastSaveError.delete(p); } catch (e) {
+    // The same failure on every autosave tick is shown once, until it changes or the save works.
+    const msg = errText(e);
+    if (lastSaveError.get(p) !== msg) toast(msg, true);
+    lastSaveError.set(p, msg);
+  }
 }
 
 async function autosave() {
   const due = tabs.due();
   for (const p of due) await save(p);
   if (due.length) renderTabs();
+}
+
+/** Unsaved or conflicted text at window close: write mine, throw it away, or stay. */
+async function closeChoice(): Promise<"keep" | "discard" | "cancel"> {
+  let out: "keep" | "discard" | "cancel" = "cancel";
+  await modal("Unsaved changes", (close) => {
+    const pick = (c: typeof out) => () => { out = c; close(); };
+    return h("div", {}, h("p", {}, "Some notes have text that is not saved (a conflict with the file on disk, or the file could not be written)."),
+      h("div", { class: "row end" },
+        h("button", { id: "close-cancel", onclick: pick("cancel") }, "Cancel"),
+        h("button", { id: "close-reload", onclick: pick("discard") }, "Reload (discard mine)"),
+        h("button", { id: "close-keep", class: "primary", onclick: pick("keep") }, "Keep mine")));
+  });
+  return out;
 }
 
 async function flushAll() {
@@ -296,7 +334,7 @@ async function syncTabs(touched: string[]) {
   for (const p of tabs.paths.slice()) {
     if (!touched.some((t) => t === p || p.startsWith(t + "/"))) continue;
     try { tabs.diskChanged(p, await api.readNote(p)); }
-    catch { if (!tabs.pending().includes(p)) tabs.close(p); } // deleted or moved away
+    catch { tabs.diskGone(p); } // deleted or moved away
   }
 }
 

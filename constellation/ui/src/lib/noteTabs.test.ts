@@ -124,3 +124,32 @@ describe("noteTabs", () => {
     expect(tabs.text("a.md")).toBe("mine");
   });
 });
+
+describe("noteTabs external delete and CRLF", () => {
+  test("a dirty Note whose file vanished is a conflict (not re-created); discard drops it", () => {
+    tabs.open("a.md", "A"); tabs.edit("a.md", "mine", 0);
+    tabs.diskGone("a.md");
+    expect(tabs.conflict("a.md")).toBeNull();
+    expect(tabs.pending()).toEqual([]);
+    tabs.discard("a.md");
+    expect(tabs.paths).toEqual([]);
+  });
+
+  test("re-create keeps my text for the app to write", () => {
+    tabs.open("a.md", "A"); tabs.edit("a.md", "mine", 0);
+    tabs.diskGone("a.md");
+    expect(tabs.resolveConflict("a.md", false)).toBe("mine");
+    expect(tabs.conflict("a.md")).toBeUndefined();
+  });
+
+  test("a clean Note whose file vanished just closes", () => {
+    tabs.open("a.md", "A"); tabs.diskGone("a.md");
+    expect(tabs.paths).toEqual([]);
+  });
+
+  test("line endings alone are not an outside change", () => {
+    tabs.open("a.md", "x\r\ny"); tabs.edit("a.md", "x\ny!", 0); tabs.saved("a.md", "x\ny!");
+    tabs.diskChanged("a.md", "x\r\ny!");
+    expect(tabs.conflict("a.md")).toBeUndefined();
+  });
+});

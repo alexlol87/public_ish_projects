@@ -201,3 +201,58 @@ fn index_open_on_scaffold_ignores_app_files() {
     let ix = VaultIndex::open(v.path()).unwrap();
     assert_eq!(ix.note_paths(), ["README.md"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn write_note_writes_through_a_symlink_and_keeps_it() {
+    let v = make_vault(&[("real.md", "old")]);
+    std::os::unix::fs::symlink(v.path().join("real.md"), v.path().join("link.md")).unwrap();
+    vault::write_note(v.path(), "link.md", "new").unwrap();
+    assert!(fs::symlink_metadata(v.path().join("link.md")).unwrap().file_type().is_symlink());
+    assert_eq!(read(v.path(), "real.md"), "new");
+}
+
+#[cfg(unix)]
+#[test]
+fn write_note_refuses_a_read_only_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = make_vault(&[("ro.md", "old")]);
+    fs::set_permissions(v.path().join("ro.md"), fs::Permissions::from_mode(0o444)).unwrap();
+    let e = vault::write_note(v.path(), "ro.md", "new").unwrap_err();
+    assert!(e.to_string().contains("read-only"), "{e}");
+    assert_eq!(read(v.path(), "ro.md"), "old");
+}
+
+#[test]
+fn write_note_keeps_crlf_line_endings() {
+    let v = make_vault(&[("c.md", "a\r\nb\r\n")]);
+    vault::write_note(v.path(), "c.md", "a\nb\nc\n").unwrap();
+    assert_eq!(read(v.path(), "c.md"), "a\r\nb\r\nc\r\n");
+    let w = make_vault(&[("l.md", "a\nb\n")]);
+    vault::write_note(w.path(), "l.md", "a\nb\nc\n").unwrap();
+    assert_eq!(read(w.path(), "l.md"), "a\nb\nc\n");
+}
+
+#[test]
+fn applied_edits_keep_crlf() {
+    let v = make_vault(&[("c.md", "a\r\nb\r\n")]);
+    apply(&[FileEdit::replace("c.md", Range16::new(0, 1), "x\ny")], v.path()).unwrap();
+    assert_eq!(read(v.path(), "c.md"), "x\r\ny\r\nb\r\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn folder_symlinks_are_not_followed() {
+    let v = make_vault(&[("p/a.md", "A")]);
+    std::os::unix::fs::symlink("..", v.path().join("p/loop")).unwrap();
+    let tree = vault::load(v.path()).unwrap();
+    assert_eq!(tree.note_paths(), ["p/a.md"]);
+}
+
+#[test]
+fn read_note_non_utf8_has_a_readable_message() {
+    let v = make_vault(&[]);
+    fs::write(v.path().join("l.md"), [0x43, 0xe9]).unwrap();
+    let e = vault::read_note(v.path(), "l.md").unwrap_err();
+    assert_eq!(e.to_string(), "l.md is not UTF-8 text; not opened");
+}
