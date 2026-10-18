@@ -203,3 +203,19 @@ fn rename_heading_rewrites_same_note_anchor_links() {
     apply(&rename_heading(&open(&v), "Sec", "Section", "t.md").unwrap(), root).unwrap();
     assert_eq!(read(root, "t.md"), "# T\n\n## Section\n\nSee [[#Section]] and [[#Section|al]] and [[t#Section]].\n");
 }
+
+#[test]
+fn rename_heading_skips_same_note_links_in_code() {
+    let v = make_vault(&[("t.md", "# T\n\n## Sec\n\n[[#Sec]] `[[#Sec]]`\n\n```\n[[#Sec]]\n```\n")]);
+    let root = v.path();
+    apply(&rename_heading(&open(&v), "Sec", "Part", "t.md").unwrap(), root).unwrap();
+    assert_eq!(read(root, "t.md"), "# T\n\n## Part\n\n[[#Part]] `[[#Sec]]`\n\n```\n[[#Sec]]\n```\n");
+}
+
+#[test]
+fn rename_tag_merge_into_listed_tag_keeps_one_line_in_tags_md() {
+    let v = make_vault(&[("a.md", "#road"), ("tags.md", "# Tags\n\n- #road: r\n- #payments: p\n")]);
+    let root = v.path();
+    apply(&rename_tag(&open(&v), "road", "payments").unwrap(), root).unwrap();
+    assert_eq!(read(root, "tags.md"), "# Tags\n\n- #payments: p\n");
+}
