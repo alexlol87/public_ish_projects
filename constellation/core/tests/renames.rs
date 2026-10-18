@@ -40,6 +40,20 @@ fn rename_note_rewrites_links_and_undo_restores() {
 }
 
 #[test]
+fn undo_of_rename_after_editing_the_note_is_refused_and_writes_nothing() {
+    let v = make_vault(&FILES);
+    let root = v.path();
+    let undo = apply(&rename_note(&open(&v), "acme/cart.md", "basket").unwrap(), root).unwrap();
+    std::fs::write(root.join("acme/basket.md"), "edited").unwrap();
+    let orders = read(root, "acme/orders.md");
+
+    assert!(apply(&undo, root).is_err());
+    assert_eq!(read(root, "acme/basket.md"), "edited");
+    assert!(!exists(root, "acme/cart.md"));
+    assert_eq!(read(root, "acme/orders.md"), orders);
+}
+
+#[test]
 fn move_note_keeps_name_links_and_rewrites_path_links() {
     let v = make_vault(&FILES);
     let root = v.path();

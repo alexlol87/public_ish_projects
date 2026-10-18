@@ -424,7 +424,9 @@ fn apply_edits(app: AppHandle, st: State<AppState>, edits: Vec<FileEdit>) -> Res
 #[tauri::command]
 fn undo(app: AppHandle, st: State<AppState>) -> Res<bool> {
     with(&st, |o| {
-        let Some(inverse) = o.undo.pop() else { return Ok(false) };
+        let Some(last) = o.undo.last() else { return Ok(false) };
+        edit::check(last, o.index.root())?; // refused: nothing written, the step stays
+        let inverse = o.undo.pop().unwrap_or_default();
         let mut paths: Vec<String> = inverse.iter().map(|e| e.path.clone()).collect();
         paths.sort();
         paths.dedup();

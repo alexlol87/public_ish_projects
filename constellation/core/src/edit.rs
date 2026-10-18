@@ -47,23 +47,18 @@ impl FileEdit {
 /// Applies edits in order (give edits to one file back to front) and returns the inverse edits; applying those
 /// restores every file exactly. The app calls this once per user action and keeps the inverse for undo.
 pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
+    check(edits, root)?;
     let mut inverse = vec![];
     for e in edits {
         let file = root.join(&e.path);
         if e.removes_file {
             let old = fs::read_to_string(&file)?;
-            if e.only_if.as_ref().is_some_and(|t| *t != old) {
-                return Err(Error(format!("{} has changed since it was created; not removing it", e.path)));
-            }
             fs::remove_file(&file)?;
             for d in &e.made_dirs {
                 let _ = fs::remove_dir(root.join(d)); // not empty any more: leave it
             }
             inverse.push(FileEdit::create(&e.path, &old));
             continue;
-        }
-        if e.creates_file && file.exists() {
-            return Err(Error(format!("{} already exists", e.path)));
         }
         let made_dirs = if e.creates_file { missing_dirs(root, &e.path) } else { vec![] };
         let old = if e.creates_file { String::new() } else { fs::read_to_string(&file)? };
@@ -78,6 +73,26 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
     }
     inverse.reverse();
     Ok(inverse)
+}
+
+/// Refuses the whole batch, before anything is written, if a create would overwrite a file or a guarded removal would
+/// lose text changed since (e.g. undoing a create or rename after the Note was edited).
+pub fn check(edits: &[FileEdit], root: &Path) -> Result<()> {
+    let mut removed = std::collections::HashSet::new();
+    for e in edits {
+        let file = root.join(&e.path);
+        if e.removes_file {
+            if let Some(t) = &e.only_if {
+                if fs::read_to_string(&file).ok().as_ref() != Some(t) {
+                    return Err(Error(format!("{} was edited after that action; not undoing it, so the edit is kept", e.path)));
+                }
+            }
+            removed.insert(&e.path);
+        } else if e.creates_file && file.exists() && !removed.contains(&e.path) {
+            return Err(Error(format!("{} already exists", e.path)));
+        }
+    }
+    Ok(())
 }
 
 /// Folders above `path` that do not exist yet, deepest first.
