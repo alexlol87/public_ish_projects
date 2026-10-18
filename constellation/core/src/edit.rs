@@ -28,11 +28,14 @@ pub struct FileEdit {
     /// On the undo of a creation: the text the creation wrote; the file is only removed while it still holds exactly this.
     #[serde(default)]
     pub only_if: Option<String>,
+    /// On an inverse replace: the text `range` must still hold; otherwise the file changed since and the batch is refused.
+    #[serde(default)]
+    pub expect: Option<String>,
 }
 
 impl FileEdit {
     pub fn replace(path: &str, range: Range16, text: &str) -> Self {
-        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![], only_if: None }
+        Self { path: path.into(), range, text: text.into(), creates_file: false, removes_file: false, made_dirs: vec![], only_if: None, expect: None }
     }
 
     pub fn create(path: &str, text: &str) -> Self {
@@ -68,28 +71,40 @@ pub fn apply(edits: &[FileEdit], root: &Path) -> Result<Vec<FileEdit>> {
         inverse.push(if e.creates_file {
             FileEdit { made_dirs, only_if: Some(new), ..FileEdit::remove(&e.path) }
         } else {
-            FileEdit::replace(&e.path, Range16::new(e.range.location, len16(&e.text)), &replaced)
+            FileEdit { expect: Some(e.text.clone()), ..FileEdit::replace(&e.path, Range16::new(e.range.location, len16(&e.text)), &replaced) }
         });
     }
     inverse.reverse();
     Ok(inverse)
 }
 
-/// Refuses the whole batch, before anything is written, if a create would overwrite a file or a guarded removal would
-/// lose text changed since (e.g. undoing a create or rename after the Note was edited).
+/// Refuses the whole batch, before anything is written, if a create would overwrite a file, a guarded removal would
+/// lose text changed since, or a replace's `expect`ed text is no longer in its range (e.g. undoing after the Note was
+/// edited). Replays the batch in memory so each edit is checked against the text the earlier ones leave.
 pub fn check(edits: &[FileEdit], root: &Path) -> Result<()> {
-    let mut removed = std::collections::HashSet::new();
+    let mut texts: std::collections::HashMap<&str, Option<String>> = Default::default(); // None: removed in this batch
+    let current = |texts: &std::collections::HashMap<&str, Option<String>>, p: &str| match texts.get(p) {
+        Some(t) => t.clone(),
+        None => fs::read_to_string(root.join(p)).ok(),
+    };
     for e in edits {
-        let file = root.join(&e.path);
+        let now = current(&texts, &e.path);
         if e.removes_file {
-            if let Some(t) = &e.only_if {
-                if fs::read_to_string(&file).ok().as_ref() != Some(t) {
-                    return Err(Error(format!("{} was edited after that action; not undoing it, so the edit is kept", e.path)));
-                }
+            if e.only_if.is_some() && now != e.only_if {
+                return Err(Error(format!("{} was {} after that action", e.path, if now.is_none() { "deleted" } else { "edited" })));
             }
-            removed.insert(&e.path);
-        } else if e.creates_file && file.exists() && !removed.contains(&e.path) {
-            return Err(Error(format!("{} already exists", e.path)));
+            texts.insert(&e.path, None);
+        } else if e.creates_file {
+            if now.is_some() {
+                return Err(Error(format!("{} already exists", e.path)));
+            }
+            texts.insert(&e.path, Some(e.text.clone()));
+        } else if let Some(want) = &e.expect {
+            let Some(old) = now else { return Err(Error(format!("{} was deleted after that action", e.path))) };
+            if slice16(&old, e.range) != Some(want.as_str()) {
+                return Err(Error(format!("{} was edited after that action", e.path)));
+            }
+            texts.insert(&e.path, replace16(&old, e.range, &e.text));
         }
     }
     Ok(())

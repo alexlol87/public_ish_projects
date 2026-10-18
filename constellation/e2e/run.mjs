@@ -405,6 +405,31 @@ await test("task tick moves the item to the archive; Ctrl+Z restores it", async 
   ok(!disk("acme-shop/archive/fixed-bugs.md").includes("Total ignores"), "archive entry removed");
 });
 
+await test("double-clicking a Bug box archives it once and leaves the next item", async () => {
+  fs.mkdirSync(path.join(vault, "dbl/repo"), { recursive: true });
+  fs.writeFileSync(path.join(vault, "dbl/repo/bugs.md"), "# Bugs\n\n- [ ] One\n- [ ] Two\n- [ ] Three\n");
+  await sleep(1500);
+  await openRow("dbl/repo/bugs.md");
+  await app.until(() => document.querySelector(".cm-task"), "checkbox widget");
+  await app.eval(() => { const b = document.querySelector(".cm-task"); b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); setTimeout(() => b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })), 30); });
+  await sleep(1500);
+  eq(disk("dbl/repo/bugs.md"), "# Bugs\n\n- [ ] Two\n- [ ] Three\n", "only One removed");
+  eq((disk("dbl/archive/fixed-bugs.md").match(/### /g) || []).length, 1, "archived once");
+});
+
+await test("undo after the archive was edited is refused, drops the step, and writes nothing", async () => {
+  await app.click(".cm-task");
+  await sleep(1200);
+  const arch = disk("dbl/archive/fixed-bugs.md") + "\nedited elsewhere\n";
+  fs.writeFileSync(path.join(vault, "dbl/archive/fixed-bugs.md"), arch);
+  await sleep(800);
+  await app.click("#undo");
+  await app.until(() => document.querySelector(".toast.bad"), "error toast");
+  ok((await app.eval(() => document.querySelector(".toast.bad").textContent)).includes("was dropped"), "says the step was dropped");
+  eq(disk("dbl/archive/fixed-bugs.md"), arch, "archive untouched");
+  ok(!disk("dbl/repo/bugs.md").includes("Two"), "bugs.md untouched");
+});
+
 await test("rename and move a Note rewrite links; undo restores", async () => {
   const rootBefore = disk("README.md");
   await app.rightClick(".row-item[title='acme-shop/README.md']");
