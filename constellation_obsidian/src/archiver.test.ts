@@ -37,10 +37,10 @@ test("every ticked item moves with its continuation lines; unticked items stay e
   const r = archiveTicked("shop/r/todo.md", text, day);
   assert.ok(r);
   assert.equal(r.count, 2);
-  assert.equal(r.text, "# Todo\n\n- [ ] keep 1\n  keep detail\n\n- [ ] keep 2\n");
+  assert.equal(r.text, "# Todo\n\n- [ ] keep 1\n  keep detail\n    - [ ] nested open child\n\n- [ ] keep 2\n");
   assert.equal(
     r.entries,
-    "### Done A\n- closed: 2026-10-17\n- source: [[shop/r/README]]\n- what: line one - [ ] nested open child\n- fix: unknown\n" +
+    "### Done A\n- closed: 2026-10-17\n- source: [[shop/r/README]]\n- what: line one\n- fix: unknown\n" +
       "\n### Done B\n- closed: 2026-10-17\n- source: [[orders#GET /x]]\n- what: Done B\n- fix: unknown\n",
   );
 });
@@ -82,4 +82,44 @@ test("the archive entry example in AGENTS.md round-trips through the archiver", 
   const norm = (t: string) => t.split("\n").filter((l) => l && !l.startsWith("- fix:")).map((l) => (l.startsWith("- closed:") ? "- closed: DATE" : l));
   assert.deepEqual(norm(example), norm(r!.entries));
   assert.ok(example.includes("- fix: "));
+});
+
+const at = (name: string) => `shop/orders-service/${name}`;
+
+test("03: an unticked child task stays in the Note with its detail lines; a ticked child moves", () => {
+  const r = archiveTicked(at("bugs.md"), "- [x] Parent ticked\n  - [ ] open child task\n    child detail\n  continuation\n  - [x] ticked child\n- [ ] last open\n", day)!;
+  assert.equal(r.text, "  - [ ] open child task\n    child detail\n- [ ] last open\n");
+  assert.ok(r.entries.includes("- what: continuation - [x] ticked child\n"));
+});
+
+test("04: ticked boxes inside fenced code blocks are left alone", () => {
+  const t = "Example:\n```md\n- [x] example\n```\n~~~\n- [x] tilde\n~~~\n- [ ] real\n";
+  assert.equal(archiveTicked(at("bugs.md"), t, day), null);
+  const r = archiveTicked(at("bugs.md"), t + "- [x] real done\n", day)!;
+  assert.equal(r.count, 1);
+  assert.equal(r.text, t);
+});
+
+test("05: only a Repo's bugs.md / todo.md counts; source falls back to the Repo README", () => {
+  for (const p of ["external/vendor/bugs.md", "shop/archive/bugs.md", "shop/bugs.md", "clients/x/todo.md"]) assert.equal(archiveTicked(p, "- [x] a\n", day), null, p);
+  const r = archiveTicked("shop/orders-service/docs/bugs.md", "- [x] a\n", day)!;
+  assert.equal(r.archivePath, "shop/archive/fixed-bugs.md");
+  assert.ok(r.entries.includes("- source: [[shop/orders-service/README]]\n"));
+});
+
+test("06: an item with no text gets a placeholder title", () => {
+  const r = archiveTicked(at("bugs.md"), "- [x]\n- [ ] open\n", day)!;
+  assert.ok(r.entries.startsWith("### (no text)\n"));
+  assert.ok(r.entries.includes("- what: (no text)\n"));
+});
+
+test("07: entries appended to a CRLF archive note use CRLF", () => {
+  const r = archiveTicked(at("todo.md"), "- [x] A\n  more\n", day)!;
+  assert.equal(appendToArchive("# Done todos\r\n", r), "# Done todos\r\n\r\n### A\r\n- closed: 2026-10-17\r\n- source: [[shop/orders-service/README]]\r\n- what: more\r\n- fix: unknown\r\n");
+});
+
+test("16: numbered ticked tasks are archived", () => {
+  const r = archiveTicked(at("bugs.md"), "1. [x] numbered done\n2) [ ] open\n", day)!;
+  assert.equal(r.count, 1);
+  assert.equal(r.text, "2) [ ] open\n");
 });
