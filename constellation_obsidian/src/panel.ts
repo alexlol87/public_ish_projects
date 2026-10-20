@@ -27,7 +27,8 @@ export class PanelView extends ItemView {
   }
 
   async onOpen() {
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.render()));
+    // Not when the panel itself becomes active: that happens on mousedown in it, and re-rendering would eat the click.
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => leaf !== this.leaf && this.render()));
     // Note changes, including ones made on disk, and the cursor moving to another line.
     const later = debounce(() => this.render(), 300, true);
     this.registerEvent(this.app.metadataCache.on("changed", later));

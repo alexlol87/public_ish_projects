@@ -331,7 +331,7 @@ var PanelView = class extends import_obsidian3.ItemView {
     return "sparkles";
   }
   async onOpen() {
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.render()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => leaf !== this.leaf && this.render()));
     const later = (0, import_obsidian3.debounce)(() => this.render(), 300, true);
     this.registerEvent(this.app.metadataCache.on("changed", later));
     this.registerEvent(this.app.vault.on("delete", later));
