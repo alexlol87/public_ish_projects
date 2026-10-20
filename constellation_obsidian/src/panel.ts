@@ -1,4 +1,4 @@
-import { ItemView, type WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownView, debounce, type WorkspaceLeaf } from "obsidian";
 import type ConstellationPlugin from "./main.ts";
 import { renderRepoSection } from "./panel-repo.ts";
 import { renderEndpointSection } from "./panel-endpoint.ts";
@@ -28,6 +28,18 @@ export class PanelView extends ItemView {
 
   async onOpen() {
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.render()));
+    // Note changes, including ones made on disk, and the cursor moving to another line.
+    const later = debounce(() => this.render(), 300, true);
+    this.registerEvent(this.app.metadataCache.on("changed", later));
+    this.registerEvent(this.app.vault.on("delete", later));
+    this.registerEvent(this.app.vault.on("rename", later));
+    let lastLine = -1;
+    this.registerDomEvent(document, "selectionchange", () => {
+      const line = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor.getCursor().line;
+      if (line === undefined || line === lastLine) return;
+      lastLine = line;
+      later();
+    });
     this.render();
   }
 
