@@ -1,5 +1,6 @@
 import { Plugin, PluginSettingTab, Setting } from "obsidian";
 import { PanelView, VIEW_TYPE } from "./panel.ts";
+import { initializeVault } from "./initialize.ts";
 import { withDefaults, parseDays, type Settings } from "./settings.ts";
 
 export default class ConstellationPlugin extends Plugin {
@@ -11,6 +12,7 @@ export default class ConstellationPlugin extends Plugin {
     this.addRibbonIcon("sparkles", "Open Constellation panel", () => this.openPanel());
     this.addCommand({ id: "open-panel", name: "Open Constellation panel", callback: () => this.openPanel() });
     this.addSettingTab(new ConstellationSettingTab(this));
+    this.addCommand({ id: "initialize-vault", name: "Initialize vault", callback: () => initializeVault(this.app) });
     // Later tickets register their commands here.
   }
 

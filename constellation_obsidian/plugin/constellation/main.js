@@ -25,7 +25,7 @@ __export(main_exports, {
   default: () => ConstellationPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/panel.ts
 var import_obsidian = require("obsidian");
@@ -73,6 +73,327 @@ var PanelView = class extends import_obsidian.ItemView {
   }
 };
 
+// src/initialize.ts
+var import_obsidian2 = require("obsidian");
+
+// src/scaffold.ts
+var AGENTS_MD = `# Agent rules
+
+This folder is a Vault of Markdown Notes describing the code of several repositories. Keep it accurate and cheap to
+read. Any agent tool can follow these rules.
+
+## Hard rules
+
+- Read code only from repositories named in \`repos.txt\` (one name per line). Each is a sibling folder of this Vault.
+  If a listed folder is missing, ask the user; do not search elsewhere.
+- Skip \`<project>/archive/\` unless the user asks for it.
+- Leave \`clients/\` Notes unedited unless the user asks. Read them freely.
+- Write \`unknown\` where the source does not say. Guesses stay out.
+- Store no local paths, secrets, tokens or personal data. Use the repository URL, never a path.
+- Tag only with Tags that already appear in the Vault or in \`tags.md\`. Propose a new Tag to the user in your reply.
+- Copy the layout of \`templates/\` for every new Note. Keep unknown frontmatter keys as they are.
+
+## Layout
+
+\`<project>/README.md\`, then one folder per Repo, named exactly like the repository:
+\`<project>/<repo>/\` with \`README.md\`, and as they apply \`endpoints.md\`, \`architecture.md\`, \`adr.md\`,
+\`requirements.md\`, \`future.md\`, \`bugs.md\`, \`todo.md\`. Shared APIs go in \`external/<name>.md\`, Clients in
+\`clients/<name>.md\`. Each Note starts with \`type:\` frontmatter; see \`templates/\`.
+
+Link with \`[[wikilinks]]\`: \`[[<project>/<repo>/endpoints#GET /path]]\`. Repos that are not services have no
+\`endpoints.md\`.
+
+## Endpoints and Calls
+
+Every Endpoint is a \`## METHOD /path\` heading in the Repo's \`endpoints.md\`. Under it: summary, request, response,
+\`Calls:\`, requirements, \`Status:\`, known bugs. \`Calls:\` is a line that is exactly \`Calls:\` followed by a bullet list
+of Links to the Endpoints this one invokes, in other Repos or in \`external/\` Notes. Add one bullet per invoked
+Endpoint, and create the target heading when it is missing. \`Status:\` is a bullet list of \`implemented\`
+(complete, partial, planned or deprecated), \`last_changed\` (date and commit) and \`missing\`.
+
+## Ingest
+
+Document a Repo from its source. Done when every Endpoint of the Repo has a heading with all its parts, every Link
+resolves, and the Repo \`README.md\` carries \`repo_url\`, \`verified_commit\` (current HEAD) and \`verified_on\` (today).
+
+1. Confirm the repository is in \`repos.txt\` and its folder exists next to this Vault.
+2. Read its build files, entry points and routing code. Fill \`README.md\` (purpose, tech stack, owning team, URL).
+3. Write \`endpoints.md\`, \`architecture.md\` and whichever of the other Notes the source supports.
+4. Record open defects in \`bugs.md\` and open work in \`todo.md\` as task items (format below).
+5. Check every Link you wrote points at an existing Note and heading.
+
+## Refresh
+
+Bring a Repo up to date from the diff only. Done when each changed file in the diff is reflected in the Notes and
+\`verified_commit\` / \`verified_on\` are updated.
+
+1. Read \`verified_commit\` from the Repo \`README.md\`. If it is \`unknown\`, run Ingest instead.
+2. Read only \`git diff <verified_commit>..HEAD\` in the repository.
+3. Update the affected Endpoints, \`Calls:\`, \`Status:\` (\`last_changed\`), bugs and todos.
+4. Archive items the diff fixed or finished (format below).
+5. Set \`verified_commit\` to HEAD and \`verified_on\` to today.
+
+## Answer
+
+Search the Vault first (Notes, \`Calls:\`, backlinks). Open code only when the Vault cannot answer, and say so in the
+reply. Name the Notes you used.
+
+## Bugs, todos and the Archive
+
+Open items are task items in the Repo's \`bugs.md\` or \`todo.md\`: \`- [ ] short description \u2192 [[endpoints#GET /path]]\`,
+with detail on more-indented lines below. To close one, delete it there and append an entry to the Project's
+archive: \`<project>/archive/fixed-bugs.md\` for bugs, \`<project>/archive/done-todos.md\` for todos. Create the file
+with \`type: archive\` frontmatter if it is missing. One entry:
+
+\`\`\`markdown
+### Total ignores discounts
+- closed: YYYY-MM-DD
+- source: [[shop/orders/endpoints#POST /orders]]
+- what: Discounts are applied after tax.
+- fix: Apply discounts before tax.
+\`\`\`
+
+\`source\` is the Link from the item; with no Link, use \`[[<project>/<repo>/README]]\`.`;
+var TEMPLATES = {
+  "project": `---
+type: project
+---
+# <Project name>
+What the product does and who it is for.
+
+## Repos
+- [[<project>/<repo>/README]]: one line each
+`,
+  "repo": `---
+type: repo
+repo_url: unknown
+verified_commit: unknown
+verified_on: unknown
+---
+# <repo>
+- Purpose: unknown
+- Tech stack: unknown
+- Owning team: unknown
+
+Notes: [[endpoints]], [[architecture]], [[requirements]], [[future]], [[bugs]], [[todo]]
+`,
+  "endpoints": `---
+type: endpoint
+---
+# Endpoints
+
+## GET /path
+Summary: what it does.
+
+Request: parameters and body, or unknown.
+
+Response: status codes and body, or unknown.
+
+Calls:
+- [[other-repo/endpoints#GET /path]]
+
+Requirements: what it must satisfy.
+
+Status:
+- implemented: complete
+- last_changed: YYYY-MM-DD abc1234
+- missing: none
+
+Known bugs: [[bugs]]
+`,
+  "architecture": `---
+type: architecture
+---
+# Architecture
+Components, data stores and how they fit together.
+`,
+  "adr": `---
+type: adr
+---
+# <Decision title>
+What was decided, why, and what follows from it.
+`,
+  "requirements": `---
+type: requirements
+---
+# Requirements
+- What the Repo must do.
+`,
+  "future": `---
+type: future
+---
+# Future
+- Planned or wanted work that is not a todo yet.
+`,
+  "bugs": `---
+type: bugs
+---
+# Bugs
+- [ ] Short description \u2192 [[endpoints#GET /path]]
+  Detail on an indented line.
+`,
+  "todo": `---
+type: todo
+---
+# Todo
+- [ ] Short description \u2192 [[endpoints#GET /path]]
+`,
+  "external-api": `---
+type: external-api
+---
+# <External API name>
+Who provides it and where its docs are.
+
+## GET /path
+What we use it for.
+`,
+  "client": `---
+type: client
+---
+# <Client name>
+- Who they are: unknown
+- What they do: unknown
+- SLA: unknown
+- Auth method: unknown
+- Docs they rely on: unknown
+
+Uses:
+- [[project/repo/endpoints#GET /path]]
+`,
+  "archive": `---
+type: archive
+---
+# Fixed bugs
+
+### Short description
+- closed: YYYY-MM-DD
+- source: [[project/repo/endpoints#GET /path]]
+- what: What it was.
+- fix: How it was fixed.
+`
+};
+function starterFiles() {
+  return [
+    { path: "README.md", text: "# Vault\n\nWhat this vault covers.\n" },
+    { path: "AGENTS.md", text: AGENTS_MD },
+    { path: "repos.txt", text: "# One repository name per line.\n" },
+    { path: "tags.md", text: "# Tags\n\n- #example: what this tag means\n" },
+    ...Object.entries(TEMPLATES).map(([name, text]) => ({ path: `templates/${name}.md`, text }))
+  ];
+}
+function planScaffold(exists) {
+  const all = starterFiles();
+  return {
+    folders: ["templates", "external", "clients"].filter((d) => !exists(d)),
+    files: all.filter((f) => !exists(f.path)),
+    skipped: all.filter((f) => exists(f.path)).map((f) => f.path)
+  };
+}
+var TEMPLATES_FOLDER = "templates";
+var EXCLUDED = ["AGENTS.md", "repos.txt", "tags.md", "templates/"];
+function withExcluded(current) {
+  const cur = current ?? [];
+  return [...cur, ...EXCLUDED.filter((e) => !cur.includes(e))];
+}
+var GROUPS = [
+  ["[type:project]", 13936428],
+  ["[type:repo]", 4494328],
+  ["[type:endpoint]", 4176208],
+  ['[type:"external-api"]', 14380328],
+  ["[type:client]", 11238904]
+].map(([query, rgb]) => ({ query, color: { a: 1, rgb } }));
+function withColorGroups(current) {
+  const mine = (current ?? []).filter((g) => !GROUPS.some((o) => o.query === g.query));
+  return [...mine, ...GROUPS.map((g) => ({ query: g.query, color: { ...g.color } }))];
+}
+
+// src/initialize.ts
+async function initializeVault(app) {
+  const { vault } = app;
+  const candidates = ["templates", "external", "clients", ...starterFiles().map((f) => f.path)];
+  const existing = /* @__PURE__ */ new Set();
+  for (const p of candidates) if (await vault.adapter.exists(p)) existing.add(p);
+  const plan = planScaffold((p) => existing.has(p));
+  const created = [];
+  const skipped = [...plan.skipped];
+  for (const d of plan.folders) {
+    await vault.createFolder(d).catch(() => {
+    });
+    created.push(`${d}/`);
+  }
+  for (const f of plan.files) {
+    try {
+      await vault.create(f.path, f.text);
+      created.push(f.path);
+    } catch {
+      skipped.push(f.path);
+    }
+  }
+  new import_obsidian2.Notice(
+    `Constellation: created ${created.length ? created.join(", ") : "nothing"}.` + (skipped.length ? `
+Skipped (already there): ${skipped.join(", ")}.` : ""),
+    15e3
+  );
+  await guarded(
+    "Settings \u2192 Files and links \u2192 Excluded files: add AGENTS.md, repos.txt, tags.md, templates/",
+    () => setExcluded(app)
+  );
+  await guarded(`Settings \u2192 Templates \u2192 Template folder location: ${TEMPLATES_FOLDER}`, () => setTemplatesFolder(app));
+  await guarded(
+    "Graph view \u2192 Groups: add a colour per type (project, repo, endpoint, external-api, client)",
+    () => setColorGroups(app)
+  );
+}
+async function guarded(manual, apply) {
+  try {
+    const note = await apply();
+    if (note) new import_obsidian2.Notice(`Constellation: ${note}`, 15e3);
+  } catch {
+    new import_obsidian2.Notice(`Constellation could not change this Obsidian setting. Set it by hand:
+${manual}`, 0);
+  }
+}
+async function setExcluded(app) {
+  const v = app.vault;
+  v.setConfig("userIgnoreFilters", withExcluded(v.getConfig("userIgnoreFilters")));
+  const now = v.getConfig("userIgnoreFilters");
+  if (!Array.isArray(now) || withExcluded(now).length !== now.length) throw new Error("not applied");
+}
+async function editConfigJson(app, name, edit) {
+  const p = (0, import_obsidian2.normalizePath)(`${app.vault.configDir}/${name}`);
+  const a = app.vault.adapter;
+  const cfg = await a.exists(p) ? JSON.parse(await a.read(p)) : {};
+  edit(cfg);
+  await a.write(p, JSON.stringify(cfg, null, 2));
+}
+async function setTemplatesFolder(app) {
+  const tpl = app.internalPlugins.getPluginById("templates");
+  if (tpl?.enabled && tpl.instance?.options) {
+    tpl.instance.options.folder = TEMPLATES_FOLDER;
+    await tpl.saveData(tpl.instance.options);
+    return;
+  }
+  await editConfigJson(app, "templates.json", (cfg) => cfg.folder = TEMPLATES_FOLDER);
+  return "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
+}
+async function setColorGroups(app) {
+  const graph = app.internalPlugins.getPluginById("graph");
+  if (!(graph?.enabled && graph.instance?.options)) {
+    await editConfigJson(app, "graph.json", (cfg) => cfg.colorGroups = withColorGroups(cfg.colorGroups));
+    return;
+  }
+  const o = graph.instance.options;
+  o.colorGroups = withColorGroups(o.colorGroups);
+  await graph.instance.saveOptions();
+  let stale = false;
+  for (const leaf of app.workspace.getLeavesOfType("graph")) {
+    const engine = leaf.view.dataEngine;
+    if (typeof engine?.setOptions === "function") engine.setOptions(o);
+    else stale = true;
+  }
+  if (stale) return "close and reopen the graph view to see the new colour groups.";
+}
+
 // src/settings.ts
 function withDefaults(saved) {
   return { stalenessDays: 30, ...saved };
@@ -83,13 +404,14 @@ function parseDays(text) {
 }
 
 // src/main.ts
-var ConstellationPlugin = class extends import_obsidian2.Plugin {
+var ConstellationPlugin = class extends import_obsidian3.Plugin {
   async onload() {
     this.settings = withDefaults(await this.loadData());
     this.registerView(VIEW_TYPE, (leaf) => new PanelView(leaf, this));
     this.addRibbonIcon("sparkles", "Open Constellation panel", () => this.openPanel());
     this.addCommand({ id: "open-panel", name: "Open Constellation panel", callback: () => this.openPanel() });
     this.addSettingTab(new ConstellationSettingTab(this));
+    this.addCommand({ id: "initialize-vault", name: "Initialize vault", callback: () => initializeVault(this.app) });
   }
   async openPanel() {
     const ws = this.app.workspace;
@@ -105,7 +427,7 @@ var ConstellationPlugin = class extends import_obsidian2.Plugin {
     }
   }
 };
-var ConstellationSettingTab = class extends import_obsidian2.PluginSettingTab {
+var ConstellationSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(plugin) {
     super(plugin.app, plugin);
     __publicField(this, "plugin");
@@ -113,7 +435,7 @@ var ConstellationSettingTab = class extends import_obsidian2.PluginSettingTab {
   }
   display() {
     this.containerEl.empty();
-    new import_obsidian2.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
+    new import_obsidian3.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
       (text) => text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
         const days = parseDays(value);
         if (days === null) return;
