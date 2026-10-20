@@ -1,15 +1,10 @@
 import { MarkdownView, type App, type TFile } from "obsidian";
-import type ConstellationPlugin from "./main.ts";
 import { endpointAt, endpointRelations, parseNote, resolveLinks, type ParsedNote, type Ref, type Target } from "./relations.ts";
 
 type Entry = { text: string; link: string | null; broken?: boolean };
 
 /** Endpoint/Client section of the panel (ticket 04). Leave `el` empty when there is nothing to show. */
-export function renderEndpointSection(el: HTMLElement, plugin: ConstellationPlugin, file: TFile) {
-  void render(el, plugin.app, file);
-}
-
-async function render(el: HTMLElement, app: App, file: TFile) {
+export async function renderEndpointSection(el: HTMLElement, app: App, file: TFile) {
   const isEndpoints = file.name === "endpoints.md" || file.path.startsWith("external/");
   const isClient = app.metadataCache.getFileCache(file)?.frontmatter?.type === "client";
   if (file.extension !== "md" || (!isEndpoints && !isClient)) return;

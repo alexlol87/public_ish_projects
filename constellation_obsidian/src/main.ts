@@ -1,9 +1,8 @@
-import { Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
-import { archiveTicked, appendToArchive } from "./archiver.ts";
+import { Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
+import { archiveTicked, appendToArchive, isTaskNote } from "./archiver.ts";
 import { PanelView, VIEW_TYPE } from "./panel.ts";
 import { initializeVault } from "./initialize.ts";
-import { copyPrompt } from "./panel-repo.ts";
-import { repoOf } from "./repo.ts";
+import { copyPrompt, isRepoReadme } from "./panel-repo.ts";
 import { withDefaults, parseDays, type Settings } from "./settings.ts";
 
 export default class ConstellationPlugin extends Plugin {
@@ -25,10 +24,7 @@ export default class ConstellationPlugin extends Plugin {
     }
     // Re-render the panel when a Repo README changes on disk (its verified_on drives the Repo section).
     const onReadme = (file: TFile) => {
-      if (file.name.toLowerCase() !== "readme.md" || repoOf(file.path)?.folder !== file.path.slice(0, file.path.lastIndexOf("/"))) return;
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-        if (leaf.view instanceof PanelView) leaf.view.render();
-      }
+      if (isRepoReadme(file)) this.renderPanels();
     };
     this.registerEvent(this.app.metadataCache.on("changed", onReadme));
     this.registerEvent(this.app.metadataCache.on("deleted", onReadme));
@@ -37,12 +33,17 @@ export default class ConstellationPlugin extends Plugin {
       name: "Archive ticked items",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || (file.name !== "bugs.md" && file.name !== "todo.md")) return false;
+        if (!file || !isTaskNote(file.name)) return false;
         if (!checking) void this.archiveTicked(file);
         return true;
       },
     });
-    // Later tickets register their commands here.
+  }
+
+  renderPanels() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof PanelView) leaf.view.render();
+    }
   }
 
   async openPanel() {
@@ -58,7 +59,7 @@ export default class ConstellationPlugin extends Plugin {
     const repo = file.parent?.path ?? "";
     // Like the standalone app: a target inside the Repo first, then Obsidian's resolver, else the target as written.
     const resolve = (target: string) => {
-      if (vault.getFileByPath(`${repo}/${target}.md`)) return `${repo}/${target}`;
+      if (vault.getAbstractFileByPath(`${repo}/${target}.md`) instanceof TFile) return `${repo}/${target}`;
       return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
     };
     let done: ReturnType<typeof archiveTicked> = null;
@@ -72,11 +73,11 @@ export default class ConstellationPlugin extends Plugin {
       return;
     }
     try {
-      const archive = vault.getFileByPath(a.archivePath);
-      if (archive) await vault.process(archive, (old) => appendToArchive(old, a));
+      const archive = vault.getAbstractFileByPath(a.archivePath);
+      if (archive instanceof TFile) await vault.process(archive, (old) => appendToArchive(old, a));
       else {
         const folder = a.archivePath.slice(0, a.archivePath.lastIndexOf("/"));
-        if (!vault.getFolderByPath(folder)) await vault.createFolder(folder);
+        if (!(vault.getAbstractFileByPath(folder) instanceof TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
     } catch (e) {
@@ -90,9 +91,7 @@ export default class ConstellationPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof PanelView) leaf.view.render();
-    }
+    this.renderPanels();
   }
 }
 

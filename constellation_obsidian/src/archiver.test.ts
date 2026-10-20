@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { archiveTicked, appendToArchive } from "./archiver.ts";
+import { AGENTS_MD } from "./scaffold.ts";
 
-const day = new Date(2026, 9, 17);
+const day = new Date("2026-10-17T12:00:00Z");
 const BUGS =
   "# Bugs\n- [x] Order total ignores discounts → [[endpoints#POST /orders]]\n  Discounts are applied after tax.\n- [ ] Other\n";
 
@@ -60,4 +61,25 @@ test("accented and emoji text, and CRLF notes", () => {
   assert.ok(r.entries.startsWith("### Crash on 😀 input\n"));
   assert.ok(r.entries.includes("- what: Détail ünï.\n"));
   assert.ok(r.entries.includes("- source: [[endpoints#POST /orders]]\n"));
+});
+
+test("closed is the UTC date, like staleness and the standalone app", () => {
+  const late = new Date("2026-10-17T23:30:00Z"); // already the 18th east of UTC
+  const early = new Date("2026-10-17T00:30:00Z"); // still the 16th west of UTC
+  for (const on of [late, early]) assert.ok(archiveTicked("shop/r/todo.md", "- [x] A\n", on)!.entries.includes("- closed: 2026-10-17\n"));
+});
+
+test("a Link inside inline code is not the source", () => {
+  const r = archiveTicked("shop/r/bugs.md", "- [x] Docs show `[[nope]]` wrongly → [[endpoints#GET /a]]\n", day);
+  assert.ok(r!.entries.includes("- source: [[endpoints#GET /a]]\n"));
+  const none = archiveTicked("shop/r/bugs.md", "- [x] Docs show `[[nope]]`\n", day);
+  assert.ok(none!.entries.includes("- source: [[shop/r/README]]\n"));
+});
+
+test("the archive entry example in AGENTS.md round-trips through the archiver", () => {
+  const r = archiveTicked("shop/orders/bugs.md", "# Bugs\n- [x] Total ignores discounts → [[endpoints#POST /orders]]\n  Discounts are applied after tax.\n", day, (t) => `shop/orders/${t}`);
+  const example = AGENTS_MD.split("```markdown\n").find((s) => s.startsWith("### Total"))!.split("```")[0];
+  const norm = (t: string) => t.split("\n").filter((l) => l && !l.startsWith("- fix:")).map((l) => (l.startsWith("- closed:") ? "- closed: DATE" : l));
+  assert.deepEqual(norm(example), norm(r!.entries));
+  assert.ok(example.includes("- fix: "));
 });

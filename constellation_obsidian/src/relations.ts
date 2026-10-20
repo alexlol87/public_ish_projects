@@ -14,6 +14,9 @@ const ENDPOINT = /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \//;
 /** A heading title as Links name it: backticks dropped (`` `GET /a` `` -> `GET /a`). */
 const plain = (title: string) => title.replaceAll("`", "");
 
+/** Links in `text`, outside inline code (code spans don't cross lines). */
+export const linksIn = (text: string): Link[] => text.split(/\r?\n/).flatMap(lineLinks);
+
 /** Links on one line, outside inline code. */
 function lineLinks(s: string): Link[] {
   const code = [...s.matchAll(CODE)].map((m) => [m.index, m.index + m[0].length]);

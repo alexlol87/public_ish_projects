@@ -1,13 +1,13 @@
 import { Notice, normalizePath, type App } from "obsidian";
-import { planScaffold, starterFiles, withColorGroups, withExcluded, TEMPLATES_FOLDER } from "./scaffold.ts";
+import { planScaffold, starterFiles, withColorGroups, withExcluded, STARTER_FOLDERS, TEMPLATES_FOLDER } from "./scaffold.ts";
 
 // Obsidian internals used below are undocumented (see the plugin's API notes); every access is guarded.
-type Any = any;
+type ObsidianInternals = any;
 
 /** The Initialize vault command: write the starter files (never overwriting), then set up Obsidian. */
 export async function initializeVault(app: App) {
   const { vault } = app;
-  const candidates = ["templates", "external", "clients", ...starterFiles().map((f) => f.path)];
+  const candidates = [...STARTER_FOLDERS, ...starterFiles().map((f) => f.path)];
   const existing = new Set<string>();
   for (const p of candidates) if (await vault.adapter.exists(p)) existing.add(p);
   const plan = planScaffold((p) => existing.has(p));
@@ -51,14 +51,14 @@ async function guarded(manual: string, apply: () => Promise<string | void>) {
 }
 
 async function setExcluded(app: App) {
-  const v = app.vault as Any;
+  const v = app.vault as ObsidianInternals;
   v.setConfig("userIgnoreFilters", withExcluded(v.getConfig("userIgnoreFilters")));
   const now: unknown = v.getConfig("userIgnoreFilters");
   if (!Array.isArray(now) || withExcluded(now).length !== now.length) throw new Error("not applied");
 }
 
 /** Reads a JSON file in the config folder ({} when missing), lets `edit` change it, writes it back. */
-async function editConfigJson(app: App, name: string, edit: (cfg: Any) => void) {
+async function editConfigJson(app: App, name: string, edit: (cfg: ObsidianInternals) => void) {
   const p = normalizePath(`${app.vault.configDir}/${name}`);
   const a = app.vault.adapter;
   const cfg = (await a.exists(p)) ? JSON.parse(await a.read(p)) : {};
@@ -67,7 +67,7 @@ async function editConfigJson(app: App, name: string, edit: (cfg: Any) => void) 
 }
 
 async function setTemplatesFolder(app: App) {
-  const tpl = (app as Any).internalPlugins.getPluginById("templates");
+  const tpl = (app as ObsidianInternals).internalPlugins.getPluginById("templates");
   if (tpl?.enabled && tpl.instance?.options) {
     tpl.instance.options.folder = TEMPLATES_FOLDER;
     await tpl.saveData(tpl.instance.options);
@@ -79,7 +79,7 @@ async function setTemplatesFolder(app: App) {
 }
 
 async function setColorGroups(app: App) {
-  const graph = (app as Any).internalPlugins.getPluginById("graph");
+  const graph = (app as ObsidianInternals).internalPlugins.getPluginById("graph");
   if (!(graph?.enabled && graph.instance?.options)) {
     await editConfigJson(app, "graph.json", (cfg) => (cfg.colorGroups = withColorGroups(cfg.colorGroups)));
     return;
@@ -90,7 +90,7 @@ async function setColorGroups(app: App) {
   // An open graph view writes its own copy of the options back on its next change, so push ours into it.
   let stale = false;
   for (const leaf of app.workspace.getLeavesOfType("graph")) {
-    const engine = (leaf.view as Any).dataEngine;
+    const engine = (leaf.view as ObsidianInternals).dataEngine;
     if (typeof engine?.setOptions === "function") engine.setOptions(o);
     else stale = true;
   }

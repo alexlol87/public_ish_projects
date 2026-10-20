@@ -52,7 +52,7 @@ export class PanelView extends ItemView {
       el.createEl("p", { text: "Open a note" });
       return;
     }
-    renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
-    renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.plugin, file);
+    void renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
+    void renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.app, file);
   }
 }

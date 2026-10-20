@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { repoOf, staleness, isStale, label, ingestPrompt, refreshPrompt } from "./repo.ts";
+import { repoOf, staleness, isStale, label, prompt, frontmatterValue } from "./repo.ts";
 
 test("a Note two folders down belongs to the Repo project/repo", () => {
   assert.deepEqual(repoOf("shop/orders/README.md"), { folder: "shop/orders", project: "shop", name: "orders" });
@@ -50,6 +50,17 @@ test("labels match the standalone app", () => {
 });
 
 test("copy prompts match the standalone app", () => {
-  assert.equal(ingestPrompt("orders"), 'Follow AGENTS.md in this Vault and run the Ingest workflow for the repository "orders".');
-  assert.equal(refreshPrompt("orders"), 'Follow AGENTS.md in this Vault and run the Refresh workflow for the repository "orders".');
+  assert.equal(prompt("ingest", "orders"), 'Follow AGENTS.md in this Vault and run the Ingest workflow for the repository "orders".');
+  assert.equal(prompt("refresh", "orders"), 'Follow AGENTS.md in this Vault and run the Refresh workflow for the repository "orders".');
+});
+
+test("frontmatter values are read as raw text, so loose dates stay loose and are rejected", () => {
+  const readme = "---\ntype: repo\nverified_on: 2026-6-5\nrepo_url: https://x.test/a:b\n---\n# A\nverified_on: 2026-06-01\n";
+  assert.equal(frontmatterValue(readme, "type"), "repo");
+  assert.equal(frontmatterValue(readme, "verified_on"), "2026-6-5");
+  assert.equal(frontmatterValue(readme, "repo_url"), "https://x.test/a:b");
+  assert.deepEqual(staleness(frontmatterValue(readme, "verified_on"), "2026-06-30"), { kind: "malformed" });
+  assert.equal(frontmatterValue("---\r\nverified_on: 2026-06-20\r\n---\r\n", "verified_on"), "2026-06-20");
+  assert.equal(frontmatterValue("# no frontmatter\nverified_on: 2026-06-20\n", "verified_on"), undefined);
+  assert.equal(frontmatterValue("---\nverified_on: 2026-06-20\n", "verified_on"), undefined); // never closed
 });

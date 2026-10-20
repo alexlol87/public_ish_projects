@@ -27,153 +27,16 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian5 = require("obsidian");
 
-// src/archiver.ts
-var TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
-var LINK = /\[\[([^\]|#]*)(?:#([^\]|]*))?(?:\|[^\]]*)?\]\]/;
-var indent = (s) => s.length - s.trimStart().length;
-function archiveTicked(path, text, on, resolve = (t) => t) {
-  const parts = path.split("/");
-  const file = parts[parts.length - 1];
-  if (parts.length < 3 || file !== "bugs.md" && file !== "todo.md") return null;
-  const repo = parts.slice(0, -1).join("/");
-  const closed = `${on.getFullYear()}-${String(on.getMonth() + 1).padStart(2, "0")}-${String(on.getDate()).padStart(2, "0")}`;
-  const lines = text.split(/(?<=\n)/);
-  let kept = "";
-  const entries = [];
-  for (let i = 0; i < lines.length; i++) {
-    const m = TASK.exec(lines[i]);
-    if (!m || m[2] === " ") {
-      kept += lines[i];
-      continue;
-    }
-    let end = i + 1;
-    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
-    const body = m[3].trim();
-    const title = body.split(" \u2192 ")[0].trim();
-    const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
-    const link = LINK.exec(lines.slice(i, end).join(""));
-    const source = link ? `[[${resolve(link[1].trim())}${link[2] ? `#${link[2]}` : ""}]]` : `[[${repo}/README]]`;
-    entries.push(`### ${title}
-- closed: ${closed}
-- source: ${source}
-- what: ${rest || title}
-- fix: unknown
-`);
-    i = end - 1;
-  }
-  if (!entries.length) return null;
-  const bug = file === "bugs.md";
-  return {
-    text: kept,
-    count: entries.length,
-    archivePath: `${parts[0]}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
-    entries: entries.join("\n"),
-    heading: bug ? "Fixed bugs" : "Done todos"
-  };
-}
-function appendToArchive(old, a) {
-  if (old === null) return `---
-type: archive
----
-# ${a.heading}
-
-${a.entries}`;
-  return old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
-}
-
-// src/panel.ts
-var import_obsidian3 = require("obsidian");
-
-// src/panel-repo.ts
-var import_obsidian = require("obsidian");
-
-// src/repo.ts
-var APP_ONLY_TOP = ["agents.md", "repos.txt", "tags.md", "templates", ".constellation"];
-function repoOf(path) {
-  const c = path.split("/").filter((s) => s);
-  if (c.length < 3) return null;
-  const [project, name] = c;
-  if (APP_ONLY_TOP.includes(project.toLowerCase()) || ["external", "clients", "archive"].includes(project) || name === "archive") return null;
-  return { folder: `${project}/${name}`, project, name };
-}
-function utcDays(s) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const t = Date.parse(s + "T00:00:00Z");
-  return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== s ? null : t / 864e5;
-}
-function staleness(verifiedOn, today) {
-  const s = (verifiedOn ?? "").trim().replace(/^["']+|["']+$/g, "");
-  if (!s) return { kind: "never" };
-  const d = utcDays(s);
-  const now = utcDays(today);
-  return d === null || now === null ? { kind: "malformed" } : { kind: "verified", days: now - d };
-}
-function isStale(s, threshold) {
-  return !(s.kind === "verified" && s.days >= 0 && s.days <= threshold);
-}
-function label(s) {
-  if (s.kind === "never") return "never verified";
-  if (s.kind === "malformed") return "verified date unreadable";
-  if (s.days < 0) return "date is in the future";
-  if (s.days === 0) return "verified today";
-  return `verified ${s.days} day${s.days === 1 ? "" : "s"} ago`;
-}
-function ingestPrompt(repo) {
-  return `Follow AGENTS.md in this Vault and run the Ingest workflow for the repository "${repo}".`;
-}
-function refreshPrompt(repo) {
-  return `Follow AGENTS.md in this Vault and run the Refresh workflow for the repository "${repo}".`;
-}
-
-// src/panel-repo.ts
-function repoInfo(plugin, file) {
-  const repo = repoOf(file.path);
-  if (!repo) return null;
-  const folder = plugin.app.vault.getAbstractFileByPath(repo.folder);
-  const readme = folder instanceof import_obsidian.TFolder ? folder.children.find((f) => f instanceof import_obsidian.TFile && f.name.toLowerCase() === "readme.md") : void 0;
-  const fm = readme && plugin.app.metadataCache.getFileCache(readme)?.frontmatter;
-  if (fm?.type !== "repo") return { ...repo, label: "no repo README", stale: true };
-  const v = fm.verified_on;
-  const s = staleness(
-    v instanceof Date ? v.toISOString().slice(0, 10) : v == null ? void 0 : String(v),
-    (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)
-  );
-  return { ...repo, label: label(s), stale: isStale(s, plugin.settings.stalenessDays) };
-}
-function copyPrompt(file, kind, copy = true) {
-  const repo = file && repoOf(file.path);
-  if (!repo) return false;
-  if (copy) {
-    const text = kind === "ingest" ? ingestPrompt(repo.name) : refreshPrompt(repo.name);
-    navigator.clipboard.writeText(text).then(
-      () => new import_obsidian.Notice(`Copied ${kind} prompt`),
-      () => new import_obsidian.Notice(`Could not copy the ${kind} prompt`)
-    );
-  }
-  return true;
-}
-function renderRepoSection(el, plugin, file) {
-  const info = repoInfo(plugin, file);
-  if (!info) return;
-  el.createEl("h4", { text: `Repo ${info.name}` });
-  el.createDiv({ text: info.label, cls: info.stale ? "constellation-staleness mod-warning" : "constellation-staleness" });
-  const row = el.createDiv({ cls: "constellation-buttons" });
-  row.createEl("button", { text: "Copy ingest prompt" }).onclick = () => copyPrompt(file, "ingest");
-  row.createEl("button", { text: "Copy refresh prompt" }).onclick = () => copyPrompt(file, "refresh");
-}
-
-// src/panel-endpoint.ts
-var import_obsidian2 = require("obsidian");
-
 // src/relations.ts
 var HEADING = /^(#{1,6}) +(\S.*?) *$/;
 var CODE = /`[^`]+`/g;
-var LINK2 = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
+var LINK = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
 var ENDPOINT = /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \//;
 var plain = (title) => title.replaceAll("`", "");
+var linksIn = (text) => text.split(/\r?\n/).flatMap(lineLinks);
 function lineLinks(s) {
   const code = [...s.matchAll(CODE)].map((m) => [m.index, m.index + m[0].length]);
-  return [...s.matchAll(LINK2)].filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length)).map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
+  return [...s.matchAll(LINK)].filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length)).map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
 }
 function endpointHeading(headings, line) {
   let shallowest = Infinity;
@@ -250,11 +113,150 @@ function endpointRelations(notes, resolve, path, heading) {
   return { calls, calledBy, usedBy };
 }
 
-// src/panel-endpoint.ts
-function renderEndpointSection(el, plugin, file) {
-  void render(el, plugin.app, file);
+// src/archiver.ts
+var TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
+var indent = (s) => s.length - s.trimStart().length;
+var isTaskNote = (name) => name === "bugs.md" || name === "todo.md";
+function archiveTicked(path, text, on, resolve = (t) => t) {
+  const parts = path.split("/");
+  const file = parts[parts.length - 1];
+  if (parts.length < 3 || !isTaskNote(file)) return null;
+  const repo = parts.slice(0, -1).join("/");
+  const closed = on.toISOString().slice(0, 10);
+  const lines = text.split(/(?<=\n)/);
+  let kept = "";
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = TASK.exec(lines[i]);
+    if (!m || m[2] === " ") {
+      kept += lines[i];
+      continue;
+    }
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
+    const body = m[3].trim();
+    const title = body.split(" \u2192 ")[0].trim();
+    const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
+    const link = linksIn(lines.slice(i, end).join(""))[0];
+    const source = link ? `[[${resolve(link.target)}${link.heading ? `#${link.heading}` : ""}]]` : `[[${repo}/README]]`;
+    entries.push(`### ${title}
+- closed: ${closed}
+- source: ${source}
+- what: ${rest || title}
+- fix: unknown
+`);
+    i = end - 1;
+  }
+  if (!entries.length) return null;
+  const bug = file === "bugs.md";
+  return {
+    text: kept,
+    count: entries.length,
+    archivePath: `${parts[0]}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
+    entries: entries.join("\n"),
+    heading: bug ? "Fixed bugs" : "Done todos"
+  };
 }
-async function render(el, app, file) {
+function appendToArchive(old, a) {
+  if (old === null) return `---
+type: archive
+---
+# ${a.heading}
+
+${a.entries}`;
+  return old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
+}
+
+// src/panel.ts
+var import_obsidian3 = require("obsidian");
+
+// src/panel-repo.ts
+var import_obsidian = require("obsidian");
+
+// src/repo.ts
+var APP_ONLY_TOP = ["agents.md", "repos.txt", "tags.md", "templates", ".constellation"];
+function repoOf(path) {
+  const c = path.split("/").filter((s) => s);
+  if (c.length < 3) return null;
+  const [project, name] = c;
+  if (APP_ONLY_TOP.includes(project.toLowerCase()) || ["external", "clients", "archive"].includes(project) || name === "archive") return null;
+  return { folder: `${project}/${name}`, project, name };
+}
+function utcDays(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const t = Date.parse(s + "T00:00:00Z");
+  return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== s ? null : t / 864e5;
+}
+function staleness(verifiedOn, today) {
+  const s = (verifiedOn ?? "").trim().replace(/^["']+|["']+$/g, "");
+  if (!s) return { kind: "never" };
+  const d = utcDays(s);
+  const now = utcDays(today);
+  return d === null || now === null ? { kind: "malformed" } : { kind: "verified", days: now - d };
+}
+function isStale(s, threshold) {
+  return !(s.kind === "verified" && s.days >= 0 && s.days <= threshold);
+}
+function label(s) {
+  if (s.kind === "never") return "never verified";
+  if (s.kind === "malformed") return "verified date unreadable";
+  if (s.days < 0) return "date is in the future";
+  if (s.days === 0) return "verified today";
+  return `verified ${s.days} day${s.days === 1 ? "" : "s"} ago`;
+}
+function prompt(kind, repo) {
+  return `Follow AGENTS.md in this Vault and run the ${kind === "ingest" ? "Ingest" : "Refresh"} workflow for the repository "${repo}".`;
+}
+function frontmatterValue(text, key) {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trimEnd() !== "---") return void 0;
+  const close = lines.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
+  let value;
+  for (const l of lines.slice(1, Math.max(close, 0))) {
+    const at = l.indexOf(":");
+    if (at >= 0 && l.slice(0, at).trim() === key) value = l.slice(at + 1).trim();
+  }
+  return value;
+}
+
+// src/panel-repo.ts
+function isRepoReadme(file) {
+  return file.name.toLowerCase() === "readme.md" && repoOf(file.path)?.folder === file.parent?.path;
+}
+async function repoInfo(plugin, file) {
+  const repo = repoOf(file.path);
+  if (!repo) return null;
+  const folder = plugin.app.vault.getAbstractFileByPath(repo.folder);
+  const readme = folder instanceof import_obsidian.TFolder ? folder.children.find((f) => f instanceof import_obsidian.TFile && isRepoReadme(f)) : void 0;
+  const text = readme ? await plugin.app.vault.cachedRead(readme) : "";
+  if (frontmatterValue(text, "type") !== "repo") return { ...repo, label: "no repo README", stale: true };
+  const s = staleness(frontmatterValue(text, "verified_on"), (/* @__PURE__ */ new Date()).toISOString().slice(0, 10));
+  return { ...repo, label: label(s), stale: isStale(s, plugin.settings.stalenessDays) };
+}
+function copyPrompt(file, kind, copy = true) {
+  const repo = file && repoOf(file.path);
+  if (!repo) return false;
+  if (copy) {
+    navigator.clipboard.writeText(prompt(kind, repo.name)).then(
+      () => new import_obsidian.Notice(`Copied ${kind} prompt`),
+      () => new import_obsidian.Notice(`Could not copy the ${kind} prompt`)
+    );
+  }
+  return true;
+}
+async function renderRepoSection(el, plugin, file) {
+  const info = await repoInfo(plugin, file);
+  if (!info) return;
+  el.createEl("h4", { text: `Repo ${info.name}` });
+  el.createDiv({ text: info.label, cls: info.stale ? "constellation-staleness mod-warning" : "constellation-staleness" });
+  const row = el.createDiv({ cls: "constellation-buttons" });
+  row.createEl("button", { text: "Copy ingest prompt" }).onclick = () => copyPrompt(file, "ingest");
+  row.createEl("button", { text: "Copy refresh prompt" }).onclick = () => copyPrompt(file, "refresh");
+}
+
+// src/panel-endpoint.ts
+var import_obsidian2 = require("obsidian");
+async function renderEndpointSection(el, app, file) {
   const isEndpoints = file.name === "endpoints.md" || file.path.startsWith("external/");
   const isClient = app.metadataCache.getFileCache(file)?.frontmatter?.type === "client";
   if (file.extension !== "md" || !isEndpoints && !isClient) return;
@@ -352,8 +354,8 @@ var PanelView = class extends import_obsidian3.ItemView {
       el.createEl("p", { text: "Open a note" });
       return;
     }
-    renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
-    renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.plugin, file);
+    void renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
+    void renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.app, file);
   }
 };
 
@@ -565,10 +567,11 @@ function starterFiles() {
     ...Object.entries(TEMPLATES).map(([name, text]) => ({ path: `templates/${name}.md`, text }))
   ];
 }
+var STARTER_FOLDERS = ["templates", "external", "clients"];
 function planScaffold(exists) {
   const all = starterFiles();
   return {
-    folders: ["templates", "external", "clients"].filter((d) => !exists(d)),
+    folders: STARTER_FOLDERS.filter((d) => !exists(d)),
     files: all.filter((f) => !exists(f.path)),
     skipped: all.filter((f) => exists(f.path)).map((f) => f.path)
   };
@@ -594,7 +597,7 @@ function withColorGroups(current) {
 // src/initialize.ts
 async function initializeVault(app) {
   const { vault } = app;
-  const candidates = ["templates", "external", "clients", ...starterFiles().map((f) => f.path)];
+  const candidates = [...STARTER_FOLDERS, ...starterFiles().map((f) => f.path)];
   const existing = /* @__PURE__ */ new Set();
   for (const p of candidates) if (await vault.adapter.exists(p)) existing.add(p);
   const plan = planScaffold((p) => existing.has(p));
@@ -684,7 +687,7 @@ function withDefaults(saved) {
 }
 function parseDays(text) {
   const t = text.trim();
-  return /^\d+$/.test(t) ? Number(t) : null;
+  return /^[1-9]\d*$/.test(t) ? Number(t) : null;
 }
 
 // src/main.ts
@@ -704,10 +707,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
       });
     }
     const onReadme = (file) => {
-      if (file.name.toLowerCase() !== "readme.md" || repoOf(file.path)?.folder !== file.path.slice(0, file.path.lastIndexOf("/"))) return;
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-        if (leaf.view instanceof PanelView) leaf.view.render();
-      }
+      if (isRepoReadme(file)) this.renderPanels();
     };
     this.registerEvent(this.app.metadataCache.on("changed", onReadme));
     this.registerEvent(this.app.metadataCache.on("deleted", onReadme));
@@ -716,11 +716,16 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
       name: "Archive ticked items",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || file.name !== "bugs.md" && file.name !== "todo.md") return false;
+        if (!file || !isTaskNote(file.name)) return false;
         if (!checking) void this.archiveTicked(file);
         return true;
       }
     });
+  }
+  renderPanels() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof PanelView) leaf.view.render();
+    }
   }
   async openPanel() {
     const ws = this.app.workspace;
@@ -733,7 +738,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     const { vault, metadataCache } = this.app;
     const repo = file.parent?.path ?? "";
     const resolve = (target) => {
-      if (vault.getFileByPath(`${repo}/${target}.md`)) return `${repo}/${target}`;
+      if (vault.getAbstractFileByPath(`${repo}/${target}.md`) instanceof import_obsidian5.TFile) return `${repo}/${target}`;
       return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
     };
     let done = null;
@@ -747,11 +752,11 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
       return;
     }
     try {
-      const archive = vault.getFileByPath(a.archivePath);
-      if (archive) await vault.process(archive, (old) => appendToArchive(old, a));
+      const archive = vault.getAbstractFileByPath(a.archivePath);
+      if (archive instanceof import_obsidian5.TFile) await vault.process(archive, (old) => appendToArchive(old, a));
       else {
         const folder = a.archivePath.slice(0, a.archivePath.lastIndexOf("/"));
-        if (!vault.getFolderByPath(folder)) await vault.createFolder(folder);
+        if (!(vault.getAbstractFileByPath(folder) instanceof import_obsidian5.TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
     } catch (e) {
@@ -765,9 +770,7 @@ ${a.entries}`);
   }
   async saveSettings() {
     await this.saveData(this.settings);
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof PanelView) leaf.view.render();
-    }
+    this.renderPanels();
   }
 };
 var ConstellationSettingTab = class extends import_obsidian5.PluginSettingTab {

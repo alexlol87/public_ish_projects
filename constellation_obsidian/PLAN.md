@@ -34,7 +34,14 @@ app-only files.
 
 ```
 constellation_obsidian/
-├── manifest.json  package.json  tsconfig.json  install.sh
-├── src/            main.ts (plugin, commands, panel), plus pure modules with *.test.ts beside them
+├── manifest.json  package.json  package-lock.json  tsconfig.json  styles.css  install.sh
+├── docs/adr/       this folder's decisions
+├── src/
+│   ├── main.ts             plugin: commands, settings tab, Archive ticked items
+│   ├── panel.ts            right-sidebar view; renders the two sections below
+│   ├── panel-repo.ts       Repo section: staleness, copy prompts
+│   ├── panel-endpoint.ts   Endpoint/Client section: Calls, Called by, Used by, Uses
+│   ├── initialize.ts       Initialize vault command (starter files, Obsidian settings)
+│   └── pure, with *.test.ts beside them: settings.ts, repo.ts, relations.ts, archiver.ts, scaffold.ts
 └── plugin/constellation/   built output, committed
 ```

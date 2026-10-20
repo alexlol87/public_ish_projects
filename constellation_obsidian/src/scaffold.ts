@@ -215,6 +215,9 @@ export function starterFiles(): StarterFile[] {
   ];
 }
 
+/** The folders Initialize creates. */
+export const STARTER_FOLDERS = ["templates", "external", "clients"];
+
 export interface ScaffoldPlan {
   folders: string[];
   files: StarterFile[];
@@ -225,7 +228,7 @@ export interface ScaffoldPlan {
 export function planScaffold(exists: (path: string) => boolean): ScaffoldPlan {
   const all = starterFiles();
   return {
-    folders: ["templates", "external", "clients"].filter((d) => !exists(d)),
+    folders: STARTER_FOLDERS.filter((d) => !exists(d)),
     files: all.filter((f) => !exists(f.path)),
     skipped: all.filter((f) => exists(f.path)).map((f) => f.path),
   };

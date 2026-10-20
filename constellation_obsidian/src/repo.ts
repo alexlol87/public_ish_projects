@@ -45,10 +45,19 @@ export function label(s: Staleness): string {
   if (s.days === 0) return "verified today";
   return `verified ${s.days} day${s.days === 1 ? "" : "s"} ago`;
 }
-export function ingestPrompt(repo: string): string {
-  return `Follow AGENTS.md in this Vault and run the Ingest workflow for the repository "${repo}".`;
+export function prompt(kind: "ingest" | "refresh", repo: string): string {
+  return `Follow AGENTS.md in this Vault and run the ${kind === "ingest" ? "Ingest" : "Refresh"} workflow for the repository "${repo}".`;
 }
 
-export function refreshPrompt(repo: string): string {
-  return `Follow AGENTS.md in this Vault and run the Refresh workflow for the repository "${repo}".`;
+/** A frontmatter value as raw text (parser.rs `frontmatter_line`): Obsidian's cache would turn dates into Date objects. */
+export function frontmatterValue(text: string, key: string): string | undefined {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trimEnd() !== "---") return undefined;
+  const close = lines.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
+  let value: string | undefined;
+  for (const l of lines.slice(1, Math.max(close, 0))) {
+    const at = l.indexOf(":");
+    if (at >= 0 && l.slice(0, at).trim() === key) value = l.slice(at + 1).trim();
+  }
+  return value;
 }

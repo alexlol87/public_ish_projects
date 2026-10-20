@@ -11,8 +11,8 @@ test("a saved threshold is kept", () => {
   assert.deepEqual(withDefaults({ stalenessDays: 7 }), { stalenessDays: 7 });
 });
 
-test("days input accepts a whole number of days, rejects anything else", () => {
+test("days input accepts a whole number of days >= 1, rejects anything else", () => {
   assert.equal(parseDays("14"), 14);
-  assert.equal(parseDays(" 0 "), 0);
-  for (const bad of ["", "abc", "-3", "2.5", "1e3"]) assert.equal(parseDays(bad), null, bad);
+  assert.equal(parseDays(" 1 "), 1);
+  for (const bad of ["", "abc", "-3", "2.5", "1e3", "0", " 0 "]) assert.equal(parseDays(bad), null, bad);
 });

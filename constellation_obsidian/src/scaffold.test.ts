@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { starterFiles, planScaffold, withExcluded, withColorGroups } from "./scaffold.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { starterFiles, planScaffold, withExcluded, withColorGroups, AGENTS_MD, TEMPLATES } from "./scaffold.ts";
 
 test("starter set matches the standalone app's (minus its own .constellation folder)", () => {
   const paths = starterFiles().map((f) => f.path).sort();
@@ -64,4 +66,17 @@ test("graph colour groups: one per Note type, replacing ours, keeping the user's
   const merged = withColorGroups([mine, { query: "[type:repo]", color: { a: 1, rgb: 1 } }]);
   assert.deepEqual(merged, [mine, ...ours]);
   assert.deepEqual(withColorGroups(ours), ours);
+});
+
+// Drift check against the standalone app's agent_files.rs (same repo, sibling folder).
+const RUST = fileURLToPath(new URL("../../constellation/core/src/agent_files.rs", import.meta.url));
+test("AGENTS.md and templates equal the standalone app's text", { skip: !existsSync(RUST) && `${RUST} not found` }, () => {
+  const rs = readFileSync(RUST, "utf8");
+  const raws = [...rs.matchAll(/r####"([\s\S]*?)"####/g)].map((m) => m[1]);
+  const names = [...rs.matchAll(/\(\s*"([^"]+)",\s*r####"/g)].map((m) => m[1]);
+  const agents = /AGENTS_MD: &str = r####"([\s\S]*?)"####/.exec(rs)![1];
+  assert.equal(AGENTS_MD, agents);
+  assert.equal(names.length, 12);
+  assert.deepEqual(Object.keys(TEMPLATES).sort(), [...names].sort());
+  for (const [i, name] of names.entries()) assert.equal(TEMPLATES[name], raws[raws.length - names.length + i], name);
 });

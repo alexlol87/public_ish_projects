@@ -1,5 +1,6 @@
 // Archive ticked items (ADR 0002): ticked Bugs / Todos of a Repo's bugs.md / todo.md move to the Project's archive Note.
 // Port of constellation/core/src/archiver.rs, but for every ticked item of the Note at once.
+import { linksIn } from "./relations.ts";
 
 export interface Archived {
   text: string; // the Note without its ticked items
@@ -11,16 +12,18 @@ export interface Archived {
 
 // groups: 1 indent, 2 box char, 3 rest of the line
 const TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
-const LINK = /\[\[([^\]|#]*)(?:#([^\]|]*))?(?:\|[^\]]*)?\]\]/;
 const indent = (s: string) => s.length - s.trimStart().length;
+
+/** A Repo's bugs.md or todo.md, by file name. */
+export const isTaskNote = (name: string) => name === "bugs.md" || name === "todo.md";
 
 /** `resolve` maps a Link target to the vault path of its Note, without `.md`. Null: not a Repo's bugs.md / todo.md, or nothing ticked. */
 export function archiveTicked(path: string, text: string, on: Date, resolve: (target: string) => string = (t) => t): Archived | null {
   const parts = path.split("/");
   const file = parts[parts.length - 1];
-  if (parts.length < 3 || (file !== "bugs.md" && file !== "todo.md")) return null;
+  if (parts.length < 3 || !isTaskNote(file)) return null;
   const repo = parts.slice(0, -1).join("/");
-  const closed = `${on.getFullYear()}-${String(on.getMonth() + 1).padStart(2, "0")}-${String(on.getDate()).padStart(2, "0")}`;
+  const closed = on.toISOString().slice(0, 10); // UTC, like staleness and the standalone app
 
   const lines = text.split(/(?<=\n)/);
   let kept = "";
@@ -37,8 +40,8 @@ export function archiveTicked(path: string, text: string, on: Date, resolve: (ta
     const body = m[3].trim();
     const title = body.split(" → ")[0].trim();
     const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
-    const link = LINK.exec(lines.slice(i, end).join(""));
-    const source = link ? `[[${resolve(link[1].trim())}${link[2] ? `#${link[2]}` : ""}]]` : `[[${repo}/README]]`;
+    const link = linksIn(lines.slice(i, end).join(""))[0];
+    const source = link ? `[[${resolve(link.target)}${link.heading ? `#${link.heading}` : ""}]]` : `[[${repo}/README]]`;
     entries.push(`### ${title}\n- closed: ${closed}\n- source: ${source}\n- what: ${rest || title}\n- fix: unknown\n`);
     i = end - 1;
   }
