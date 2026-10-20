@@ -24,6 +24,7 @@ GROUPS = [
     ("superpowers", "Superpowers (obra)"),
     ("caveman", "Caveman"),
     ("ponytail", "Ponytail"),
+    ("ponytail-companions", "Ponytail companions (audit, debt, gain, help, review)"),
     ("shadcn", "shadcn"),
     ("cursor", "Cursor"),
     ("humanlayer", "HumanLayer"),
