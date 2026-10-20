@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { starterFiles, planScaffold, withExcluded, withColorGroups, AGENTS_MD, TEMPLATES } from "./scaffold.ts";
+import { starterFiles, planScaffold, withExcluded, withColorGroups, colorGroupsLeftAlone, chooseTemplatesFolder, AGENTS_MD, TEMPLATES } from "./scaffold.ts";
 
 test("starter set matches the standalone app's (minus its own .constellation folder)", () => {
   const paths = starterFiles().map((f) => f.path).sort();
@@ -63,9 +63,18 @@ test("graph colour groups: one per Note type, replacing ours, keeping the user's
   assert.deepEqual(ours.map((g) => g.query), ["[type:project]", "[type:repo]", "[type:endpoint]", '[type:"external-api"]', "[type:client]"]);
   assert.deepEqual(ours[0].color, { a: 1, rgb: 0xd4a72c });
   const mine = { query: "tag:#urgent", color: { a: 1, rgb: 0xff0000 } };
-  const merged = withColorGroups([mine, { query: "[type:repo]", color: { a: 1, rgb: 1 } }]);
-  assert.deepEqual(merged, [mine, ...ours]);
+  const picked = { query: "[type:repo]", color: { a: 1, rgb: 1 } };
+  const merged = withColorGroups([mine, picked]);
+  assert.deepEqual(merged, [mine, picked, ...ours.filter((g) => g.query !== picked.query)]);
   assert.deepEqual(withColorGroups(ours), ours);
+  assert.deepEqual(colorGroupsLeftAlone([mine, picked]), ["[type:repo]"]);
+  assert.deepEqual(colorGroupsLeftAlone(undefined), []);
+});
+
+test("templates folder: an existing choice is kept, only an unset one is filled in", () => {
+  assert.deepEqual(chooseTemplatesFolder(undefined), { folder: "templates", keptFrom: null });
+  assert.deepEqual(chooseTemplatesFolder("  "), { folder: "templates", keptFrom: null });
+  assert.deepEqual(chooseTemplatesFolder("My templates"), { folder: "My templates", keptFrom: "My templates" });
 });
 
 // Drift check against the standalone app's agent_files.rs (same repo, sibling folder).

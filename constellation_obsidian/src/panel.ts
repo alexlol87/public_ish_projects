@@ -32,6 +32,7 @@ export class PanelView extends ItemView {
     // Note changes, including ones made on disk, and the cursor moving to another line.
     const later = debounce(() => this.render(), 300, true);
     this.registerEvent(this.app.metadataCache.on("changed", later));
+    this.registerEvent(this.app.workspace.on("layout-change", later)); // editing <-> reading view
     this.registerEvent(this.app.vault.on("delete", later));
     this.registerEvent(this.app.vault.on("rename", later));
     let lastLine = -1;
@@ -53,7 +54,11 @@ export class PanelView extends ItemView {
       el.createEl("p", { text: "Open a note" });
       return;
     }
-    void renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
-    void renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.app, file);
+    const repo = el.createDiv({ cls: "constellation-section constellation-repo" });
+    const endpoint = el.createDiv({ cls: "constellation-section constellation-endpoint" });
+    void Promise.all([renderRepoSection(repo, this.plugin, file), renderEndpointSection(endpoint, this.app, file)]).then(() => {
+      if (!repo.hasChildNodes() && !endpoint.hasChildNodes() && repo.isConnected)
+        el.createEl("p", { text: "Nothing to show for this note: open a note in a Repo, an Endpoint heading or a Client note.", cls: "constellation-none" });
+    });
   }
 }

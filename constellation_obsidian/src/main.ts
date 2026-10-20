@@ -1,9 +1,10 @@
-import { Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
-import { archiveTicked, appendToArchive, isTaskNote } from "./archiver.ts";
+import { MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
+import { archiveTicked, appendToArchive, clampPos, mapCursor } from "./archiver.ts";
+import { repoOf } from "./repo.ts";
 import { PanelView, VIEW_TYPE } from "./panel.ts";
 import { initializeVault } from "./initialize.ts";
 import { copyPrompt, isRepoReadme } from "./panel-repo.ts";
-import { withDefaults, parseDays, type Settings } from "./settings.ts";
+import { withDefaults, parseDays, MAX_DAYS, type Settings } from "./settings.ts";
 
 export default class ConstellationPlugin extends Plugin {
   declare settings: Settings;
@@ -31,11 +32,11 @@ export default class ConstellationPlugin extends Plugin {
     this.addCommand({
       id: "archive-ticked-items",
       name: "Archive ticked items",
-      checkCallback: (checking) => {
+      // Always available, so a hotkey outside a Repo's bugs.md / todo.md gets the notice instead of silence.
+      callback: () => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || !isTaskNote(file.name)) return false;
-        if (!checking) void this.archiveTicked(file);
-        return true;
+        if (file) void this.archiveTicked(file);
+        else new Notice("Nothing to archive: open a Repo's bugs.md or todo.md.");
       },
     });
   }
@@ -54,25 +55,41 @@ export default class ConstellationPlugin extends Plugin {
     ws.revealLeaf(leaf);
   }
 
+  /** Edit a Note as the user sees it: through its open editor (one undoable change, unsaved typing kept), else on disk. */
+  editorOf(file: TFile) {
+    return this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v): v is MarkdownView => v instanceof MarkdownView && v.file === file)?.editor;
+  }
+
+  async edit(file: TFile, fn: (text: string) => string, moveCursor = (p: { line: number; ch: number }) => p) {
+    const editor = this.editorOf(file);
+    if (!editor) {
+      await this.app.vault.process(file, fn);
+      return;
+    }
+    const before = editor.getValue();
+    const after = fn(before);
+    if (after === before) return;
+    const cursor = editor.getCursor();
+    editor.setValue(after);
+    editor.setCursor(clampPos(after, moveCursor(cursor)));
+  }
+
   async archiveTicked(file: TFile) {
     const { vault, metadataCache } = this.app;
-    const repo = file.parent?.path ?? "";
+    const repo = repoOf(file.path)?.folder ?? "";
     // Like the standalone app: a target inside the Repo first, then Obsidian's resolver, else the target as written.
     const resolve = (target: string) => {
       if (vault.getAbstractFileByPath(`${repo}/${target}.md`) instanceof TFile) return `${repo}/${target}`;
       return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
     };
-    let done: ReturnType<typeof archiveTicked> = null;
-    await vault.process(file, (text) => {
-      done = archiveTicked(file.path, text, new Date(), resolve);
-      return done?.text ?? text;
-    });
-    const a = done as ReturnType<typeof archiveTicked>;
-    if (!a) {
-      new Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
-      return;
-    }
+    // Order matters: write the archive first, only then remove the items from the Note, so a failure can't lose them.
     try {
+      const on = new Date();
+      const a = archiveTicked(file.path, this.editorOf(file)?.getValue() ?? (await vault.read(file)), on, resolve);
+      if (!a) {
+        new Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
+        return;
+      }
       const archive = vault.getAbstractFileByPath(a.archivePath);
       if (archive instanceof TFile) await vault.process(archive, (old) => appendToArchive(old, a));
       else {
@@ -80,13 +97,11 @@ export default class ConstellationPlugin extends Plugin {
         if (!(vault.getAbstractFileByPath(folder) instanceof TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
+      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text, (pos) => mapCursor(a.keep, pos));
+      new Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
     } catch (e) {
-      // The items are already gone from the Note: put the entries back in it rather than lose them.
-      await vault.process(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}\n<!-- archive failed, entries kept here -->\n${a.entries}`);
-      new Notice(`Could not write ${a.archivePath}: ${e}. The entries were kept at the end of ${file.name}.`);
-      return;
+      new Notice(`Archive failed: ${e}. Check ${file.name} and the archive Note before retrying.`);
     }
-    new Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
   }
 
   async saveSettings() {
@@ -109,12 +124,23 @@ class ConstellationSettingTab extends PluginSettingTab {
       .setName("Staleness threshold (days)")
       .setDesc("A Repo verified longer ago than this is highlighted as stale.")
       .addText((text) =>
-        text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
-          const days = parseDays(value);
-          if (days === null) return;
-          this.plugin.settings.stalenessDays = days;
-          await this.plugin.saveSettings();
-        }),
+        text
+          .setValue(String(this.plugin.settings.stalenessDays))
+          .onChange(async (value) => {
+            const days = parseDays(value);
+            text.inputEl.toggleClass("mod-warning", days === null);
+            error.setText(days === null ? `Enter a whole number of days from 1 to ${MAX_DAYS}. Still using ${this.plugin.settings.stalenessDays}.` : "");
+            if (days === null) return;
+            this.plugin.settings.stalenessDays = days;
+            await this.plugin.saveSettings();
+          })
+          .inputEl.addEventListener("blur", () => {
+            // Show what is in force rather than the rejected text.
+            text.setValue(String(this.plugin.settings.stalenessDays));
+            text.inputEl.removeClass("mod-warning");
+            error.setText("");
+          }),
       );
+    const error = this.containerEl.createDiv({ cls: "setting-item-description mod-warning" });
   }
 }

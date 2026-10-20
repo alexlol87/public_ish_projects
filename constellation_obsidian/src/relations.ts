@@ -4,25 +4,30 @@ export type Link = { target: string; heading: string | null };
 export type Section = { heading: string; links: Link[] };
 type Heading = { level: number; title: string; line: number };
 /** `uses` is filled only in Client Notes (frontmatter `type: client`). */
-export type ParsedNote = { headings: Heading[]; calls: Section[]; uses: Link[] };
+export type ParsedNote = { headings: Heading[]; calls: Section[]; uses: Link[]; client: boolean };
 
 const HEADING = /^(#{1,6}) +(\S.*?) *$/;
 const CODE = /`[^`]+`/g;
-const LINK = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
+const LINK = /\[\[([^\[\]|#]*)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
 const ENDPOINT = /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \//;
 
 /** A heading title as Links name it: backticks dropped (`` `GET /a` `` -> `GET /a`). */
 const plain = (title: string) => title.replaceAll("`", "");
 
-/** Links in `text`, outside inline code (code spans don't cross lines). */
-export const linksIn = (text: string): Link[] => text.split(/\r?\n/).flatMap(lineLinks);
+/** Heading text as Obsidian compares it for Links: no backticks, `# | ^ : [ ]` read as spaces, case and spacing folded. */
+const norm = (s: string) => plain(s).replace(/[#|^:\[\]]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+export const same = (a: string, b: string) => norm(a) === norm(b);
 
-/** Links on one line, outside inline code. */
+/** Links in `text`, outside inline code (code spans don't cross lines). */
+export const linksIn = (text: string): Link[] => text.split(/\r?\n/).flatMap(lineLinks).filter((l) => l.target);
+
+/** Links on one line, outside inline code; `[[#h]]` has an empty target (the Note itself). */
 function lineLinks(s: string): Link[] {
   const code = [...s.matchAll(CODE)].map((m) => [m.index, m.index + m[0].length]);
   return [...s.matchAll(LINK)]
-    .filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length))
-    .map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
+    .filter((m) => !code.some(([a, b]) => a <= m.index && m.index + m[0].length <= b))
+    .map((m) => ({ target: m[1].trim(), heading: m[2] || null }))
+    .filter((l) => l.target || l.heading);
 }
 
 /** The Endpoint heading a line sits in: the nearest one above, unless a sibling or parent heading comes in between. */
@@ -43,7 +48,7 @@ export function parseNote(text: string): ParsedNote {
     const close = all.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
     if (close > 0) {
       start = close + 1;
-      client = all.slice(1, close).some((l) => /^type:\s*client\s*$/.test(l));
+      client = all.slice(1, close).some((l) => /^type:\s*(["']?)client\1\s*$/.test(l));
     }
   }
   // Body lines outside fenced code, with their line numbers.
@@ -56,7 +61,7 @@ export function parseNote(text: string): ParsedNote {
   const headings: Heading[] = [];
   for (const l of body) {
     const m = HEADING.exec(l.text);
-    if (m) headings.push({ level: m[1].length, title: m[2], line: l.line });
+    if (m) headings.push({ level: m[1].length, title: m[2].replace(/ +#+$/, ""), line: l.line });
   }
   const calls: Section[] = [];
   const uses: Link[] = [];
@@ -65,7 +70,7 @@ export function parseNote(text: string): ParsedNote {
     if (label !== "Calls:" && label !== "Uses:") continue;
     const at = body[i].line;
     const links: Link[] = [];
-    while (i + 1 < body.length && /^[-*] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
+    while (i + 1 < body.length && /^[-*+] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
     if (label === "Uses:") {
       if (client) uses.push(...links);
       continue;
@@ -73,7 +78,7 @@ export function parseNote(text: string): ParsedNote {
     const h = endpointHeading(headings, at);
     if (h) calls.push({ heading: plain(h.title), links });
   }
-  return { headings, calls, uses };
+  return { headings, calls, uses, client };
 }
 
 /** The Endpoint (plain title) the 0-based `line` sits in, else null. */
@@ -89,21 +94,24 @@ export type Target = Link & { path: string | null; broken: boolean };
 /** A Note (and the Endpoint in it, for a Call) that points at an Endpoint. */
 export type Ref = { path: string; heading: string | null };
 
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+/** An empty target is the Note the Link is written in. */
+const at = (resolve: Resolve): Resolve => (t, from) => (t === "" ? from : resolve(t, from));
 
 /** Resolves `links` written in Note `from`, marking broken ones. */
 export function resolveLinks(notes: Map<string, ParsedNote>, resolve: Resolve, from: string, links: Link[]): Target[] {
+  resolve = at(resolve);
   return links.map((l) => {
     const path = resolve(l.target, from);
     const note = path === null ? undefined : notes.get(path);
-    const headingOk = l.heading === null || !!note?.headings.some((h) => same(plain(h.title), plain(l.heading!)));
+    const headingOk = l.heading === null || !!note?.headings.some((h) => same(h.title, l.heading!));
     return { ...l, path, broken: path === null || !headingOk };
   });
 }
 
 /** Relations of Endpoint `heading` in Note `path`: what it Calls, what Calls it, which Clients use it. */
 export function endpointRelations(notes: Map<string, ParsedNote>, resolve: Resolve, path: string, heading: string) {
-  const hits = (from: string) => (l: Link) => resolve(l.target, from) === path && l.heading !== null && same(plain(l.heading), heading);
+  resolve = at(resolve);
+  const hits = (from: string) => (l: Link) => resolve(l.target, from) === path && l.heading !== null && same(l.heading, heading);
   const calls: Target[] = [];
   const calledBy: Ref[] = [];
   const usedBy: Ref[] = [];

@@ -30,13 +30,15 @@ var import_obsidian5 = require("obsidian");
 // src/relations.ts
 var HEADING = /^(#{1,6}) +(\S.*?) *$/;
 var CODE = /`[^`]+`/g;
-var LINK = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
+var LINK = /\[\[([^\[\]|#]*)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
 var ENDPOINT = /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \//;
 var plain = (title) => title.replaceAll("`", "");
-var linksIn = (text) => text.split(/\r?\n/).flatMap(lineLinks);
+var norm = (s) => plain(s).replace(/[#|^:\[\]]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+var same = (a, b) => norm(a) === norm(b);
+var linksIn = (text) => text.split(/\r?\n/).flatMap(lineLinks).filter((l) => l.target);
 function lineLinks(s) {
   const code = [...s.matchAll(CODE)].map((m) => [m.index, m.index + m[0].length]);
-  return [...s.matchAll(LINK)].filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length)).map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
+  return [...s.matchAll(LINK)].filter((m) => !code.some(([a, b]) => a <= m.index && m.index + m[0].length <= b)).map((m) => ({ target: m[1].trim(), heading: m[2] || null })).filter((l) => l.target || l.heading);
 }
 function endpointHeading(headings, line) {
   let shallowest = Infinity;
@@ -54,7 +56,7 @@ function parseNote(text) {
     const close = all.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
     if (close > 0) {
       start = close + 1;
-      client = all.slice(1, close).some((l) => /^type:\s*client\s*$/.test(l));
+      client = all.slice(1, close).some((l) => /^type:\s*(["']?)client\1\s*$/.test(l));
     }
   }
   const body = [];
@@ -66,40 +68,42 @@ function parseNote(text) {
   const headings = [];
   for (const l of body) {
     const m = HEADING.exec(l.text);
-    if (m) headings.push({ level: m[1].length, title: m[2], line: l.line });
+    if (m) headings.push({ level: m[1].length, title: m[2].replace(/ +#+$/, ""), line: l.line });
   }
   const calls = [];
   const uses = [];
   for (let i = 0; i < body.length; i++) {
     const label2 = body[i].text.trim();
     if (label2 !== "Calls:" && label2 !== "Uses:") continue;
-    const at = body[i].line;
+    const at2 = body[i].line;
     const links = [];
-    while (i + 1 < body.length && /^[-*] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
+    while (i + 1 < body.length && /^[-*+] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
     if (label2 === "Uses:") {
       if (client) uses.push(...links);
       continue;
     }
-    const h = endpointHeading(headings, at);
+    const h = endpointHeading(headings, at2);
     if (h) calls.push({ heading: plain(h.title), links });
   }
-  return { headings, calls, uses };
+  return { headings, calls, uses, client };
 }
 function endpointAt(note, line) {
   const h = endpointHeading(note.headings, line);
   return h && plain(h.title);
 }
-var same = (a, b) => a.toLowerCase() === b.toLowerCase();
+var at = (resolve) => (t, from) => t === "" ? from : resolve(t, from);
 function resolveLinks(notes, resolve, from, links) {
+  resolve = at(resolve);
   return links.map((l) => {
     const path = resolve(l.target, from);
     const note = path === null ? void 0 : notes.get(path);
-    const headingOk = l.heading === null || !!note?.headings.some((h) => same(plain(h.title), plain(l.heading)));
+    const headingOk = l.heading === null || !!note?.headings.some((h) => same(h.title, l.heading));
     return { ...l, path, broken: path === null || !headingOk };
   });
 }
 function endpointRelations(notes, resolve, path, heading) {
-  const hits = (from) => (l) => resolve(l.target, from) === path && l.heading !== null && same(plain(l.heading), heading);
+  resolve = at(resolve);
+  const hits = (from) => (l) => resolve(l.target, from) === path && l.heading !== null && same(l.heading, heading);
   const calls = [];
   const calledBy = [];
   const usedBy = [];
@@ -112,66 +116,6 @@ function endpointRelations(notes, resolve, path, heading) {
   }
   return { calls, calledBy, usedBy };
 }
-
-// src/archiver.ts
-var TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
-var indent = (s) => s.length - s.trimStart().length;
-var isTaskNote = (name) => name === "bugs.md" || name === "todo.md";
-function archiveTicked(path, text, on, resolve = (t) => t) {
-  const parts = path.split("/");
-  const file = parts[parts.length - 1];
-  if (parts.length < 3 || !isTaskNote(file)) return null;
-  const repo = parts.slice(0, -1).join("/");
-  const closed = on.toISOString().slice(0, 10);
-  const lines = text.split(/(?<=\n)/);
-  let kept = "";
-  const entries = [];
-  for (let i = 0; i < lines.length; i++) {
-    const m = TASK.exec(lines[i]);
-    if (!m || m[2] === " ") {
-      kept += lines[i];
-      continue;
-    }
-    let end = i + 1;
-    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
-    const body = m[3].trim();
-    const title = body.split(" \u2192 ")[0].trim();
-    const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
-    const link = linksIn(lines.slice(i, end).join(""))[0];
-    const source = link ? `[[${resolve(link.target)}${link.heading ? `#${link.heading}` : ""}]]` : `[[${repo}/README]]`;
-    entries.push(`### ${title}
-- closed: ${closed}
-- source: ${source}
-- what: ${rest || title}
-- fix: unknown
-`);
-    i = end - 1;
-  }
-  if (!entries.length) return null;
-  const bug = file === "bugs.md";
-  return {
-    text: kept,
-    count: entries.length,
-    archivePath: `${parts[0]}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
-    entries: entries.join("\n"),
-    heading: bug ? "Fixed bugs" : "Done todos"
-  };
-}
-function appendToArchive(old, a) {
-  if (old === null) return `---
-type: archive
----
-# ${a.heading}
-
-${a.entries}`;
-  return old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
-}
-
-// src/panel.ts
-var import_obsidian3 = require("obsidian");
-
-// src/panel-repo.ts
-var import_obsidian = require("obsidian");
 
 // src/repo.ts
 var APP_ONLY_TOP = ["agents.md", "repos.txt", "tags.md", "templates", ".constellation"];
@@ -213,13 +157,92 @@ function frontmatterValue(text, key) {
   const close = lines.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
   let value;
   for (const l of lines.slice(1, Math.max(close, 0))) {
-    const at = l.indexOf(":");
-    if (at >= 0 && l.slice(0, at).trim() === key) value = l.slice(at + 1).trim();
+    const at2 = l.indexOf(":");
+    if (at2 >= 0 && l.slice(0, at2).trim() === key) value = l.slice(at2 + 1).trim();
   }
   return value;
 }
 
+// src/archiver.ts
+var TASK = /^([ \t]*)(?:[-*+]|\d+[.)]) \[([ xX])\] ?(.*?)\r?\n?$/;
+var indent = (s) => s.length - s.trimStart().length;
+var isTaskNote = (name) => name === "bugs.md" || name === "todo.md";
+function archiveTicked(path, text, on, resolve = (t) => t) {
+  const file = path.split("/").pop();
+  const repo = repoOf(path);
+  if (!repo || !isTaskNote(file)) return null;
+  const closed = on.toISOString().slice(0, 10);
+  const lines = text.split(/(?<=\n)/);
+  const keep = [];
+  let fence = false;
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) fence = !fence;
+    const m = fence ? null : TASK.exec(lines[i]);
+    if (!m || m[2] === " ") {
+      keep.push(i);
+      continue;
+    }
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
+    const own = [];
+    for (let j = i + 1; j < end; j++) {
+      const c = TASK.exec(lines[j]);
+      if (c?.[2] !== " ") {
+        own.push(lines[j]);
+        continue;
+      }
+      keep.push(j);
+      while (j + 1 < end && indent(lines[j + 1]) > c[1].length) keep.push(++j);
+    }
+    const title = m[3].split(" \u2192 ")[0].trim() || "(no text)";
+    const rest = own.map((l) => l.trim()).filter(Boolean).join(" ");
+    const link = linksIn([lines[i], ...own].join(""))[0];
+    const source = link ? `[[${resolve(link.target)}${link.heading ? `#${link.heading}` : ""}]]` : `[[${repo.folder}/README]]`;
+    entries.push(`### ${title}
+- closed: ${closed}
+- source: ${source}
+- what: ${rest || title}
+- fix: unknown
+`);
+    i = end - 1;
+  }
+  if (!entries.length) return null;
+  const bug = file === "bugs.md";
+  return {
+    text: keep.map((i) => lines[i]).join(""),
+    keep,
+    count: entries.length,
+    archivePath: `${repo.project}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
+    entries: entries.join("\n"),
+    heading: bug ? "Fixed bugs" : "Done todos"
+  };
+}
+function appendToArchive(old, a) {
+  if (old === null) return `---
+type: archive
+---
+# ${a.heading}
+
+${a.entries}`;
+  const text = old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
+  return old.includes("\r\n") ? old + text.slice(old.length).replace(/\n/g, "\r\n") : text;
+}
+function clampPos(text, pos) {
+  const lines = text.split("\n");
+  const line = Math.min(pos.line, lines.length - 1);
+  return { line, ch: Math.min(pos.ch, lines[line].length) };
+}
+function mapCursor(keep, pos) {
+  const at2 = keep.indexOf(pos.line);
+  return at2 >= 0 ? { line: at2, ch: pos.ch } : { line: keep.filter((i) => i < pos.line).length, ch: 0 };
+}
+
+// src/panel.ts
+var import_obsidian3 = require("obsidian");
+
 // src/panel-repo.ts
+var import_obsidian = require("obsidian");
 function isRepoReadme(file) {
   return file.name.toLowerCase() === "readme.md" && repoOf(file.path)?.folder === file.parent?.path;
 }
@@ -258,23 +281,36 @@ async function renderRepoSection(el, plugin, file) {
 var import_obsidian2 = require("obsidian");
 async function renderEndpointSection(el, app, file) {
   const isEndpoints = file.name === "endpoints.md" || file.path.startsWith("external/");
-  const isClient = app.metadataCache.getFileCache(file)?.frontmatter?.type === "client";
-  if (file.extension !== "md" || !isEndpoints && !isClient) return;
-  const line = isEndpoints ? cursorLine(app, file) : null;
+  if (file.extension !== "md") return;
+  const view = editorView(app, file);
+  const text = view ? view.editor.getValue() : await app.vault.cachedRead(file);
+  const note = parseNote(text);
+  if (!isEndpoints && !note.client) return;
+  if (isEndpoints && view?.getMode() === "preview") {
+    el.createEl("p", { text: "Switch to editing view to see this Endpoint's relations.", cls: "constellation-none" });
+    return;
+  }
+  const line = view && isEndpoints ? view.editor.getCursor().line : null;
   if (isEndpoints && line === null) return;
   const files = app.vault.getMarkdownFiles();
   const notes = new Map(
-    await Promise.all(files.map(async (f) => [f.path, parseNote(await app.vault.cachedRead(f))]))
+    await Promise.all(
+      files.map(async (f) => [f.path, f.path === file.path ? note : parseNote(await app.vault.cachedRead(f))])
+    )
   );
-  const note = notes.get(file.path);
-  if (!note) return;
-  const resolve = (target2, from) => app.metadataCache.getFirstLinkpathDest(target2, from)?.path ?? null;
+  const names = /* @__PURE__ */ new Map();
+  for (const f of files) names.set(f.basename.toLowerCase(), (names.get(f.basename.toLowerCase()) ?? 0) + 1);
+  const resolve = (target2, from) => {
+    const bare = target2.replace(/\.md$/i, "").toLowerCase();
+    if (!target2.includes("/") && (names.get(bare) ?? 0) > 1) return null;
+    return app.metadataCache.getFirstLinkpathDest(target2, from)?.path ?? null;
+  };
   const open = (link) => void app.workspace.openLinkText(link, file.path);
-  const raw = (path, heading) => notes.get(path)?.headings.find((h) => h.title.replaceAll("`", "").toLowerCase() === heading.toLowerCase())?.title ?? heading;
+  const raw = (path, heading) => (notes.get(path)?.headings.find((h) => same(h.title, heading))?.title ?? heading).replaceAll("#", " ");
   const target = (t) => {
-    const text = t.heading ? `${t.target}#${t.heading}` : t.target;
+    const text2 = t.heading ? `${t.target}#${t.heading}` : t.target;
     const link = t.path === null ? null : t.heading ? `${t.path}#${raw(t.path, t.heading)}` : t.path;
-    return { text, link, broken: t.broken };
+    return { text: text2, link, broken: t.broken };
   };
   const ref = (r) => {
     const name = r.path.replace(/\.md$/, "");
@@ -292,10 +328,10 @@ async function renderEndpointSection(el, app, file) {
     list(el, "Uses", resolveLinks(notes, resolve, file.path, note.uses).map(target), open);
   }
 }
-function cursorLine(app, file) {
+function editorView(app, file) {
   const active = app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
-  const view = active?.file?.path === file.path ? active : app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian2.MarkdownView && v.file?.path === file.path);
-  return view ? view.editor.getCursor().line : null;
+  if (active?.file?.path === file.path) return active;
+  return app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian2.MarkdownView && v.file?.path === file.path) ?? null;
 }
 function list(el, title, entries, open) {
   el.createEl("h5", { text: title });
@@ -334,6 +370,7 @@ var PanelView = class extends import_obsidian3.ItemView {
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => leaf !== this.leaf && this.render()));
     const later = (0, import_obsidian3.debounce)(() => this.render(), 300, true);
     this.registerEvent(this.app.metadataCache.on("changed", later));
+    this.registerEvent(this.app.workspace.on("layout-change", later));
     this.registerEvent(this.app.vault.on("delete", later));
     this.registerEvent(this.app.vault.on("rename", later));
     let lastLine = -1;
@@ -354,8 +391,12 @@ var PanelView = class extends import_obsidian3.ItemView {
       el.createEl("p", { text: "Open a note" });
       return;
     }
-    void renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
-    void renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.app, file);
+    const repo = el.createDiv({ cls: "constellation-section constellation-repo" });
+    const endpoint = el.createDiv({ cls: "constellation-section constellation-endpoint" });
+    void Promise.all([renderRepoSection(repo, this.plugin, file), renderEndpointSection(endpoint, this.app, file)]).then(() => {
+      if (!repo.hasChildNodes() && !endpoint.hasChildNodes() && repo.isConnected)
+        el.createEl("p", { text: "Nothing to show for this note: open a note in a Repo, an Endpoint heading or a Client note.", cls: "constellation-none" });
+    });
   }
 };
 
@@ -590,8 +631,15 @@ var GROUPS = [
   ["[type:client]", 11238904]
 ].map(([query, rgb]) => ({ query, color: { a: 1, rgb } }));
 function withColorGroups(current) {
-  const mine = (current ?? []).filter((g) => !GROUPS.some((o) => o.query === g.query));
-  return [...mine, ...GROUPS.map((g) => ({ query: g.query, color: { ...g.color } }))];
+  const have = current ?? [];
+  return [...have, ...GROUPS.filter((o) => !have.some((g) => g.query === o.query)).map((g) => ({ query: g.query, color: { ...g.color } }))];
+}
+function colorGroupsLeftAlone(current) {
+  return GROUPS.filter((o) => (current ?? []).some((g) => g.query === o.query)).map((g) => g.query);
+}
+function chooseTemplatesFolder(current) {
+  const c = typeof current === "string" ? current.trim() : "";
+  return c ? { folder: c, keptFrom: c } : { folder: TEMPLATES_FOLDER, keptFrom: null };
 }
 
 // src/initialize.ts
@@ -655,21 +703,35 @@ async function editConfigJson(app, name, edit) {
 }
 async function setTemplatesFolder(app) {
   const tpl = app.internalPlugins.getPluginById("templates");
+  const kept = (folder) => folder ? `kept your Template folder "${folder}" (Constellation's templates are in ${TEMPLATES_FOLDER}/; point the setting there to use them).` : void 0;
   if (tpl?.enabled && tpl.instance?.options) {
-    tpl.instance.options.folder = TEMPLATES_FOLDER;
+    const { folder, keptFrom: keptFrom2 } = chooseTemplatesFolder(tpl.instance.options.folder);
+    if (keptFrom2) return kept(keptFrom2);
+    tpl.instance.options.folder = folder;
     await tpl.saveData(tpl.instance.options);
     return;
   }
-  await editConfigJson(app, "templates.json", (cfg) => cfg.folder = TEMPLATES_FOLDER);
-  return "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
+  let keptFrom = null;
+  await editConfigJson(app, "templates.json", (cfg) => {
+    const c = chooseTemplatesFolder(cfg.folder);
+    keptFrom = c.keptFrom;
+    cfg.folder = c.folder;
+  });
+  return keptFrom ? kept(keptFrom) : "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
 }
 async function setColorGroups(app) {
   const graph = app.internalPlugins.getPluginById("graph");
+  let left = [];
+  const note = () => left.length ? `left your existing graph colours for ${left.join(", ")} alone.` : void 0;
   if (!(graph?.enabled && graph.instance?.options)) {
-    await editConfigJson(app, "graph.json", (cfg) => cfg.colorGroups = withColorGroups(cfg.colorGroups));
-    return;
+    await editConfigJson(app, "graph.json", (cfg) => {
+      left = colorGroupsLeftAlone(cfg.colorGroups);
+      cfg.colorGroups = withColorGroups(cfg.colorGroups);
+    });
+    return note();
   }
   const o = graph.instance.options;
+  left = colorGroupsLeftAlone(o.colorGroups);
   o.colorGroups = withColorGroups(o.colorGroups);
   await graph.instance.saveOptions();
   let stale = false;
@@ -678,16 +740,19 @@ async function setColorGroups(app) {
     if (typeof engine?.setOptions === "function") engine.setOptions(o);
     else stale = true;
   }
-  if (stale) return "close and reopen the graph view to see the new colour groups.";
+  const reopen = stale ? "close and reopen the graph view to see the new colour groups." : void 0;
+  return [note(), reopen].filter(Boolean).join(" ") || void 0;
 }
 
 // src/settings.ts
 function withDefaults(saved) {
   return { stalenessDays: 30, ...saved };
 }
+var MAX_DAYS = 36500;
 function parseDays(text) {
   const t = text.trim();
-  return /^[1-9]\d*$/.test(t) ? Number(t) : null;
+  const n = /^\d+$/.test(t) ? Number(t) : 0;
+  return n >= 1 && n <= MAX_DAYS ? n : null;
 }
 
 // src/main.ts
@@ -714,11 +779,11 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     this.addCommand({
       id: "archive-ticked-items",
       name: "Archive ticked items",
-      checkCallback: (checking) => {
+      // Always available, so a hotkey outside a Repo's bugs.md / todo.md gets the notice instead of silence.
+      callback: () => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || !isTaskNote(file.name)) return false;
-        if (!checking) void this.archiveTicked(file);
-        return true;
+        if (file) void this.archiveTicked(file);
+        else new import_obsidian5.Notice("Nothing to archive: open a Repo's bugs.md or todo.md.");
       }
     });
   }
@@ -734,24 +799,37 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
     ws.revealLeaf(leaf);
   }
+  /** Edit a Note as the user sees it: through its open editor (one undoable change, unsaved typing kept), else on disk. */
+  editorOf(file) {
+    return this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian5.MarkdownView && v.file === file)?.editor;
+  }
+  async edit(file, fn, moveCursor = (p) => p) {
+    const editor = this.editorOf(file);
+    if (!editor) {
+      await this.app.vault.process(file, fn);
+      return;
+    }
+    const before = editor.getValue();
+    const after = fn(before);
+    if (after === before) return;
+    const cursor = editor.getCursor();
+    editor.setValue(after);
+    editor.setCursor(clampPos(after, moveCursor(cursor)));
+  }
   async archiveTicked(file) {
     const { vault, metadataCache } = this.app;
-    const repo = file.parent?.path ?? "";
+    const repo = repoOf(file.path)?.folder ?? "";
     const resolve = (target) => {
       if (vault.getAbstractFileByPath(`${repo}/${target}.md`) instanceof import_obsidian5.TFile) return `${repo}/${target}`;
       return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
     };
-    let done = null;
-    await vault.process(file, (text) => {
-      done = archiveTicked(file.path, text, /* @__PURE__ */ new Date(), resolve);
-      return done?.text ?? text;
-    });
-    const a = done;
-    if (!a) {
-      new import_obsidian5.Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
-      return;
-    }
     try {
+      const on = /* @__PURE__ */ new Date();
+      const a = archiveTicked(file.path, this.editorOf(file)?.getValue() ?? await vault.read(file), on, resolve);
+      if (!a) {
+        new import_obsidian5.Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
+        return;
+      }
       const archive = vault.getAbstractFileByPath(a.archivePath);
       if (archive instanceof import_obsidian5.TFile) await vault.process(archive, (old) => appendToArchive(old, a));
       else {
@@ -759,14 +837,11 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
         if (!(vault.getAbstractFileByPath(folder) instanceof import_obsidian5.TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
+      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text, (pos) => mapCursor(a.keep, pos));
+      new import_obsidian5.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
     } catch (e) {
-      await vault.process(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}
-<!-- archive failed, entries kept here -->
-${a.entries}`);
-      new import_obsidian5.Notice(`Could not write ${a.archivePath}: ${e}. The entries were kept at the end of ${file.name}.`);
-      return;
+      new import_obsidian5.Notice(`Archive failed: ${e}. Check ${file.name} and the archive Note before retrying.`);
     }
-    new import_obsidian5.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -784,10 +859,17 @@ var ConstellationSettingTab = class extends import_obsidian5.PluginSettingTab {
     new import_obsidian5.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
       (text) => text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
         const days = parseDays(value);
+        text.inputEl.toggleClass("mod-warning", days === null);
+        error.setText(days === null ? `Enter a whole number of days from 1 to ${MAX_DAYS}. Still using ${this.plugin.settings.stalenessDays}.` : "");
         if (days === null) return;
         this.plugin.settings.stalenessDays = days;
         await this.plugin.saveSettings();
+      }).inputEl.addEventListener("blur", () => {
+        text.setValue(String(this.plugin.settings.stalenessDays));
+        text.inputEl.removeClass("mod-warning");
+        error.setText("");
       })
     );
+    const error = this.containerEl.createDiv({ cls: "setting-item-description mod-warning" });
   }
 };
