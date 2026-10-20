@@ -25,27 +25,155 @@ __export(main_exports, {
   default: () => ConstellationPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
+
+// src/archiver.ts
+var TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
+var LINK = /\[\[([^\]|#]*)(?:#([^\]|]*))?(?:\|[^\]]*)?\]\]/;
+var indent = (s) => s.length - s.trimStart().length;
+function archiveTicked(path, text, on, resolve = (t) => t) {
+  const parts = path.split("/");
+  const file = parts[parts.length - 1];
+  if (parts.length < 3 || file !== "bugs.md" && file !== "todo.md") return null;
+  const repo = parts.slice(0, -1).join("/");
+  const closed = `${on.getFullYear()}-${String(on.getMonth() + 1).padStart(2, "0")}-${String(on.getDate()).padStart(2, "0")}`;
+  const lines = text.split(/(?<=\n)/);
+  let kept = "";
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = TASK.exec(lines[i]);
+    if (!m || m[2] === " ") {
+      kept += lines[i];
+      continue;
+    }
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
+    const body = m[3].trim();
+    const title = body.split(" \u2192 ")[0].trim();
+    const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
+    const link = LINK.exec(lines.slice(i, end).join(""));
+    const source = link ? `[[${resolve(link[1].trim())}${link[2] ? `#${link[2]}` : ""}]]` : `[[${repo}/README]]`;
+    entries.push(`### ${title}
+- closed: ${closed}
+- source: ${source}
+- what: ${rest || title}
+- fix: unknown
+`);
+    i = end - 1;
+  }
+  if (!entries.length) return null;
+  const bug = file === "bugs.md";
+  return {
+    text: kept,
+    count: entries.length,
+    archivePath: `${parts[0]}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
+    entries: entries.join("\n"),
+    heading: bug ? "Fixed bugs" : "Done todos"
+  };
+}
+function appendToArchive(old, a) {
+  if (old === null) return `---
+type: archive
+---
+# ${a.heading}
+
+${a.entries}`;
+  return old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
+}
 
 // src/panel.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/panel-repo.ts
+var import_obsidian = require("obsidian");
+
+// src/repo.ts
+var APP_ONLY_TOP = ["agents.md", "repos.txt", "tags.md", "templates", ".constellation"];
+function repoOf(path) {
+  const c = path.split("/").filter((s) => s);
+  if (c.length < 3) return null;
+  const [project, name] = c;
+  if (APP_ONLY_TOP.includes(project.toLowerCase()) || ["external", "clients", "archive"].includes(project) || name === "archive") return null;
+  return { folder: `${project}/${name}`, project, name };
+}
+function utcDays(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const t = Date.parse(s + "T00:00:00Z");
+  return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== s ? null : t / 864e5;
+}
+function staleness(verifiedOn, today) {
+  const s = (verifiedOn ?? "").trim().replace(/^["']+|["']+$/g, "");
+  if (!s) return { kind: "never" };
+  const d = utcDays(s);
+  const now = utcDays(today);
+  return d === null || now === null ? { kind: "malformed" } : { kind: "verified", days: now - d };
+}
+function isStale(s, threshold) {
+  return !(s.kind === "verified" && s.days >= 0 && s.days <= threshold);
+}
+function label(s) {
+  if (s.kind === "never") return "never verified";
+  if (s.kind === "malformed") return "verified date unreadable";
+  if (s.days < 0) return "date is in the future";
+  if (s.days === 0) return "verified today";
+  return `verified ${s.days} day${s.days === 1 ? "" : "s"} ago`;
+}
+function ingestPrompt(repo) {
+  return `Follow AGENTS.md in this Vault and run the Ingest workflow for the repository "${repo}".`;
+}
+function refreshPrompt(repo) {
+  return `Follow AGENTS.md in this Vault and run the Refresh workflow for the repository "${repo}".`;
+}
+
+// src/panel-repo.ts
+function repoInfo(plugin, file) {
+  const repo = repoOf(file.path);
+  if (!repo) return null;
+  const folder = plugin.app.vault.getAbstractFileByPath(repo.folder);
+  const readme = folder instanceof import_obsidian.TFolder ? folder.children.find((f) => f instanceof import_obsidian.TFile && f.name.toLowerCase() === "readme.md") : void 0;
+  const fm = readme && plugin.app.metadataCache.getFileCache(readme)?.frontmatter;
+  if (fm?.type !== "repo") return { ...repo, label: "no repo README", stale: true };
+  const v = fm.verified_on;
+  const s = staleness(
+    v instanceof Date ? v.toISOString().slice(0, 10) : v == null ? void 0 : String(v),
+    (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)
+  );
+  return { ...repo, label: label(s), stale: isStale(s, plugin.settings.stalenessDays) };
+}
+function copyPrompt(file, kind, copy = true) {
+  const repo = file && repoOf(file.path);
+  if (!repo) return false;
+  if (copy) {
+    const text = kind === "ingest" ? ingestPrompt(repo.name) : refreshPrompt(repo.name);
+    navigator.clipboard.writeText(text).then(
+      () => new import_obsidian.Notice(`Copied ${kind} prompt`),
+      () => new import_obsidian.Notice(`Could not copy the ${kind} prompt`)
+    );
+  }
+  return true;
+}
 function renderRepoSection(el, plugin, file) {
+  const info = repoInfo(plugin, file);
+  if (!info) return;
+  el.createEl("h4", { text: `Repo ${info.name}` });
+  el.createDiv({ text: info.label, cls: info.stale ? "constellation-staleness mod-warning" : "constellation-staleness" });
+  const row = el.createDiv({ cls: "constellation-buttons" });
+  row.createEl("button", { text: "Copy ingest prompt" }).onclick = () => copyPrompt(file, "ingest");
+  row.createEl("button", { text: "Copy refresh prompt" }).onclick = () => copyPrompt(file, "refresh");
 }
 
 // src/panel-endpoint.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 
 // src/relations.ts
 var HEADING = /^(#{1,6}) +(\S.*?) *$/;
 var CODE = /`[^`]+`/g;
-var LINK = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
+var LINK2 = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
 var ENDPOINT = /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \//;
 var plain = (title) => title.replaceAll("`", "");
 function lineLinks(s) {
   const code = [...s.matchAll(CODE)].map((m) => [m.index, m.index + m[0].length]);
-  return [...s.matchAll(LINK)].filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length)).map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
+  return [...s.matchAll(LINK2)].filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length)).map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
 }
 function endpointHeading(headings, line) {
   let shallowest = Infinity;
@@ -80,12 +208,12 @@ function parseNote(text) {
   const calls = [];
   const uses = [];
   for (let i = 0; i < body.length; i++) {
-    const label = body[i].text.trim();
-    if (label !== "Calls:" && label !== "Uses:") continue;
+    const label2 = body[i].text.trim();
+    if (label2 !== "Calls:" && label2 !== "Uses:") continue;
     const at = body[i].line;
     const links = [];
     while (i + 1 < body.length && /^[-*] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
-    if (label === "Uses:") {
+    if (label2 === "Uses:") {
       if (client) uses.push(...links);
       continue;
     }
@@ -163,8 +291,8 @@ async function render(el, app, file) {
   }
 }
 function cursorLine(app, file) {
-  const active = app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-  const view = active?.file?.path === file.path ? active : app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian.MarkdownView && v.file?.path === file.path);
+  const active = app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
+  const view = active?.file?.path === file.path ? active : app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian2.MarkdownView && v.file?.path === file.path);
   return view ? view.editor.getCursor().line : null;
 }
 function list(el, title, entries, open) {
@@ -185,7 +313,7 @@ function list(el, title, entries, open) {
 
 // src/panel.ts
 var VIEW_TYPE = "constellation-panel";
-var PanelView = class extends import_obsidian2.ItemView {
+var PanelView = class extends import_obsidian3.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     __publicField(this, "plugin");
@@ -202,13 +330,13 @@ var PanelView = class extends import_obsidian2.ItemView {
   }
   async onOpen() {
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.render()));
-    const later = (0, import_obsidian2.debounce)(() => this.render(), 300, true);
+    const later = (0, import_obsidian3.debounce)(() => this.render(), 300, true);
     this.registerEvent(this.app.metadataCache.on("changed", later));
     this.registerEvent(this.app.vault.on("delete", later));
     this.registerEvent(this.app.vault.on("rename", later));
     let lastLine = -1;
     this.registerDomEvent(document, "selectionchange", () => {
-      const line = this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView)?.editor.getCursor().line;
+      const line = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView)?.editor.getCursor().line;
       if (line === void 0 || line === lastLine) return;
       lastLine = line;
       later();
@@ -239,13 +367,38 @@ function parseDays(text) {
 }
 
 // src/main.ts
-var ConstellationPlugin = class extends import_obsidian3.Plugin {
+var ConstellationPlugin = class extends import_obsidian4.Plugin {
   async onload() {
     this.settings = withDefaults(await this.loadData());
     this.registerView(VIEW_TYPE, (leaf) => new PanelView(leaf, this));
     this.addRibbonIcon("sparkles", "Open Constellation panel", () => this.openPanel());
     this.addCommand({ id: "open-panel", name: "Open Constellation panel", callback: () => this.openPanel() });
     this.addSettingTab(new ConstellationSettingTab(this));
+    for (const kind of ["ingest", "refresh"]) {
+      this.addCommand({
+        id: `copy-${kind}-prompt`,
+        name: `Copy ${kind} prompt`,
+        checkCallback: (checking) => copyPrompt(this.app.workspace.getActiveFile(), kind, !checking)
+      });
+    }
+    const onReadme = (file) => {
+      if (file.name.toLowerCase() !== "readme.md" || repoOf(file.path)?.folder !== file.path.slice(0, file.path.lastIndexOf("/"))) return;
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view instanceof PanelView) leaf.view.render();
+      }
+    };
+    this.registerEvent(this.app.metadataCache.on("changed", onReadme));
+    this.registerEvent(this.app.metadataCache.on("deleted", onReadme));
+    this.addCommand({
+      id: "archive-ticked-items",
+      name: "Archive ticked items",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.name !== "bugs.md" && file.name !== "todo.md") return false;
+        if (!checking) void this.archiveTicked(file);
+        return true;
+      }
+    });
   }
   async openPanel() {
     const ws = this.app.workspace;
@@ -254,6 +407,40 @@ var ConstellationPlugin = class extends import_obsidian3.Plugin {
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
     ws.revealLeaf(leaf);
   }
+  async archiveTicked(file) {
+    const { vault, metadataCache } = this.app;
+    const repo = file.parent?.path ?? "";
+    const resolve = (target) => {
+      if (vault.getFileByPath(`${repo}/${target}.md`)) return `${repo}/${target}`;
+      return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
+    };
+    let done = null;
+    await vault.process(file, (text) => {
+      done = archiveTicked(file.path, text, /* @__PURE__ */ new Date(), resolve);
+      return done?.text ?? text;
+    });
+    const a = done;
+    if (!a) {
+      new import_obsidian4.Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
+      return;
+    }
+    try {
+      const archive = vault.getFileByPath(a.archivePath);
+      if (archive) await vault.process(archive, (old) => appendToArchive(old, a));
+      else {
+        const folder = a.archivePath.slice(0, a.archivePath.lastIndexOf("/"));
+        if (!vault.getFolderByPath(folder)) await vault.createFolder(folder);
+        await vault.create(a.archivePath, appendToArchive(null, a));
+      }
+    } catch (e) {
+      await vault.process(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}
+<!-- archive failed, entries kept here -->
+${a.entries}`);
+      new import_obsidian4.Notice(`Could not write ${a.archivePath}: ${e}. The entries were kept at the end of ${file.name}.`);
+      return;
+    }
+    new import_obsidian4.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
+  }
   async saveSettings() {
     await this.saveData(this.settings);
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
@@ -261,7 +448,7 @@ var ConstellationPlugin = class extends import_obsidian3.Plugin {
     }
   }
 };
-var ConstellationSettingTab = class extends import_obsidian3.PluginSettingTab {
+var ConstellationSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(plugin) {
     super(plugin.app, plugin);
     __publicField(this, "plugin");
@@ -269,7 +456,7 @@ var ConstellationSettingTab = class extends import_obsidian3.PluginSettingTab {
   }
   display() {
     this.containerEl.empty();
-    new import_obsidian3.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
+    new import_obsidian4.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
       (text) => text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
         const days = parseDays(value);
         if (days === null) return;
