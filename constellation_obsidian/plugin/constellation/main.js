@@ -227,6 +227,11 @@ ${a.entries}`;
   const text = old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
   return old.includes("\r\n") ? old + text.slice(old.length).replace(/\n/g, "\r\n") : text;
 }
+function clampPos(text, pos) {
+  const lines = text.split("\n");
+  const line = Math.min(pos.line, lines.length - 1);
+  return { line, ch: Math.min(pos.ch, lines[line].length) };
+}
 
 // src/panel.ts
 var import_obsidian3 = require("obsidian");
@@ -790,8 +795,11 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     ws.revealLeaf(leaf);
   }
   /** Edit a Note as the user sees it: through its open editor (one undoable change, unsaved typing kept), else on disk. */
+  editorOf(file) {
+    return this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian5.MarkdownView && v.file === file)?.editor;
+  }
   async edit(file, fn) {
-    const editor = this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian5.MarkdownView && v.file === file)?.editor;
+    const editor = this.editorOf(file);
     if (!editor) {
       await this.app.vault.process(file, fn);
       return;
@@ -801,7 +809,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     if (after === before) return;
     const cursor = editor.getCursor();
     editor.setValue(after);
-    editor.setCursor(cursor);
+    editor.setCursor(clampPos(after, cursor));
   }
   async archiveTicked(file) {
     const { vault, metadataCache } = this.app;
@@ -810,17 +818,13 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
       if (vault.getAbstractFileByPath(`${repo}/${target}.md`) instanceof import_obsidian5.TFile) return `${repo}/${target}`;
       return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
     };
-    let done = null;
-    await this.edit(file, (text) => {
-      done = archiveTicked(file.path, text, /* @__PURE__ */ new Date(), resolve);
-      return done?.text ?? text;
-    });
-    const a = done;
-    if (!a) {
-      new import_obsidian5.Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
-      return;
-    }
     try {
+      const on = /* @__PURE__ */ new Date();
+      const a = archiveTicked(file.path, this.editorOf(file)?.getValue() ?? await vault.read(file), on, resolve);
+      if (!a) {
+        new import_obsidian5.Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
+        return;
+      }
       const archive = vault.getAbstractFileByPath(a.archivePath);
       if (archive instanceof import_obsidian5.TFile) await vault.process(archive, (old) => appendToArchive(old, a));
       else {
@@ -828,14 +832,11 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
         if (!(vault.getAbstractFileByPath(folder) instanceof import_obsidian5.TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
+      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text);
+      new import_obsidian5.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
     } catch (e) {
-      await this.edit(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}
-<!-- archive failed, entries kept here -->
-${a.entries}`);
-      new import_obsidian5.Notice(`Could not write ${a.archivePath}: ${e}. The entries were kept at the end of ${file.name}.`);
-      return;
+      new import_obsidian5.Notice(`Archive failed: ${e}. Check ${file.name} and the archive Note before retrying.`);
     }
-    new import_obsidian5.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
   }
   async saveSettings() {
     await this.saveData(this.settings);

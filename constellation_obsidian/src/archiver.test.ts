@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { archiveTicked, appendToArchive } from "./archiver.ts";
+import { archiveTicked, appendToArchive, clampPos } from "./archiver.ts";
 import { AGENTS_MD } from "./scaffold.ts";
 
 const day = new Date("2026-10-17T12:00:00Z");
@@ -122,4 +122,10 @@ test("16: numbered ticked tasks are archived", () => {
   const r = archiveTicked(at("bugs.md"), "1. [x] numbered done\n2) [ ] open\n", day)!;
   assert.equal(r.count, 1);
   assert.equal(r.text, "2) [ ] open\n");
+});
+
+test("clampPos keeps a cursor inside shortened text", () => {
+  assert.deepEqual(clampPos("a\nb", { line: 6, ch: 5 }), { line: 1, ch: 1 });
+  assert.deepEqual(clampPos("abc\nde\n", { line: 0, ch: 2 }), { line: 0, ch: 2 });
+  assert.deepEqual(clampPos("", { line: 3, ch: 3 }), { line: 0, ch: 0 });
 });

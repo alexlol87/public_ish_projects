@@ -73,3 +73,10 @@ export function appendToArchive(old: string | null, a: Archived): string {
   const text = old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
   return old.includes("\r\n") ? old + text.slice(old.length).replace(/\n/g, "\r\n") : text;
 }
+
+/** Move a cursor position inside `text` (it may point past the end after the text got shorter). */
+export function clampPos(text: string, pos: { line: number; ch: number }) {
+  const lines = text.split("\n");
+  const line = Math.min(pos.line, lines.length - 1);
+  return { line, ch: Math.min(pos.ch, lines[line].length) };
+}
