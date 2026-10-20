@@ -1,0 +1,9 @@
+{
+  "id": "constellation",
+  "name": "Constellation",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Calls and Uses panel, Repo staleness, Archive and agent files for a Constellation Vault.",
+  "author": "Constellation",
+  "isDesktopOnly": false
+}

@@ -72,3 +72,6 @@ local_memory/
 
 # Constellation: specs and issues stay local
 constellation/.scratch/
+
+# Constellation for Obsidian: specs and issues stay local
+constellation_obsidian/.scratch/

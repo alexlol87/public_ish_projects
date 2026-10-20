@@ -1,0 +1,3 @@
+.constellation-panel .constellation-section:empty {
+  display: none;
+}
