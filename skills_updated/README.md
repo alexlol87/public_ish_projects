@@ -4,20 +4,20 @@ Agent skills for Claude Code (and other agents that read `SKILL.md`), copied at 
 
 | Folder | Source | Version | License |
 |--------|--------|---------|---------|
-| [`matt-pocock/`](matt-pocock/) | [mattpocock/skills](https://github.com/mattpocock/skills): Matt Pocock's skills for real engineers | `49dd158` (2026-10-09) | MIT ([LICENSE](matt-pocock/LICENSE)) |
-| [`caveman/`](caveman/) | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman): the core `caveman` skill | `d262ab3` (2026-10-13) | Apache-2.0 ([LICENSE](caveman/LICENSE), [NOTICE](caveman/NOTICE)) |
-| [`ponytail/`](ponytail/) | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail): the core `ponytail` skill | `84740e3` (2026-10-15) | MIT ([LICENSE](ponytail/LICENSE)) |
+| [`matt-pocock/`](matt-pocock/) | [mattpocock/skills](https://github.com/mattpocock/skills): Matt Pocock's skills for real engineers | `5beb35b` (2026-10-19) | MIT ([LICENSE](matt-pocock/LICENSE)) |
+| [`caveman/`](caveman/) | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman): the core `caveman` skill | `bad48a0` (2026-10-17) | Apache-2.0 ([LICENSE](caveman/LICENSE), [NOTICE](caveman/NOTICE)) |
+| [`ponytail/`](ponytail/) | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail): the core `ponytail` skill | `09c434a` (2026-10-18) | MIT ([LICENSE](ponytail/LICENSE)) |
 | [`superpowers/`](superpowers/) | [obra/superpowers](https://github.com/obra/superpowers): Jesse Vincent's development methodology as 15 composable skills (brainstorm → plan → TDD → review → finish) | `bb92a77` (2026-10-09) | MIT ([LICENSE](superpowers/LICENSE)) |
 | [`shadcn/`](shadcn/) | [shadcn/improve](https://github.com/shadcn/improve): the `improve` skill (read-only codebase advisor that writes implementation plans) | `cac56e1` (2026-09-12) | MIT ([LICENSE](shadcn/LICENSE.md)) |
-| [`cursor/`](cursor/) | [cursor/plugins](https://github.com/cursor/plugins) (`cursor-team-kit`): the `thermo-nuclear-code-quality-review` skill | `e5136d8` (2026-10-14) | MIT ([LICENSE](cursor/LICENSE)) |
+| [`cursor/`](cursor/) | [cursor/plugins](https://github.com/cursor/plugins) (`cursor-team-kit`): the `thermo-nuclear-code-quality-review` skill | `a66a893` (2026-10-20) | MIT ([LICENSE](cursor/LICENSE)) |
 | [`humanlayer/`](humanlayer/) | [humanlayer/skills](https://github.com/humanlayer/skills): all 7 plugins' skills: `visual-pr`, `show-me`, `rpi` (research, plan, implement workflow), `build-iterated-agentic-loop`, `design-control-loop`, `improve-claude-md`, `narrow-react-prop-types` | `653b641` (2026-10-08) | MIT ([LICENSE](humanlayer/LICENSE)) |
-| [`popular/vercel/`](popular/vercel/) | [vercel-labs/skills](https://github.com/vercel-labs/skills) (`find-skills`), [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (`agent-browser`), [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (React best practices, composition patterns, web design guidelines) | `13e4063` (2026-10-09), `dac13bb` (2026-10-15), `063bee9` (2026-08-28) | `find-skills` MIT ([LICENSE](popular/vercel/find-skills/LICENSE)), `agent-browser` Apache-2.0 ([LICENSE](popular/vercel/agent-browser/LICENSE)), agent-skills MIT (stated in its README and front matter; the repo ships no LICENSE file) |
+| [`popular/vercel/`](popular/vercel/) | [vercel-labs/skills](https://github.com/vercel-labs/skills) (`find-skills`), [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (`agent-browser`), [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (React best practices, composition patterns, web design guidelines) | `a80e4c9` (2026-10-19), `5ee8691` (2026-10-19), `063bee9` (2026-08-28) | `find-skills` MIT ([LICENSE](popular/vercel/find-skills/LICENSE)), `agent-browser` Apache-2.0 ([LICENSE](popular/vercel/agent-browser/LICENSE)), agent-skills MIT (stated in its README and front matter; the repo ships no LICENSE file) |
 | [`popular/anthropic/`](popular/anthropic/) | [anthropics/skills](https://github.com/anthropics/skills): `frontend-design`, `skill-creator`, `webapp-testing`, `mcp-builder` | `dbd4588` (2026-10-09) | Apache-2.0 (a `LICENSE.txt` in each skill) |
 | [`popular/karpathy/`](popular/karpathy/) | [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills): `karpathy-guidelines`, Andrej Karpathy's observations on LLM coding mistakes as one skill | `2c60614` (2026-04-20) | MIT (stated in its README and front matter; the repo ships no LICENSE file) |
 | [`popular/addy-osmani/`](popular/addy-osmani/) | [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills): Addy Osmani's 25 production engineering skills (spec → plan → build → test → review → ship) and their shared `references/` checklists | `aeac41d` (2026-10-13) | MIT ([LICENSE](popular/addy-osmani/LICENSE)) |
 | [`popular/ui-ux-pro-max/`](popular/ui-ux-pro-max/) | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill): the `ui-ux-pro-max` skill with its searchable design data | `56ea9cf` (2026-10-14) | MIT ([LICENSE](popular/ui-ux-pro-max/LICENSE)) |
-| [`popular/taste-skill/`](popular/taste-skill/) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill): the main `taste-skill` (`design-taste-frontend`, tasteskill v2 with its scripts, library and references) | `f624f37` (2026-10-14) | MIT ([LICENSE](popular/taste-skill/LICENSE)) |
-| [`popular/impeccable/`](popular/impeccable/) | [pbakaus/impeccable](https://github.com/pbakaus/impeccable): the `impeccable` frontend design skill (v4.5.2) | `abf5779` (2026-10-14) | Apache-2.0 ([LICENSE](popular/impeccable/LICENSE), [NOTICE](popular/impeccable/NOTICE.md)) |
+| [`popular/taste-skill/`](popular/taste-skill/) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill): the main `taste-skill` (`design-taste-frontend`, tasteskill v2 with its scripts, library, references and assets) | `6010f91` (2026-10-20) | MIT ([LICENSE](popular/taste-skill/LICENSE)) |
+| [`popular/impeccable/`](popular/impeccable/) | [pbakaus/impeccable](https://github.com/pbakaus/impeccable): the `impeccable` frontend design skill (v4.7.0) | `dad8dbb` (2026-10-20) | Apache-2.0 ([LICENSE](popular/impeccable/LICENSE), [NOTICE](popular/impeccable/NOTICE.md)) |
 
 ## New in this update (2026-10-05)
 
@@ -52,6 +52,8 @@ ClawHub-only skills without a public repository (`self-improving-agent`, `proact
 `*/superpowers` image/video/Twitter skills trending on skills.sh, which are copies spread over several look-alike
 accounts with near-identical install counts, not obra's Superpowers.
 
+On 2026-10-20 all sources were re-checked again. Updated: impeccable to 4.7.0 (its plugin copy, with new desktop and native-platform handling in its references); taste-skill (new `app-screens` and `scenes` references, app and scene assets and scripts); ponytail (the `off` argument hint); caveman's README; and Matt Pocock's beta `chief-of-staff` (a wiki section for long-running goals). Added the five ponytail companion skills (`ponytail-audit`, `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review`) under [`ponytail-companions/`](ponytail-companions/). The other sources are unchanged at their recorded skills: Vercel's `find-skills`, `agent-browser`, and the three `agent-skills` (React, composition, web design) match upstream; Cursor's `thermo-nuclear-code-quality-review` matches upstream. Not added, because the folder tracks only the core skills or the popularity list: caveman's `caveman-*`, `ultracave`, `megacave` and other new caveman skills; Vercel's `deploy-to-vercel`, `react-native-skills`, `react-view-transitions`, `vercel-cli-with-tokens`, `vercel-optimize` and `writing-guidelines`; and the cursor-team-kit skills other than `thermo-nuclear-code-quality-review`.
+
 On 2026-10-15 all sources were re-checked. Updated: Matt Pocock's skills (engineering and productivity wording fixes),
 caveman, ponytail (rewritten core skill), Superpowers (`brainstorming`, `requesting-code-review`, `systematic-debugging`
 and three scripts; `spec-document-reviewer-prompt.md` became `builder-check-prompt.md`), seven Addy Osmani skills and
@@ -76,6 +78,7 @@ only). For example:
 ```sh
 cp -r skills_updated/matt-pocock/engineering/tdd ~/.claude/skills/
 cp -r skills_updated/caveman skills_updated/ponytail ~/.claude/skills/
+cp -r skills_updated/ponytail-companions/* ~/.claude/skills/   # the five ponytail companion skills
 cp -r skills_updated/superpowers/* ~/.claude/skills/        # every superpowers skill (plus its LICENSE file)
 cp -r skills_updated/shadcn/improve skills_updated/cursor/thermo-nuclear-code-quality-review ~/.claude/skills/
 cp -r skills_updated/humanlayer/*/ ~/.claude/skills/
@@ -196,6 +199,16 @@ The names and descriptions below come from each skill's `SKILL.md`.
 |-------|-------------|
 | [`ponytail`](ponytail/SKILL.md) | Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands in one read. Use on any coding task (writing, fixing, refactoring, reviewing, choosing dependencies) and when the user says "ponytail", "be lazy", "simplest solution", "yagni", or complains about over-engineering or bloat. Levels: lite, full (default), ultra. |
 
+### Ponytail companions (audit, debt, gain, help, review)
+
+| Skill | Description |
+|-------|-------------|
+| [`ponytail-audit`](ponytail-companions/ponytail-audit/SKILL.md) | Quality audit of a whole repo: bugs, security holes, what breaks under real load, risky code without tests, slow paths, and what to delete, merge or split. Ranked, each finding explained in plain English. One-shot report, changes nothing. Use for "audit this codebase", "review the whole repo", "find bloat", "what can I delete", /ponytail-audit. |
+| [`ponytail-debt`](ponytail-companions/ponytail-debt/SKILL.md) | List every `shortcut:` comment (and older `ponytail:` ones) as a debt ledger. One-shot report, changes nothing. Use for "ponytail debt", "what did ponytail defer", "list the shortcuts", /ponytail-debt. |
+| [`ponytail-gain`](ponytail-companions/ponytail-gain/SKILL.md) | Show ponytail's measured savings (code, cost, speed) from the benchmark. One-shot display. Use for /ponytail-gain, "what does ponytail save", "ponytail impact". |
+| [`ponytail-help`](ponytail-companions/ponytail-help/SKILL.md) | Quick reference for ponytail levels, skills and commands. One-shot display. Use for /ponytail-help, "ponytail help", "how do I use ponytail". |
+| [`ponytail-review`](ponytail-companions/ponytail-review/SKILL.md) | Quality review of a change: is the logic right, is it safe, does it hold under real load, is risky code tested, is it fast enough, and is every line needed. Reads the connected code, not only the diff. Each finding is explained in plain English. Use for "review this", "code review", "review the last commit", "review my PR", "is this over-engineered", /ponytail-review. |
+
 ### shadcn
 
 | Skill | Description |
@@ -285,13 +298,13 @@ The names and descriptions below come from each skill's `SKILL.md`.
 
 | Skill | Description |
 |-------|-------------|
-| [`design-taste-frontend`](popular/taste-skill/taste-skill/SKILL.md) | tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, type, palette, photographs, section blueprints) from a library, enforces a strict no-slop house style with a real-browser inspector, and runs a look-and-fix loop on screenshots. Use this whenever you build, design, redesign, restyle, polish or review a landing page, marketing site, portfolio, product page, one-pager, hero or any public-facing web page, in any stack (HTML/CSS, React, Next.js, Vue, Svelte, Astro, Tailwind) — also when the user says a page looks generic, templated, "AI-made", sloppy, or asks to make it look designed, premium, award-level or less like every other site. Not for dashboards or app screens. |
+| [`design-taste-frontend`](popular/taste-skill/taste-skill/SKILL.md) | tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, type, palette, photographs, section blueprints) from a library, enforces a strict no-slop house style with a real-browser inspector, and runs a look-and-fix loop on screenshots. Use this whenever you build, design, redesign, restyle, polish or review a landing page, marketing site, portfolio, product page, one-pager, hero or any public-facing web page, in any stack (HTML/CSS, React, Next.js, Vue, Svelte, Astro, Tailwind) — also when the user says a page looks generic, templated, "AI-made", sloppy, or asks to make it look designed, premium, award-level or less like every other site. Also for app screens: dashboards, admin and analytics views, settings, inboxes and other screens people work in, with their own run and rules. |
 
 ### New: Impeccable
 
 | Skill | Description |
 |-------|-------------|
-| [`impeccable`](popular/impeccable/impeccable/SKILL.md) | Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, forms, settings, onboarding, and empty states. Handles UX review, visual hierarchy, information architecture, cognitive load, accessibility, performance, responsive behavior, theming, anti-patterns, typography, fonts, spacing, layout, alignment, color, motion, micro-interactions, UX copy, error states, edge cases, i18n, and reusable design systems or tokens. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, live browser iteration on UI elements, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks. |
+| [`impeccable`](popular/impeccable/impeccable/SKILL.md) | Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, settings, onboarding, empty states, and native iOS or Android screens. Handles UX review, hierarchy, layout, typography, color, motion, UX copy, accessibility, responsive behavior, edge cases, and capturing or documenting design systems (DESIGN.md, tokens). Also for making bland UI bolder, loud UI quieter, or ambitious visual effects. Not for backend-only or non-UI tasks. |
 <!-- skills:end -->
 
 ## Updating
