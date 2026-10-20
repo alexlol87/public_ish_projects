@@ -14,5 +14,7 @@ test("a saved threshold is kept", () => {
 test("days input accepts a whole number of days >= 1, rejects anything else", () => {
   assert.equal(parseDays("14"), 14);
   assert.equal(parseDays(" 1 "), 1);
-  for (const bad of ["", "abc", "-3", "2.5", "1e3", "0", " 0 "]) assert.equal(parseDays(bad), null, bad);
+  for (const bad of ["", "abc", "-3", "2.5", "1e3", "0", " 0 ", "00", "99999999999999999999"]) assert.equal(parseDays(bad), null, bad);
+  assert.equal(parseDays("007"), 7);
+  assert.equal(parseDays("36500"), 36500);
 });

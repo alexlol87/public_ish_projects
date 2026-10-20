@@ -117,66 +117,6 @@ function endpointRelations(notes, resolve, path, heading) {
   return { calls, calledBy, usedBy };
 }
 
-// src/archiver.ts
-var TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
-var indent = (s) => s.length - s.trimStart().length;
-var isTaskNote = (name) => name === "bugs.md" || name === "todo.md";
-function archiveTicked(path, text, on, resolve = (t) => t) {
-  const parts = path.split("/");
-  const file = parts[parts.length - 1];
-  if (parts.length < 3 || !isTaskNote(file)) return null;
-  const repo = parts.slice(0, -1).join("/");
-  const closed = on.toISOString().slice(0, 10);
-  const lines = text.split(/(?<=\n)/);
-  let kept = "";
-  const entries = [];
-  for (let i = 0; i < lines.length; i++) {
-    const m = TASK.exec(lines[i]);
-    if (!m || m[2] === " ") {
-      kept += lines[i];
-      continue;
-    }
-    let end = i + 1;
-    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
-    const body = m[3].trim();
-    const title = body.split(" \u2192 ")[0].trim();
-    const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
-    const link = linksIn(lines.slice(i, end).join(""))[0];
-    const source = link ? `[[${resolve(link.target)}${link.heading ? `#${link.heading}` : ""}]]` : `[[${repo}/README]]`;
-    entries.push(`### ${title}
-- closed: ${closed}
-- source: ${source}
-- what: ${rest || title}
-- fix: unknown
-`);
-    i = end - 1;
-  }
-  if (!entries.length) return null;
-  const bug = file === "bugs.md";
-  return {
-    text: kept,
-    count: entries.length,
-    archivePath: `${parts[0]}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
-    entries: entries.join("\n"),
-    heading: bug ? "Fixed bugs" : "Done todos"
-  };
-}
-function appendToArchive(old, a) {
-  if (old === null) return `---
-type: archive
----
-# ${a.heading}
-
-${a.entries}`;
-  return old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
-}
-
-// src/panel.ts
-var import_obsidian3 = require("obsidian");
-
-// src/panel-repo.ts
-var import_obsidian = require("obsidian");
-
 // src/repo.ts
 var APP_ONLY_TOP = ["agents.md", "repos.txt", "tags.md", "templates", ".constellation"];
 function repoOf(path) {
@@ -223,7 +163,76 @@ function frontmatterValue(text, key) {
   return value;
 }
 
+// src/archiver.ts
+var TASK = /^([ \t]*)(?:[-*+]|\d+[.)]) \[([ xX])\] ?(.*?)\r?\n?$/;
+var indent = (s) => s.length - s.trimStart().length;
+var isTaskNote = (name) => name === "bugs.md" || name === "todo.md";
+function archiveTicked(path, text, on, resolve = (t) => t) {
+  const file = path.split("/").pop();
+  const repo = repoOf(path);
+  if (!repo || !isTaskNote(file)) return null;
+  const closed = on.toISOString().slice(0, 10);
+  const lines = text.split(/(?<=\n)/);
+  let kept = "";
+  let fence = false;
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) fence = !fence;
+    const m = fence ? null : TASK.exec(lines[i]);
+    if (!m || m[2] === " ") {
+      kept += lines[i];
+      continue;
+    }
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
+    const own = [];
+    for (let j = i + 1; j < end; j++) {
+      const c = TASK.exec(lines[j]);
+      if (c?.[2] !== " ") {
+        own.push(lines[j]);
+        continue;
+      }
+      kept += lines[j];
+      while (j + 1 < end && indent(lines[j + 1]) > c[1].length) kept += lines[++j];
+    }
+    const title = m[3].split(" \u2192 ")[0].trim() || "(no text)";
+    const rest = own.map((l) => l.trim()).filter(Boolean).join(" ");
+    const link = linksIn([lines[i], ...own].join(""))[0];
+    const source = link ? `[[${resolve(link.target)}${link.heading ? `#${link.heading}` : ""}]]` : `[[${repo.folder}/README]]`;
+    entries.push(`### ${title}
+- closed: ${closed}
+- source: ${source}
+- what: ${rest || title}
+- fix: unknown
+`);
+    i = end - 1;
+  }
+  if (!entries.length) return null;
+  const bug = file === "bugs.md";
+  return {
+    text: kept,
+    count: entries.length,
+    archivePath: `${repo.project}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
+    entries: entries.join("\n"),
+    heading: bug ? "Fixed bugs" : "Done todos"
+  };
+}
+function appendToArchive(old, a) {
+  if (old === null) return `---
+type: archive
+---
+# ${a.heading}
+
+${a.entries}`;
+  const text = old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
+  return old.includes("\r\n") ? old + text.slice(old.length).replace(/\n/g, "\r\n") : text;
+}
+
+// src/panel.ts
+var import_obsidian3 = require("obsidian");
+
 // src/panel-repo.ts
+var import_obsidian = require("obsidian");
 function isRepoReadme(file) {
   return file.name.toLowerCase() === "readme.md" && repoOf(file.path)?.folder === file.parent?.path;
 }
@@ -612,8 +621,15 @@ var GROUPS = [
   ["[type:client]", 11238904]
 ].map(([query, rgb]) => ({ query, color: { a: 1, rgb } }));
 function withColorGroups(current) {
-  const mine = (current ?? []).filter((g) => !GROUPS.some((o) => o.query === g.query));
-  return [...mine, ...GROUPS.map((g) => ({ query: g.query, color: { ...g.color } }))];
+  const have = current ?? [];
+  return [...have, ...GROUPS.filter((o) => !have.some((g) => g.query === o.query)).map((g) => ({ query: g.query, color: { ...g.color } }))];
+}
+function colorGroupsLeftAlone(current) {
+  return GROUPS.filter((o) => (current ?? []).some((g) => g.query === o.query)).map((g) => g.query);
+}
+function chooseTemplatesFolder(current) {
+  const c = typeof current === "string" ? current.trim() : "";
+  return c ? { folder: c, keptFrom: c } : { folder: TEMPLATES_FOLDER, keptFrom: null };
 }
 
 // src/initialize.ts
@@ -677,21 +693,35 @@ async function editConfigJson(app, name, edit) {
 }
 async function setTemplatesFolder(app) {
   const tpl = app.internalPlugins.getPluginById("templates");
+  const kept = (folder) => folder ? `kept your Template folder "${folder}" (Constellation's templates are in ${TEMPLATES_FOLDER}/; point the setting there to use them).` : void 0;
   if (tpl?.enabled && tpl.instance?.options) {
-    tpl.instance.options.folder = TEMPLATES_FOLDER;
+    const { folder, keptFrom: keptFrom2 } = chooseTemplatesFolder(tpl.instance.options.folder);
+    if (keptFrom2) return kept(keptFrom2);
+    tpl.instance.options.folder = folder;
     await tpl.saveData(tpl.instance.options);
     return;
   }
-  await editConfigJson(app, "templates.json", (cfg) => cfg.folder = TEMPLATES_FOLDER);
-  return "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
+  let keptFrom = null;
+  await editConfigJson(app, "templates.json", (cfg) => {
+    const c = chooseTemplatesFolder(cfg.folder);
+    keptFrom = c.keptFrom;
+    cfg.folder = c.folder;
+  });
+  return keptFrom ? kept(keptFrom) : "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
 }
 async function setColorGroups(app) {
   const graph = app.internalPlugins.getPluginById("graph");
+  let left = [];
+  const note = () => left.length ? `left your existing graph colours for ${left.join(", ")} alone.` : void 0;
   if (!(graph?.enabled && graph.instance?.options)) {
-    await editConfigJson(app, "graph.json", (cfg) => cfg.colorGroups = withColorGroups(cfg.colorGroups));
-    return;
+    await editConfigJson(app, "graph.json", (cfg) => {
+      left = colorGroupsLeftAlone(cfg.colorGroups);
+      cfg.colorGroups = withColorGroups(cfg.colorGroups);
+    });
+    return note();
   }
   const o = graph.instance.options;
+  left = colorGroupsLeftAlone(o.colorGroups);
   o.colorGroups = withColorGroups(o.colorGroups);
   await graph.instance.saveOptions();
   let stale = false;
@@ -700,16 +730,19 @@ async function setColorGroups(app) {
     if (typeof engine?.setOptions === "function") engine.setOptions(o);
     else stale = true;
   }
-  if (stale) return "close and reopen the graph view to see the new colour groups.";
+  const reopen = stale ? "close and reopen the graph view to see the new colour groups." : void 0;
+  return [note(), reopen].filter(Boolean).join(" ") || void 0;
 }
 
 // src/settings.ts
 function withDefaults(saved) {
   return { stalenessDays: 30, ...saved };
 }
+var MAX_DAYS = 36500;
 function parseDays(text) {
   const t = text.trim();
-  return /^[1-9]\d*$/.test(t) ? Number(t) : null;
+  const n = /^\d+$/.test(t) ? Number(t) : 0;
+  return n >= 1 && n <= MAX_DAYS ? n : null;
 }
 
 // src/main.ts
@@ -736,11 +769,11 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     this.addCommand({
       id: "archive-ticked-items",
       name: "Archive ticked items",
-      checkCallback: (checking) => {
+      // Always available, so a hotkey outside a Repo's bugs.md / todo.md gets the notice instead of silence.
+      callback: () => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || !isTaskNote(file.name)) return false;
-        if (!checking) void this.archiveTicked(file);
-        return true;
+        if (file) void this.archiveTicked(file);
+        else new import_obsidian5.Notice("Nothing to archive: open a Repo's bugs.md or todo.md.");
       }
     });
   }
@@ -756,15 +789,29 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
     ws.revealLeaf(leaf);
   }
+  /** Edit a Note as the user sees it: through its open editor (one undoable change, unsaved typing kept), else on disk. */
+  async edit(file, fn) {
+    const editor = this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian5.MarkdownView && v.file === file)?.editor;
+    if (!editor) {
+      await this.app.vault.process(file, fn);
+      return;
+    }
+    const before = editor.getValue();
+    const after = fn(before);
+    if (after === before) return;
+    const cursor = editor.getCursor();
+    editor.setValue(after);
+    editor.setCursor(cursor);
+  }
   async archiveTicked(file) {
     const { vault, metadataCache } = this.app;
-    const repo = file.parent?.path ?? "";
+    const repo = repoOf(file.path)?.folder ?? "";
     const resolve = (target) => {
       if (vault.getAbstractFileByPath(`${repo}/${target}.md`) instanceof import_obsidian5.TFile) return `${repo}/${target}`;
       return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
     };
     let done = null;
-    await vault.process(file, (text) => {
+    await this.edit(file, (text) => {
       done = archiveTicked(file.path, text, /* @__PURE__ */ new Date(), resolve);
       return done?.text ?? text;
     });
@@ -782,7 +829,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
     } catch (e) {
-      await vault.process(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}
+      await this.edit(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}
 <!-- archive failed, entries kept here -->
 ${a.entries}`);
       new import_obsidian5.Notice(`Could not write ${a.archivePath}: ${e}. The entries were kept at the end of ${file.name}.`);
@@ -806,10 +853,17 @@ var ConstellationSettingTab = class extends import_obsidian5.PluginSettingTab {
     new import_obsidian5.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
       (text) => text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
         const days = parseDays(value);
+        text.inputEl.toggleClass("mod-warning", days === null);
+        error.setText(days === null ? `Enter a whole number of days from 1 to ${MAX_DAYS}. Still using ${this.plugin.settings.stalenessDays}.` : "");
         if (days === null) return;
         this.plugin.settings.stalenessDays = days;
         await this.plugin.saveSettings();
+      }).inputEl.addEventListener("blur", () => {
+        text.setValue(String(this.plugin.settings.stalenessDays));
+        text.inputEl.removeClass("mod-warning");
+        error.setText("");
       })
     );
+    const error = this.containerEl.createDiv({ cls: "setting-item-description mod-warning" });
   }
 };

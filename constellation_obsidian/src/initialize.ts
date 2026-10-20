@@ -1,5 +1,5 @@
 import { Notice, normalizePath, type App } from "obsidian";
-import { planScaffold, starterFiles, withColorGroups, withExcluded, STARTER_FOLDERS, TEMPLATES_FOLDER } from "./scaffold.ts";
+import { planScaffold, starterFiles, withColorGroups, colorGroupsLeftAlone, chooseTemplatesFolder, withExcluded, STARTER_FOLDERS, TEMPLATES_FOLDER } from "./scaffold.ts";
 
 // Obsidian internals used below are undocumented (see the plugin's API notes); every access is guarded.
 type ObsidianInternals = any;
@@ -68,23 +68,39 @@ async function editConfigJson(app: App, name: string, edit: (cfg: ObsidianIntern
 
 async function setTemplatesFolder(app: App) {
   const tpl = (app as ObsidianInternals).internalPlugins.getPluginById("templates");
+  const kept = (folder: string | null) => (folder ? `kept your Template folder "${folder}" (Constellation's templates are in ${TEMPLATES_FOLDER}/; point the setting there to use them).` : undefined);
   if (tpl?.enabled && tpl.instance?.options) {
-    tpl.instance.options.folder = TEMPLATES_FOLDER;
+    const { folder, keptFrom } = chooseTemplatesFolder(tpl.instance.options.folder);
+    if (keptFrom) return kept(keptFrom);
+    tpl.instance.options.folder = folder;
     await tpl.saveData(tpl.instance.options);
     return;
   }
-  // Disabled: its in-memory options may be stale, so write templates.json, which it loads when turned on.
-  await editConfigJson(app, "templates.json", (cfg) => (cfg.folder = TEMPLATES_FOLDER));
-  return "the Templates core plugin is off. Turn it on in Settings → Core plugins to insert templates.";
+  // Disabled: its in-memory options may be stale, so use templates.json, which it loads when turned on.
+  let keptFrom: string | null = null;
+  await editConfigJson(app, "templates.json", (cfg) => {
+    const c = chooseTemplatesFolder(cfg.folder);
+    keptFrom = c.keptFrom;
+    cfg.folder = c.folder;
+  });
+  return keptFrom
+    ? kept(keptFrom)
+    : "the Templates core plugin is off. Turn it on in Settings → Core plugins to insert templates.";
 }
 
 async function setColorGroups(app: App) {
   const graph = (app as ObsidianInternals).internalPlugins.getPluginById("graph");
+  let left: string[] = [];
+  const note = () => (left.length ? `left your existing graph colours for ${left.join(", ")} alone.` : undefined);
   if (!(graph?.enabled && graph.instance?.options)) {
-    await editConfigJson(app, "graph.json", (cfg) => (cfg.colorGroups = withColorGroups(cfg.colorGroups)));
-    return;
+    await editConfigJson(app, "graph.json", (cfg) => {
+      left = colorGroupsLeftAlone(cfg.colorGroups);
+      cfg.colorGroups = withColorGroups(cfg.colorGroups);
+    });
+    return note();
   }
   const o = graph.instance.options;
+  left = colorGroupsLeftAlone(o.colorGroups);
   o.colorGroups = withColorGroups(o.colorGroups);
   await graph.instance.saveOptions();
   // An open graph view writes its own copy of the options back on its next change, so push ours into it.
@@ -94,5 +110,6 @@ async function setColorGroups(app: App) {
     if (typeof engine?.setOptions === "function") engine.setOptions(o);
     else stale = true;
   }
-  if (stale) return "close and reopen the graph view to see the new colour groups.";
+  const reopen = stale ? "close and reopen the graph view to see the new colour groups." : undefined;
+  return [note(), reopen].filter(Boolean).join(" ") || undefined;
 }

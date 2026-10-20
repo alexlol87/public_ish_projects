@@ -7,8 +7,11 @@ export function withDefaults(saved: Partial<Settings> | null): Settings {
   return { stalenessDays: 30, ...saved };
 }
 
-/** The settings field's text as whole days, or null if it isn't a whole number >= 1. */
+export const MAX_DAYS = 36500;
+
+/** The settings field's text as whole days, or null if it isn't a whole number from 1 to MAX_DAYS (leading zeros are fine). */
 export function parseDays(text: string): number | null {
   const t = text.trim();
-  return /^[1-9]\d*$/.test(t) ? Number(t) : null;
+  const n = /^\d+$/.test(t) ? Number(t) : 0;
+  return n >= 1 && n <= MAX_DAYS ? n : null;
 }
