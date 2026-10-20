@@ -27,6 +27,60 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian2 = require("obsidian");
 
+// src/archiver.ts
+var TASK = /^([ \t]*)[-*+] \[([ xX])\] ?(.*?)\r?\n?$/;
+var LINK = /\[\[([^\]|#]*)(?:#([^\]|]*))?(?:\|[^\]]*)?\]\]/;
+var indent = (s) => s.length - s.trimStart().length;
+function archiveTicked(path, text, on, resolve = (t) => t) {
+  const parts = path.split("/");
+  const file = parts[parts.length - 1];
+  if (parts.length < 3 || file !== "bugs.md" && file !== "todo.md") return null;
+  const repo = parts.slice(0, -1).join("/");
+  const closed = `${on.getFullYear()}-${String(on.getMonth() + 1).padStart(2, "0")}-${String(on.getDate()).padStart(2, "0")}`;
+  const lines = text.split(/(?<=\n)/);
+  let kept = "";
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = TASK.exec(lines[i]);
+    if (!m || m[2] === " ") {
+      kept += lines[i];
+      continue;
+    }
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== "" && indent(lines[end]) > m[1].length) end++;
+    const body = m[3].trim();
+    const title = body.split(" \u2192 ")[0].trim();
+    const rest = lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).join(" ");
+    const link = LINK.exec(lines.slice(i, end).join(""));
+    const source = link ? `[[${resolve(link[1].trim())}${link[2] ? `#${link[2]}` : ""}]]` : `[[${repo}/README]]`;
+    entries.push(`### ${title}
+- closed: ${closed}
+- source: ${source}
+- what: ${rest || title}
+- fix: unknown
+`);
+    i = end - 1;
+  }
+  if (!entries.length) return null;
+  const bug = file === "bugs.md";
+  return {
+    text: kept,
+    count: entries.length,
+    archivePath: `${parts[0]}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
+    entries: entries.join("\n"),
+    heading: bug ? "Fixed bugs" : "Done todos"
+  };
+}
+function appendToArchive(old, a) {
+  if (old === null) return `---
+type: archive
+---
+# ${a.heading}
+
+${a.entries}`;
+  return old + (old === "" ? "" : old.endsWith("\n") ? "\n" : "\n\n") + a.entries;
+}
+
 // src/panel.ts
 var import_obsidian = require("obsidian");
 
@@ -90,6 +144,16 @@ var ConstellationPlugin = class extends import_obsidian2.Plugin {
     this.addRibbonIcon("sparkles", "Open Constellation panel", () => this.openPanel());
     this.addCommand({ id: "open-panel", name: "Open Constellation panel", callback: () => this.openPanel() });
     this.addSettingTab(new ConstellationSettingTab(this));
+    this.addCommand({
+      id: "archive-ticked-items",
+      name: "Archive ticked items",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.name !== "bugs.md" && file.name !== "todo.md") return false;
+        if (!checking) void this.archiveTicked(file);
+        return true;
+      }
+    });
   }
   async openPanel() {
     const ws = this.app.workspace;
@@ -97,6 +161,40 @@ var ConstellationPlugin = class extends import_obsidian2.Plugin {
     if (!leaf) return;
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
     ws.revealLeaf(leaf);
+  }
+  async archiveTicked(file) {
+    const { vault, metadataCache } = this.app;
+    const repo = file.parent?.path ?? "";
+    const resolve = (target) => {
+      if (vault.getFileByPath(`${repo}/${target}.md`)) return `${repo}/${target}`;
+      return metadataCache.getFirstLinkpathDest(target, file.path)?.path.replace(/\.md$/, "") ?? target;
+    };
+    let done = null;
+    await vault.process(file, (text) => {
+      done = archiveTicked(file.path, text, /* @__PURE__ */ new Date(), resolve);
+      return done?.text ?? text;
+    });
+    const a = done;
+    if (!a) {
+      new import_obsidian2.Notice("Nothing to archive: no ticked items in a Repo's bugs.md or todo.md.");
+      return;
+    }
+    try {
+      const archive = vault.getFileByPath(a.archivePath);
+      if (archive) await vault.process(archive, (old) => appendToArchive(old, a));
+      else {
+        const folder = a.archivePath.slice(0, a.archivePath.lastIndexOf("/"));
+        if (!vault.getFolderByPath(folder)) await vault.createFolder(folder);
+        await vault.create(a.archivePath, appendToArchive(null, a));
+      }
+    } catch (e) {
+      await vault.process(file, (text) => `${text}${text.endsWith("\n") || !text ? "" : "\n"}
+<!-- archive failed, entries kept here -->
+${a.entries}`);
+      new import_obsidian2.Notice(`Could not write ${a.archivePath}: ${e}. The entries were kept at the end of ${file.name}.`);
+      return;
+    }
+    new import_obsidian2.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
   }
   async saveSettings() {
     await this.saveData(this.settings);
