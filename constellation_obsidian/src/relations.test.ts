@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseNote, endpointAt, endpointRelations, resolveLinks, type ParsedNote } from "./relations.ts";
+import { linksIn, parseNote, endpointAt, endpointRelations, resolveLinks, type ParsedNote } from "./relations.ts";
 
 // Cases ported from constellation/core/tests/parser.rs and graph.rs.
 const CART =
@@ -114,4 +114,40 @@ test("a Client's Uses resolve by unique name, broken ones marked", () => {
   const { notes, resolve } = vault({ ...SHOP, "clients/app.md": "---\ntype: client\n---\nUses:\n- [[endpoints#GET /cart]]\n- [[web]]\n" });
   const uses = resolveLinks(notes, resolve, "clients/app.md", notes.get("clients/app.md")!.uses);
   assert.deepEqual(uses.map((u) => [u.path, u.broken]), [[null, true], ["web.md", false]]);
+});
+
+test("a Link to a backticked heading is kept; a Link inside a code span is not", () => {
+  assert.deepEqual(linksIn("- [[a#`GET /x/{id}`]] and `[[b#GET /y]]`"), [{ target: "a", heading: "`GET /x/{id}`" }]);
+  const { notes, resolve } = vault({
+    "a.md": "## GET /a\nCalls:\n- [[b#`GET /b/{id}`]]\n",
+    "b.md": "## `GET /b/{id}`\n",
+    "c.md": "---\ntype: client\n---\nUses:\n- [[b#`GET /b/{id}`]]\n",
+  });
+  const r = endpointRelations(notes, resolve, "b.md", "GET /b/{id}");
+  assert.deepEqual([r.calledBy, r.usedBy], [[{ path: "a.md", heading: "GET /a" }], [{ path: "c.md", heading: null }]]);
+  assert.equal(endpointRelations(notes, resolve, "a.md", "GET /a").calls[0].broken, false);
+});
+
+test("headings match Links as Obsidian writes them: closing hashes dropped, # inside read as a space", () => {
+  const { notes, resolve } = vault({
+    "e.md": "## GET /closing ##\n## GET /with#hash\n## GET /caller\nCalls:\n- [[e#GET /closing]]\n- [[e#GET /with hash]]\n",
+  });
+  assert.equal(endpointAt(notes.get("e.md")!, 0), "GET /closing");
+  assert.deepEqual(endpointRelations(notes, resolve, "e.md", "GET /caller").calls.map((c) => c.broken), [false, false]);
+  assert.equal(endpointRelations(notes, resolve, "e.md", "GET /closing").calledBy.length, 1);
+  assert.equal(endpointRelations(notes, resolve, "e.md", "GET /with#hash").calledBy.length, 1);
+});
+
+test("same-Note [[#heading]] Calls and + bullets count", () => {
+  const { notes, resolve } = vault({ "e.md": "## GET /t\n## GET /s\nCalls:\n- [[#GET /t]]\n## GET /p\nCalls:\n+ [[e#GET /t]]\n" });
+  assert.deepEqual(endpointRelations(notes, resolve, "e.md", "GET /s").calls.map((c) => [c.path, c.broken]), [["e.md", false]]);
+  assert.deepEqual(endpointRelations(notes, resolve, "e.md", "GET /t").calledBy.map((c) => c.heading), ["GET /s", "GET /p"]);
+  assert.deepEqual(linksIn("[[#h]] [[]]"), []);
+});
+
+test("type: \"client\" (quoted) is a Client like type: client", () => {
+  const p = parseNote("---\ntype: \"client\"\n---\nUses:\n- [[a#GET /x]]\n");
+  assert.equal(p.client, true);
+  assert.equal(p.uses.length, 1);
+  assert.equal(parseNote("---\ntype: Client\n---\nUses:\n- [[a#GET /x]]\n").client, false);
 });

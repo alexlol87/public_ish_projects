@@ -30,13 +30,15 @@ var import_obsidian5 = require("obsidian");
 // src/relations.ts
 var HEADING = /^(#{1,6}) +(\S.*?) *$/;
 var CODE = /`[^`]+`/g;
-var LINK = /\[\[([^\[\]|#]+)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
+var LINK = /\[\[([^\[\]|#]*)(?:#([^\[\]|]*))?(?:\|([^\[\]]*))?\]\]/g;
 var ENDPOINT = /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \//;
 var plain = (title) => title.replaceAll("`", "");
-var linksIn = (text) => text.split(/\r?\n/).flatMap(lineLinks);
+var norm = (s) => plain(s).replace(/[#|^:\[\]]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+var same = (a, b) => norm(a) === norm(b);
+var linksIn = (text) => text.split(/\r?\n/).flatMap(lineLinks).filter((l) => l.target);
 function lineLinks(s) {
   const code = [...s.matchAll(CODE)].map((m) => [m.index, m.index + m[0].length]);
-  return [...s.matchAll(LINK)].filter((m) => !code.some(([a, b]) => m.index < b && a < m.index + m[0].length)).map((m) => ({ target: m[1].trim(), heading: m[2] || null }));
+  return [...s.matchAll(LINK)].filter((m) => !code.some(([a, b]) => a <= m.index && m.index + m[0].length <= b)).map((m) => ({ target: m[1].trim(), heading: m[2] || null })).filter((l) => l.target || l.heading);
 }
 function endpointHeading(headings, line) {
   let shallowest = Infinity;
@@ -54,7 +56,7 @@ function parseNote(text) {
     const close = all.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
     if (close > 0) {
       start = close + 1;
-      client = all.slice(1, close).some((l) => /^type:\s*client\s*$/.test(l));
+      client = all.slice(1, close).some((l) => /^type:\s*(["']?)client\1\s*$/.test(l));
     }
   }
   const body = [];
@@ -66,40 +68,42 @@ function parseNote(text) {
   const headings = [];
   for (const l of body) {
     const m = HEADING.exec(l.text);
-    if (m) headings.push({ level: m[1].length, title: m[2], line: l.line });
+    if (m) headings.push({ level: m[1].length, title: m[2].replace(/ +#+$/, ""), line: l.line });
   }
   const calls = [];
   const uses = [];
   for (let i = 0; i < body.length; i++) {
     const label2 = body[i].text.trim();
     if (label2 !== "Calls:" && label2 !== "Uses:") continue;
-    const at = body[i].line;
+    const at2 = body[i].line;
     const links = [];
-    while (i + 1 < body.length && /^[-*] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
+    while (i + 1 < body.length && /^[-*+] /.test(body[i + 1].text.trim())) links.push(...lineLinks(body[++i].text));
     if (label2 === "Uses:") {
       if (client) uses.push(...links);
       continue;
     }
-    const h = endpointHeading(headings, at);
+    const h = endpointHeading(headings, at2);
     if (h) calls.push({ heading: plain(h.title), links });
   }
-  return { headings, calls, uses };
+  return { headings, calls, uses, client };
 }
 function endpointAt(note, line) {
   const h = endpointHeading(note.headings, line);
   return h && plain(h.title);
 }
-var same = (a, b) => a.toLowerCase() === b.toLowerCase();
+var at = (resolve) => (t, from) => t === "" ? from : resolve(t, from);
 function resolveLinks(notes, resolve, from, links) {
+  resolve = at(resolve);
   return links.map((l) => {
     const path = resolve(l.target, from);
     const note = path === null ? void 0 : notes.get(path);
-    const headingOk = l.heading === null || !!note?.headings.some((h) => same(plain(h.title), plain(l.heading)));
+    const headingOk = l.heading === null || !!note?.headings.some((h) => same(h.title, l.heading));
     return { ...l, path, broken: path === null || !headingOk };
   });
 }
 function endpointRelations(notes, resolve, path, heading) {
-  const hits = (from) => (l) => resolve(l.target, from) === path && l.heading !== null && same(plain(l.heading), heading);
+  resolve = at(resolve);
+  const hits = (from) => (l) => resolve(l.target, from) === path && l.heading !== null && same(l.heading, heading);
   const calls = [];
   const calledBy = [];
   const usedBy = [];
@@ -213,8 +217,8 @@ function frontmatterValue(text, key) {
   const close = lines.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
   let value;
   for (const l of lines.slice(1, Math.max(close, 0))) {
-    const at = l.indexOf(":");
-    if (at >= 0 && l.slice(0, at).trim() === key) value = l.slice(at + 1).trim();
+    const at2 = l.indexOf(":");
+    if (at2 >= 0 && l.slice(0, at2).trim() === key) value = l.slice(at2 + 1).trim();
   }
   return value;
 }
@@ -258,23 +262,36 @@ async function renderRepoSection(el, plugin, file) {
 var import_obsidian2 = require("obsidian");
 async function renderEndpointSection(el, app, file) {
   const isEndpoints = file.name === "endpoints.md" || file.path.startsWith("external/");
-  const isClient = app.metadataCache.getFileCache(file)?.frontmatter?.type === "client";
-  if (file.extension !== "md" || !isEndpoints && !isClient) return;
-  const line = isEndpoints ? cursorLine(app, file) : null;
+  if (file.extension !== "md") return;
+  const view = editorView(app, file);
+  const text = view ? view.editor.getValue() : await app.vault.cachedRead(file);
+  const note = parseNote(text);
+  if (!isEndpoints && !note.client) return;
+  if (isEndpoints && view?.getMode() === "preview") {
+    el.createEl("p", { text: "Switch to editing view to see this Endpoint's relations.", cls: "constellation-none" });
+    return;
+  }
+  const line = view && isEndpoints ? view.editor.getCursor().line : null;
   if (isEndpoints && line === null) return;
   const files = app.vault.getMarkdownFiles();
   const notes = new Map(
-    await Promise.all(files.map(async (f) => [f.path, parseNote(await app.vault.cachedRead(f))]))
+    await Promise.all(
+      files.map(async (f) => [f.path, f.path === file.path ? note : parseNote(await app.vault.cachedRead(f))])
+    )
   );
-  const note = notes.get(file.path);
-  if (!note) return;
-  const resolve = (target2, from) => app.metadataCache.getFirstLinkpathDest(target2, from)?.path ?? null;
+  const names = /* @__PURE__ */ new Map();
+  for (const f of files) names.set(f.basename.toLowerCase(), (names.get(f.basename.toLowerCase()) ?? 0) + 1);
+  const resolve = (target2, from) => {
+    const bare = target2.replace(/\.md$/i, "").toLowerCase();
+    if (!target2.includes("/") && (names.get(bare) ?? 0) > 1) return null;
+    return app.metadataCache.getFirstLinkpathDest(target2, from)?.path ?? null;
+  };
   const open = (link) => void app.workspace.openLinkText(link, file.path);
-  const raw = (path, heading) => notes.get(path)?.headings.find((h) => h.title.replaceAll("`", "").toLowerCase() === heading.toLowerCase())?.title ?? heading;
+  const raw = (path, heading) => (notes.get(path)?.headings.find((h) => same(h.title, heading))?.title ?? heading).replaceAll("#", " ");
   const target = (t) => {
-    const text = t.heading ? `${t.target}#${t.heading}` : t.target;
+    const text2 = t.heading ? `${t.target}#${t.heading}` : t.target;
     const link = t.path === null ? null : t.heading ? `${t.path}#${raw(t.path, t.heading)}` : t.path;
-    return { text, link, broken: t.broken };
+    return { text: text2, link, broken: t.broken };
   };
   const ref = (r) => {
     const name = r.path.replace(/\.md$/, "");
@@ -292,10 +309,10 @@ async function renderEndpointSection(el, app, file) {
     list(el, "Uses", resolveLinks(notes, resolve, file.path, note.uses).map(target), open);
   }
 }
-function cursorLine(app, file) {
+function editorView(app, file) {
   const active = app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
-  const view = active?.file?.path === file.path ? active : app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian2.MarkdownView && v.file?.path === file.path);
-  return view ? view.editor.getCursor().line : null;
+  if (active?.file?.path === file.path) return active;
+  return app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian2.MarkdownView && v.file?.path === file.path) ?? null;
 }
 function list(el, title, entries, open) {
   el.createEl("h5", { text: title });
@@ -334,6 +351,7 @@ var PanelView = class extends import_obsidian3.ItemView {
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => leaf !== this.leaf && this.render()));
     const later = (0, import_obsidian3.debounce)(() => this.render(), 300, true);
     this.registerEvent(this.app.metadataCache.on("changed", later));
+    this.registerEvent(this.app.workspace.on("layout-change", later));
     this.registerEvent(this.app.vault.on("delete", later));
     this.registerEvent(this.app.vault.on("rename", later));
     let lastLine = -1;
@@ -354,8 +372,12 @@ var PanelView = class extends import_obsidian3.ItemView {
       el.createEl("p", { text: "Open a note" });
       return;
     }
-    void renderRepoSection(el.createDiv({ cls: "constellation-section constellation-repo" }), this.plugin, file);
-    void renderEndpointSection(el.createDiv({ cls: "constellation-section constellation-endpoint" }), this.app, file);
+    const repo = el.createDiv({ cls: "constellation-section constellation-repo" });
+    const endpoint = el.createDiv({ cls: "constellation-section constellation-endpoint" });
+    void Promise.all([renderRepoSection(repo, this.plugin, file), renderEndpointSection(endpoint, this.app, file)]).then(() => {
+      if (!repo.hasChildNodes() && !endpoint.hasChildNodes() && repo.isConnected)
+        el.createEl("p", { text: "Nothing to show for this note: open a note in a Repo, an Endpoint heading or a Client note.", cls: "constellation-none" });
+    });
   }
 };
 
