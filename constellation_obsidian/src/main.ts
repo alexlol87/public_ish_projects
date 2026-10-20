@@ -1,5 +1,7 @@
-import { Plugin, PluginSettingTab, Setting } from "obsidian";
+import { Plugin, PluginSettingTab, Setting, type TFile } from "obsidian";
 import { PanelView, VIEW_TYPE } from "./panel.ts";
+import { copyPrompt } from "./panel-repo.ts";
+import { repoOf } from "./repo.ts";
 import { withDefaults, parseDays, type Settings } from "./settings.ts";
 
 export default class ConstellationPlugin extends Plugin {
@@ -11,6 +13,22 @@ export default class ConstellationPlugin extends Plugin {
     this.addRibbonIcon("sparkles", "Open Constellation panel", () => this.openPanel());
     this.addCommand({ id: "open-panel", name: "Open Constellation panel", callback: () => this.openPanel() });
     this.addSettingTab(new ConstellationSettingTab(this));
+    for (const kind of ["ingest", "refresh"] as const) {
+      this.addCommand({
+        id: `copy-${kind}-prompt`,
+        name: `Copy ${kind} prompt`,
+        checkCallback: (checking) => copyPrompt(this.app.workspace.getActiveFile(), kind, !checking),
+      });
+    }
+    // Re-render the panel when a Repo README changes on disk (its verified_on drives the Repo section).
+    const onReadme = (file: TFile) => {
+      if (file.name.toLowerCase() !== "readme.md" || repoOf(file.path)?.folder !== file.path.slice(0, file.path.lastIndexOf("/"))) return;
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view instanceof PanelView) leaf.view.render();
+      }
+    };
+    this.registerEvent(this.app.metadataCache.on("changed", onReadme));
+    this.registerEvent(this.app.metadataCache.on("deleted", onReadme));
     // Later tickets register their commands here.
   }
 
