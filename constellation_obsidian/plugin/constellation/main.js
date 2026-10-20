@@ -590,8 +590,15 @@ var GROUPS = [
   ["[type:client]", 11238904]
 ].map(([query, rgb]) => ({ query, color: { a: 1, rgb } }));
 function withColorGroups(current) {
-  const mine = (current ?? []).filter((g) => !GROUPS.some((o) => o.query === g.query));
-  return [...mine, ...GROUPS.map((g) => ({ query: g.query, color: { ...g.color } }))];
+  const have = current ?? [];
+  return [...have, ...GROUPS.filter((o) => !have.some((g) => g.query === o.query)).map((g) => ({ query: g.query, color: { ...g.color } }))];
+}
+function colorGroupsLeftAlone(current) {
+  return GROUPS.filter((o) => (current ?? []).some((g) => g.query === o.query)).map((g) => g.query);
+}
+function chooseTemplatesFolder(current) {
+  const c = typeof current === "string" ? current.trim() : "";
+  return c ? { folder: c, keptFrom: c } : { folder: TEMPLATES_FOLDER, keptFrom: null };
 }
 
 // src/initialize.ts
@@ -655,21 +662,35 @@ async function editConfigJson(app, name, edit) {
 }
 async function setTemplatesFolder(app) {
   const tpl = app.internalPlugins.getPluginById("templates");
+  const kept = (folder) => folder ? `kept your Template folder "${folder}" (Constellation's templates are in ${TEMPLATES_FOLDER}/; point the setting there to use them).` : void 0;
   if (tpl?.enabled && tpl.instance?.options) {
-    tpl.instance.options.folder = TEMPLATES_FOLDER;
+    const { folder, keptFrom: keptFrom2 } = chooseTemplatesFolder(tpl.instance.options.folder);
+    if (keptFrom2) return kept(keptFrom2);
+    tpl.instance.options.folder = folder;
     await tpl.saveData(tpl.instance.options);
     return;
   }
-  await editConfigJson(app, "templates.json", (cfg) => cfg.folder = TEMPLATES_FOLDER);
-  return "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
+  let keptFrom = null;
+  await editConfigJson(app, "templates.json", (cfg) => {
+    const c = chooseTemplatesFolder(cfg.folder);
+    keptFrom = c.keptFrom;
+    cfg.folder = c.folder;
+  });
+  return keptFrom ? kept(keptFrom) : "the Templates core plugin is off. Turn it on in Settings \u2192 Core plugins to insert templates.";
 }
 async function setColorGroups(app) {
   const graph = app.internalPlugins.getPluginById("graph");
+  let left = [];
+  const note = () => left.length ? `left your existing graph colours for ${left.join(", ")} alone.` : void 0;
   if (!(graph?.enabled && graph.instance?.options)) {
-    await editConfigJson(app, "graph.json", (cfg) => cfg.colorGroups = withColorGroups(cfg.colorGroups));
-    return;
+    await editConfigJson(app, "graph.json", (cfg) => {
+      left = colorGroupsLeftAlone(cfg.colorGroups);
+      cfg.colorGroups = withColorGroups(cfg.colorGroups);
+    });
+    return note();
   }
   const o = graph.instance.options;
+  left = colorGroupsLeftAlone(o.colorGroups);
   o.colorGroups = withColorGroups(o.colorGroups);
   await graph.instance.saveOptions();
   let stale = false;
@@ -678,16 +699,19 @@ async function setColorGroups(app) {
     if (typeof engine?.setOptions === "function") engine.setOptions(o);
     else stale = true;
   }
-  if (stale) return "close and reopen the graph view to see the new colour groups.";
+  const reopen = stale ? "close and reopen the graph view to see the new colour groups." : void 0;
+  return [note(), reopen].filter(Boolean).join(" ") || void 0;
 }
 
 // src/settings.ts
 function withDefaults(saved) {
   return { stalenessDays: 30, ...saved };
 }
+var MAX_DAYS = 36500;
 function parseDays(text) {
   const t = text.trim();
-  return /^[1-9]\d*$/.test(t) ? Number(t) : null;
+  const n = /^\d+$/.test(t) ? Number(t) : 0;
+  return n >= 1 && n <= MAX_DAYS ? n : null;
 }
 
 // src/main.ts
@@ -784,10 +808,17 @@ var ConstellationSettingTab = class extends import_obsidian5.PluginSettingTab {
     new import_obsidian5.Setting(this.containerEl).setName("Staleness threshold (days)").setDesc("A Repo verified longer ago than this is highlighted as stale.").addText(
       (text) => text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
         const days = parseDays(value);
+        text.inputEl.toggleClass("mod-warning", days === null);
+        error.setText(days === null ? `Enter a whole number of days from 1 to ${MAX_DAYS}. Still using ${this.plugin.settings.stalenessDays}.` : "");
         if (days === null) return;
         this.plugin.settings.stalenessDays = days;
         await this.plugin.saveSettings();
+      }).inputEl.addEventListener("blur", () => {
+        text.setValue(String(this.plugin.settings.stalenessDays));
+        text.inputEl.removeClass("mod-warning");
+        error.setText("");
       })
     );
+    const error = this.containerEl.createDiv({ cls: "setting-item-description mod-warning" });
   }
 };

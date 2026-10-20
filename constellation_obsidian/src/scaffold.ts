@@ -259,8 +259,19 @@ const GROUPS: ColorGroup[] = [
   ["[type:client]", 0xab7df8],
 ].map(([query, rgb]) => ({ query: query as string, color: { a: 1, rgb: rgb as number } }));
 
-/** The graph's colour groups with one group per Note type; ours replace same-query groups, the user's are kept. */
+/** The graph's colour groups plus any Constellation group the user doesn't have yet; existing groups (and their colours) stay. */
 export function withColorGroups(current: ColorGroup[] | null | undefined): ColorGroup[] {
-  const mine = (current ?? []).filter((g) => !GROUPS.some((o) => o.query === g.query));
-  return [...mine, ...GROUPS.map((g) => ({ query: g.query, color: { ...g.color } }))];
+  const have = current ?? [];
+  return [...have, ...GROUPS.filter((o) => !have.some((g) => g.query === o.query)).map((g) => ({ query: g.query, color: { ...g.color } }))];
+}
+
+/** The Constellation group queries the user already has, which Initialize leaves as they are. */
+export function colorGroupsLeftAlone(current: ColorGroup[] | null | undefined): string[] {
+  return GROUPS.filter((o) => (current ?? []).some((g) => g.query === o.query)).map((g) => g.query);
+}
+
+/** The Template folder to use: the user's existing one is kept (keptFrom), only an unset one gets ours. */
+export function chooseTemplatesFolder(current: unknown): { folder: string; keptFrom: string | null } {
+  const c = typeof current === "string" ? current.trim() : "";
+  return c ? { folder: c, keptFrom: c } : { folder: TEMPLATES_FOLDER, keptFrom: null };
 }

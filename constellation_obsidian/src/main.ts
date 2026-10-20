@@ -3,7 +3,7 @@ import { archiveTicked, appendToArchive, isTaskNote } from "./archiver.ts";
 import { PanelView, VIEW_TYPE } from "./panel.ts";
 import { initializeVault } from "./initialize.ts";
 import { copyPrompt, isRepoReadme } from "./panel-repo.ts";
-import { withDefaults, parseDays, type Settings } from "./settings.ts";
+import { withDefaults, parseDays, MAX_DAYS, type Settings } from "./settings.ts";
 
 export default class ConstellationPlugin extends Plugin {
   declare settings: Settings;
@@ -109,12 +109,23 @@ class ConstellationSettingTab extends PluginSettingTab {
       .setName("Staleness threshold (days)")
       .setDesc("A Repo verified longer ago than this is highlighted as stale.")
       .addText((text) =>
-        text.setValue(String(this.plugin.settings.stalenessDays)).onChange(async (value) => {
-          const days = parseDays(value);
-          if (days === null) return;
-          this.plugin.settings.stalenessDays = days;
-          await this.plugin.saveSettings();
-        }),
+        text
+          .setValue(String(this.plugin.settings.stalenessDays))
+          .onChange(async (value) => {
+            const days = parseDays(value);
+            text.inputEl.toggleClass("mod-warning", days === null);
+            error.setText(days === null ? `Enter a whole number of days from 1 to ${MAX_DAYS}. Still using ${this.plugin.settings.stalenessDays}.` : "");
+            if (days === null) return;
+            this.plugin.settings.stalenessDays = days;
+            await this.plugin.saveSettings();
+          })
+          .inputEl.addEventListener("blur", () => {
+            // Show what is in force rather than the rejected text.
+            text.setValue(String(this.plugin.settings.stalenessDays));
+            text.inputEl.removeClass("mod-warning");
+            error.setText("");
+          }),
       );
+    const error = this.containerEl.createDiv({ cls: "setting-item-description mod-warning" });
   }
 }
