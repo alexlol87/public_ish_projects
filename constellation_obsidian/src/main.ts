@@ -1,5 +1,5 @@
 import { MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
-import { archiveTicked, appendToArchive, clampPos } from "./archiver.ts";
+import { archiveTicked, appendToArchive, clampPos, mapCursor } from "./archiver.ts";
 import { repoOf } from "./repo.ts";
 import { PanelView, VIEW_TYPE } from "./panel.ts";
 import { initializeVault } from "./initialize.ts";
@@ -60,7 +60,7 @@ export default class ConstellationPlugin extends Plugin {
     return this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v): v is MarkdownView => v instanceof MarkdownView && v.file === file)?.editor;
   }
 
-  async edit(file: TFile, fn: (text: string) => string) {
+  async edit(file: TFile, fn: (text: string) => string, moveCursor = (p: { line: number; ch: number }) => p) {
     const editor = this.editorOf(file);
     if (!editor) {
       await this.app.vault.process(file, fn);
@@ -71,7 +71,7 @@ export default class ConstellationPlugin extends Plugin {
     if (after === before) return;
     const cursor = editor.getCursor();
     editor.setValue(after);
-    editor.setCursor(clampPos(after, cursor));
+    editor.setCursor(clampPos(after, moveCursor(cursor)));
   }
 
   async archiveTicked(file: TFile) {
@@ -97,7 +97,7 @@ export default class ConstellationPlugin extends Plugin {
         if (!(vault.getAbstractFileByPath(folder) instanceof TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
-      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text);
+      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text, (pos) => mapCursor(a.keep, pos));
       new Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
     } catch (e) {
       new Notice(`Archive failed: ${e}. Check ${file.name} and the archive Note before retrying.`);

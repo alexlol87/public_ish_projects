@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { archiveTicked, appendToArchive, clampPos } from "./archiver.ts";
+import { archiveTicked, appendToArchive, clampPos, mapCursor } from "./archiver.ts";
 import { AGENTS_MD } from "./scaffold.ts";
 
 const day = new Date("2026-10-17T12:00:00Z");
@@ -128,4 +128,12 @@ test("clampPos keeps a cursor inside shortened text", () => {
   assert.deepEqual(clampPos("a\nb", { line: 6, ch: 5 }), { line: 1, ch: 1 });
   assert.deepEqual(clampPos("abc\nde\n", { line: 0, ch: 2 }), { line: 0, ch: 2 });
   assert.deepEqual(clampPos("", { line: 3, ch: 3 }), { line: 0, ch: 0 });
+});
+
+test("19: the cursor follows its text through the removed items", () => {
+  const r = archiveTicked(at("bugs.md"), "---\ntype: bugs\n---\n# Bugs\n\n- [ ] A open\n- [x] B fixed\n  more B\n- [ ] C open\n", day)!;
+  assert.deepEqual(mapCursor(r.keep, { line: 8, ch: 3 }), { line: 6, ch: 3 }); // C moves up two lines
+  assert.deepEqual(mapCursor(r.keep, { line: 5, ch: 4 }), { line: 5, ch: 4 }); // above B: unchanged
+  assert.deepEqual(mapCursor(r.keep, { line: 7, ch: 2 }), { line: 6, ch: 0 }); // inside B: where B was
+  assert.deepEqual(mapCursor(r.keep, { line: 9, ch: 0 }), { line: 7, ch: 0 }); // the empty last line
 });

@@ -173,14 +173,14 @@ function archiveTicked(path, text, on, resolve = (t) => t) {
   if (!repo || !isTaskNote(file)) return null;
   const closed = on.toISOString().slice(0, 10);
   const lines = text.split(/(?<=\n)/);
-  let kept = "";
+  const keep = [];
   let fence = false;
   const entries = [];
   for (let i = 0; i < lines.length; i++) {
     if (/^\s*(```|~~~)/.test(lines[i])) fence = !fence;
     const m = fence ? null : TASK.exec(lines[i]);
     if (!m || m[2] === " ") {
-      kept += lines[i];
+      keep.push(i);
       continue;
     }
     let end = i + 1;
@@ -192,8 +192,8 @@ function archiveTicked(path, text, on, resolve = (t) => t) {
         own.push(lines[j]);
         continue;
       }
-      kept += lines[j];
-      while (j + 1 < end && indent(lines[j + 1]) > c[1].length) kept += lines[++j];
+      keep.push(j);
+      while (j + 1 < end && indent(lines[j + 1]) > c[1].length) keep.push(++j);
     }
     const title = m[3].split(" \u2192 ")[0].trim() || "(no text)";
     const rest = own.map((l) => l.trim()).filter(Boolean).join(" ");
@@ -210,7 +210,8 @@ function archiveTicked(path, text, on, resolve = (t) => t) {
   if (!entries.length) return null;
   const bug = file === "bugs.md";
   return {
-    text: kept,
+    text: keep.map((i) => lines[i]).join(""),
+    keep,
     count: entries.length,
     archivePath: `${repo.project}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
     entries: entries.join("\n"),
@@ -231,6 +232,10 @@ function clampPos(text, pos) {
   const lines = text.split("\n");
   const line = Math.min(pos.line, lines.length - 1);
   return { line, ch: Math.min(pos.ch, lines[line].length) };
+}
+function mapCursor(keep, pos) {
+  const at2 = keep.indexOf(pos.line);
+  return at2 >= 0 ? { line: at2, ch: pos.ch } : { line: keep.filter((i) => i < pos.line).length, ch: 0 };
 }
 
 // src/panel.ts
@@ -798,7 +803,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
   editorOf(file) {
     return this.app.workspace.getLeavesOfType("markdown").map((l) => l.view).find((v) => v instanceof import_obsidian5.MarkdownView && v.file === file)?.editor;
   }
-  async edit(file, fn) {
+  async edit(file, fn, moveCursor = (p) => p) {
     const editor = this.editorOf(file);
     if (!editor) {
       await this.app.vault.process(file, fn);
@@ -809,7 +814,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
     if (after === before) return;
     const cursor = editor.getCursor();
     editor.setValue(after);
-    editor.setCursor(clampPos(after, cursor));
+    editor.setCursor(clampPos(after, moveCursor(cursor)));
   }
   async archiveTicked(file) {
     const { vault, metadataCache } = this.app;
@@ -832,7 +837,7 @@ var ConstellationPlugin = class extends import_obsidian5.Plugin {
         if (!(vault.getAbstractFileByPath(folder) instanceof import_obsidian5.TFolder)) await vault.createFolder(folder);
         await vault.create(a.archivePath, appendToArchive(null, a));
       }
-      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text);
+      await this.edit(file, (text) => archiveTicked(file.path, text, on, resolve)?.text ?? text, (pos) => mapCursor(a.keep, pos));
       new import_obsidian5.Notice(`Archived ${a.count} item${a.count === 1 ? "" : "s"} to ${a.archivePath}.`);
     } catch (e) {
       new import_obsidian5.Notice(`Archive failed: ${e}. Check ${file.name} and the archive Note before retrying.`);

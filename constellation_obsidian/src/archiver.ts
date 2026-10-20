@@ -5,6 +5,7 @@ import { repoOf } from "./repo.ts";
 
 export interface Archived {
   text: string; // the Note without its ticked items
+  keep: number[]; // the indices of the lines of the Note that remain, ascending
   count: number;
   archivePath: string;
   entries: string; // the archive entries, each ending in "\n"
@@ -26,14 +27,14 @@ export function archiveTicked(path: string, text: string, on: Date, resolve: (ta
   const closed = on.toISOString().slice(0, 10); // UTC, like staleness and the standalone app
 
   const lines = text.split(/(?<=\n)/);
-  let kept = "";
+  const keep: number[] = [];
   let fence = false;
   const entries: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (/^\s*(```|~~~)/.test(lines[i])) fence = !fence;
     const m = fence ? null : TASK.exec(lines[i]);
     if (!m || m[2] === " ") {
-      kept += lines[i];
+      keep.push(i);
       continue;
     }
     // The item: its line plus the more-indented lines after it. An unticked child task and its own detail lines stay in the Note.
@@ -46,8 +47,8 @@ export function archiveTicked(path: string, text: string, on: Date, resolve: (ta
         own.push(lines[j]);
         continue;
       }
-      kept += lines[j];
-      while (j + 1 < end && indent(lines[j + 1]) > c[1].length) kept += lines[++j];
+      keep.push(j);
+      while (j + 1 < end && indent(lines[j + 1]) > c[1].length) keep.push(++j);
     }
     const title = m[3].split(" → ")[0].trim() || "(no text)";
     const rest = own.map((l) => l.trim()).filter(Boolean).join(" ");
@@ -59,7 +60,8 @@ export function archiveTicked(path: string, text: string, on: Date, resolve: (ta
   if (!entries.length) return null;
   const bug = file === "bugs.md";
   return {
-    text: kept,
+    text: keep.map((i) => lines[i]).join(""),
+    keep,
     count: entries.length,
     archivePath: `${repo.project}/archive/${bug ? "fixed-bugs.md" : "done-todos.md"}`,
     entries: entries.join("\n"),
@@ -79,4 +81,10 @@ export function clampPos(text: string, pos: { line: number; ch: number }) {
   const lines = text.split("\n");
   const line = Math.min(pos.line, lines.length - 1);
   return { line, ch: Math.min(pos.ch, lines[line].length) };
+}
+
+/** Where a cursor goes when only the lines not in `keep` were removed: it stays on its text, or, if its line went, moves to where that line was. */
+export function mapCursor(keep: number[], pos: { line: number; ch: number }) {
+  const at = keep.indexOf(pos.line);
+  return at >= 0 ? { line: at, ch: pos.ch } : { line: keep.filter((i) => i < pos.line).length, ch: 0 };
 }
