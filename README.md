@@ -11,6 +11,8 @@ Things that others can use.
 | [`vscode_copilot_agents/`](vscode_copilot_agents/) | **VS Code + GitHub Copilot for agents**: how to configure VS Code and the Copilot extension for agents, subagents and skills (harness choice, settings, instructions, custom agents, skills, MCP, hooks, cost and approvals), with recommended settings, a copy-into-your-repo starter kit (`AGENTS.md`, orchestrator/researcher/reviewer/planner agents, a skill) and a script that installs the skills from `skills_updated/` so VS Code loads them. Checked against the VS Code docs of 2026-09-30. | Copy `template/` into your repo |
 | [`agents/`](agents/) | **Custom agents for GitHub Copilot in VS Code**: [`ReviewAgent`](agents/ReviewAgent/) (**Code Reviewer**, an agent that never edits code and reviews changes against a Jira ticket (read with your `jira-cli` and `confluence-cli` skills), plan or requirements, and for unintended logic or endpoint changes, missed reuse, duplicated logic, KISS, YAGNI, DRY, SOLID, clean code, tests, security and performance) and [`TesterAgent`](agents/TesterAgent/) (**Story Tester**, turns a Jira story into test files: ordered Bruno requests grouped by positive and negative scenario in your open collection, or a curl/browser test plan; runs nothing unless you ask and never against production). | Copy `agents/ReviewAgent/.github/agents/code-reviewer.agent.md` into your repo's `.github/agents/` |
 | [`springboot_java_utilities/`](springboot_java_utilities/) | **Java linters demo**: a small Spring Boot 4.1 / H2 app (REST, service, JPA repository, tests with WireMock and JSON stubs) wired to **Spotless, Checkstyle, SpotBugs + Find Security Bugs, PMD + CPD and SonarQube**, plus deliberately bad code (`-Pdemo`) and a script that shows what each tool catches. | `mvn verify`; `scripts/run-demo.sh` |
+| [`local_memory_sqlite/`](local_memory_sqlite/) | **Local memory (SQLite)**: memory that lasts between sessions for GitHub Copilot agents in VS Code. One SQLite database with full-text search, global and per-repository memories, a SessionStart hook, and a PostToolUse hook that loads a repository's memories the first time the agent touches it, so a workspace with many repositories keeps them apart. Six `alx-*` skills to remember, recall, forget, list and reflect (Python stdlib only). | Ask your agent to follow [`install.md`](local_memory_sqlite/install.md) |
+| [`local_memory/`](local_memory/) | **Local Memory** (older, file-based): memory and learned habits ("instincts") for GitHub Copilot in VS Code when Copilot Memory is turned off, as plain files managed by one Python script, two skills and four hooks. | `./install.sh` |
 | [`claude_statusline/`](claude_statusline/) | **Claude Code status line**: Victor Rentea's [victor-statusline](https://github.com/victorrentea/victor-statusline) with a Dracula colour theme and calendar days for the weekly reset, self-contained (script, `install.sh` that merges only the `statusLine` setting, my previous bar to switch back). | `./install.sh` |
 
 ## Window Borders
@@ -25,15 +27,6 @@ can get the same color back after an app restart.
   grant Accessibility.
 - **Details:** settings, permissions, limitations, architecture and how to build it yourself are in
   [window_borders/README.md](window_borders/README.md).
-
-## Extracting lm.zip and lms.zip
-
-`lm.zip` and `lms.zip` (`local_memory_sqlite/`, SQLite-backed agent memory for GitHub Copilot in VS Code) are
-encrypted with AES-256. The `unzip` that ships with macOS can't open them, but the built-in `bsdtar` can:
-
-```sh
-bsdtar -xf lms.zip --passphrase 'PASSWORD'
-```
 
 ## CI
 

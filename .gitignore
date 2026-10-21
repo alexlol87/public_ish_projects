@@ -66,6 +66,3 @@ fastlane/test_output
 __pycache__/
 .claude/
 
-# Published only as an AES-256 zip
-local_memory_sqlite/
-local_memory/
