@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "__CMD__ hook session-start",
+        "powershell": "__CMD__ hook session-start",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "__CMD__ hook user-prompt",
+        "powershell": "__CMD__ hook user-prompt",
+        "timeoutSec": 5
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "__CMD__ hook tool-failure",
+        "powershell": "__CMD__ hook tool-failure",
+        "timeoutSec": 5
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "__CMD__ hook agent-stop",
+        "powershell": "__CMD__ hook agent-stop",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}
