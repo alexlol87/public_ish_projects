@@ -69,9 +69,3 @@ __pycache__/
 # Published only as an AES-256 zip
 local_memory_sqlite/
 local_memory/
-
-# Constellation: specs and issues stay local
-constellation/.scratch/
-
-# Constellation for Obsidian: specs and issues stay local
-constellation_obsidian/.scratch/
