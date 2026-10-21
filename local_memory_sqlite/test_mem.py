@@ -4,6 +4,7 @@ Run: python3 -m unittest -v test_mem.py
 """
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -472,6 +473,42 @@ class TestMultiRepoWorkspace(Base):
         self.sql("UPDATE session_loads SET loaded_at = '2000-01-01T00:00:00Z'")
         self.run_cli("list")
         self.assertEqual(self.sql("SELECT count(*) FROM session_loads")[0][0], 0)
+
+    def multi_root(self, workspace_json):
+        """A VS Code storage folder for an open .code-workspace; returns the transcript path hooks receive."""
+        storage = os.path.join(self.tmp.name, "workspaceStorage", "abc123")
+        os.makedirs(storage)
+        with open(os.path.join(storage, "workspace.json"), "w") as f:
+            f.write(workspace_json)
+        return os.path.join(storage, "GitHub.copilot-chat", "transcripts", "s.jsonl")
+
+    def test_multi_root_code_workspace(self):
+        ws = os.path.join(self.tmp.name, "my.code-workspace")
+        with open(ws, "w") as f:
+            f.write('{\n  // products first, so VS Code sends it as cwd\n  "folders": [\n'
+                    '    {"path": "work/myproject/products"},\n'
+                    '    {"uri": "file://%s", "name": "apps // not a comment"}, /* trailing comma */\n  ],\n}'
+                    % os.path.join(self.cwd, "apps").replace(" ", "%20"))
+        transcript = self.multi_root(json.dumps({"workspace": "file://" + ws}))
+        stdin = json.dumps({"hook_event_name": "SessionStart", "session_id": "m", "cwd": self.products,
+                            "transcript_path": transcript})
+        text = self.run_cli("context", stdin=stdin)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(os.path.join("work", "myproject", "products") + ": key lz/products, 2 memories", text)
+        self.assertIn("key lz/applications, 1 memories", text)  # found inside the apps root folder
+        self.assertIn("global body", text)
+        self.assertNotIn("products body", text)
+        self.assertIn("products body", self.tool({"filePath": os.path.join(self.products, "a")}, session="m"))
+
+    def test_single_folder_or_unreadable_workspace_falls_back_to_cwd(self):
+        for workspace_json in (json.dumps({"folder": "file://" + self.products}),
+                               json.dumps({"workspace": "file:///missing.code-workspace"}), "not json"):
+            with self.subTest(workspace_json=workspace_json):
+                transcript = self.multi_root(workspace_json)
+                stdin = json.dumps({"hook_event_name": "SessionStart", "cwd": self.products,
+                                    "transcript_path": transcript})
+                text = self.run_cli("context", stdin=stdin)["hookSpecificOutput"]["additionalContext"]
+                self.assertIn("products body", text)
+                shutil.rmtree(os.path.dirname(os.path.dirname(os.path.dirname(transcript))))
 
     def test_path_option(self):
         m = self.add("via path", "c", "repo", "always", "never", "--path", os.path.join(self.apps, "src"))

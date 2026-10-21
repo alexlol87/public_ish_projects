@@ -16,9 +16,13 @@ Memory that lasts between sessions for GitHub Copilot agents in VS Code (macOS).
 At session start the agent receives a header saying how to use the CLI, then the `always` memories in full and the `on_demand` titles, newest first, capped at 40 KB:
 
 - **One repository** (or a plain folder): global memories and that repository's.
-- **A folder holding several repositories** (found up to two levels down; hidden folders, `node_modules`, `venv`, `build`, `dist` and `target` are skipped): global memories only, plus the list of repositories with their keys and memory counts.
+- **Several repositories**: global memories only, plus the list of repositories with their keys and memory counts, and an instruction to run `mem.py list --repo <key>` before working in one of them. This applies to:
+  - a multi-root `.code-workspace`. VS Code gives hooks only the first root folder, so the hook finds the workspace file through the session's `transcript_path` (an undocumented VS Code storage layout; if it changes, the session falls back to the first root folder). Each root folder counts as a repository, or is searched for repositories if it isn't one.
+  - a folder that is not a repository but holds several, found up to two levels down. Hidden folders, `node_modules`, `venv`, `build`, `dist` and `target` are skipped.
 
-A PostToolUse hook does the rest. The first time a tool reads or edits a file in a repository, the agent gets that repository's memories (capped at 8 KB) and its key. Each repository loads once per session, and only if the session works in it. Which repositories a session has loaded is kept in the database for 30 days.
+A PostToolUse hook is the backup. The first time a tool reads or edits a file in a repository, that repository's memories (capped at 8 KB) and key are appended to the tool result, once per session. Which repositories a session has loaded is kept in the database for 30 days.
+
+Tested in VS Code 1.139 with Copilot Chat 0.67. Agents follow memories they fetched with `mem.py list` themselves. They tend to ignore memories that only arrive inside a tool result, as untrusted tool output, which is why the session start context tells them to fetch.
 
 ## Skills
 
@@ -53,4 +57,4 @@ Without `--repo`, a command uses the repository key of the current folder. `--pa
 python3 -m unittest -v test_mem.py
 ```
 
-The tests run the real CLI against a temporary database. They cover every command, the JSON errors, expiry parsing and purging, scope and repository filtering, FTS5 search (prefixes, phrases, ranking, diacritics, special characters), repository keys for SSH, HTTPS and Azure DevOps remotes, the hook output and its 40 KB cap, workspaces with several repositories (the repository list, loading on the first tool call, once per session, path forms in tool arguments), a broken database, and parallel writers.
+The tests run the real CLI against a temporary database. They cover every command, the JSON errors, expiry parsing and purging, scope and repository filtering, FTS5 search (prefixes, phrases, ranking, diacritics, special characters), repository keys for SSH, HTTPS and Azure DevOps remotes, the hook output and its 40 KB cap, workspaces with several repositories (multi-root `.code-workspace` files with comments and trailing commas, folders of repositories, loading on the first tool call, once per session, path forms in tool arguments), a broken database, and parallel writers.

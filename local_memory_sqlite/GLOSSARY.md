@@ -21,9 +21,9 @@ _Avoid_: "permanent". It mixes up "always loaded" with "never expires".
 
 **Session start context**: what the agent receives when a session begins: the always memories in full plus the on_demand titles, for global scope and the current repository. In a multi-repository workspace: global scope only, plus the list of repositories.
 
-**Multi-repository workspace**: an open folder that is not itself a git repository but holds several repositories. Each repository keeps its own memories.
+**Multi-repository workspace**: a multi-root `.code-workspace`, or an open folder that is not itself a git repository but holds several repositories. Each repository keeps its own memories.
 
-**Repository load**: in a multi-repository workspace, a repository's memories reach the agent the first time a tool touches a file in it, once per session.
+**Repository load**: in a multi-repository workspace, the agent fetches a repository's memories before working in it; as a backup they are also appended to the first tool result that touches the repository, once per session.
 
 **Remember**: storing a memory because the user said what to keep.
 
