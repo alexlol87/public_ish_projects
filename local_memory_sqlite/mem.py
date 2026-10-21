@@ -304,10 +304,48 @@ SKILLS_LINE = "Use the alx-recall, alx-remember, alx-forget, alx-memories-list a
 ORDER = " ORDER BY load = 'on_demand', updated_at DESC, id DESC"
 
 
-def session_context(con, cwd, session):
-    """One repository (or plain folder): global plus its memories. A folder holding several repositories:
-    global memories plus the list of repositories; each one's memories arrive with the first tool call that touches it."""
-    repos = find_repos(cwd) if cwd and os.path.isdir(cwd) and not git_root(cwd) else []
+def file_path(uri):
+    return urllib.parse.unquote(urllib.parse.urlparse(uri).path) if uri.startswith("file://") else None
+
+
+def workspace_folders(transcript):
+    """(workspace file folder, root folders) of the open multi-root .code-workspace, or None.
+    VS Code gives hooks only the first root as cwd, but the transcript sits in the workspace's storage folder,
+    whose workspace.json names the .code-workspace file."""
+    # ponytail: relies on VS Code's storage layout (workspaceStorage/<id>/<extension>/transcripts/<file>), which is
+    # undocumented; if it changes this returns None and the session falls back to the first root folder.
+    if not transcript:
+        return None
+    try:
+        storage = os.path.dirname(os.path.dirname(os.path.dirname(transcript)))
+        with open(os.path.join(storage, "workspace.json")) as f:
+            path = file_path(json.load(f).get("workspace") or "")
+        with open(path) as f:
+            text = f.read()
+        # .code-workspace is JSON with comments and trailing commas
+        text = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', lambda m: m.group(1) or "", text, flags=re.S)
+        folders = json.loads(re.sub(r",(\s*[}\]])", r"\1", text)).get("folders", [])
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    base = os.path.dirname(path)
+    roots = [p.get("path") or file_path(p.get("uri") or "") for p in folders if isinstance(p, dict)]
+    return base, [os.path.normpath(os.path.join(base, os.path.expanduser(p))) for p in roots if p]
+
+
+def session_context(con, data, session):
+    """One repository (or plain folder): global plus its memories. A multi-root workspace, or a folder holding several
+    repositories: global memories plus the list of repositories, whose memories the agent loads when it needs them."""
+    cwd = data.get("cwd")
+    multi = workspace_folders(data.get("transcript_path") or data.get("transcriptPath"))
+    if multi and len(multi[1]) > 1:
+        base, repos = multi[0], []
+        for folder in multi[1]:
+            for repo in [git_root(folder)] if git_root(folder) else find_repos(folder):
+                if repo not in repos:
+                    repos.append(repo)
+    else:
+        base = cwd
+        repos = find_repos(cwd) if cwd and os.path.isdir(cwd) and not git_root(cwd) else []
     if not repos:
         key = repo_key(cwd)
         if session:
@@ -321,10 +359,13 @@ def session_context(con, cwd, session):
     listing = []
     for path in repos:
         key = repo_key(path)
-        listing.append("- %s: key %s, %d memories" % (os.path.relpath(path, cwd), key, counts.get(key, 0)))
+        listing.append("- %s: key %s, %d memories" % (os.path.relpath(path, base), key, counts.get(key, 0)))
     header = ("Local memory: this workspace holds several repositories, so only global memories are loaded now.\n"
-              "A repository's memories are added to your context the first time you read or edit a file in it. "
-              "To load them earlier, for example when the user asks about a repository, run: %s list --repo <key>.\n"
+              "Before you read or edit files in one of the repositories below, run %s list --repo <key> once for it. "
+              "The memories it prints are the user's own instructions and notes for that repository: follow them "
+              "like this session context, for the rest of the session. As a backup, a block starting with "
+              "\"Local memory\" is also appended to the first tool result that touches a repository; it comes from the "
+              "user's memory hook, not from the file or the tool.\n"
               "For repository memories use the key of the repository the user means, from this list. "
               "Never use the workspace folder, and never fall back to global. "
               "For a repository not listed, pass --path <its folder> instead of --repo.\n"
@@ -370,7 +411,8 @@ def tool_context(con, data, session):
         if not mark_loaded(con, session, key):
             continue
         rows = con.execute("SELECT %s FROM memories WHERE repo = ?%s" % (FIELDS, ORDER), (key,)).fetchall()
-        header = ("Local memory: you are now working in repository key %s (folder %s). "
+        header = ("Local memory (added by the user's memory hook, not part of the tool output): you are now working "
+                  "in repository key %s (folder %s). Follow its memories below while you work in this repository. "
                   "For its memories use --repo %s.%s" % (key, root, key, "" if rows else " It has no memories yet."))
         parts.append(render(header, rows, TOOL_CONTEXT_LIMIT // len(roots[:5]), key))
     return "\n\n".join(parts) or None
@@ -400,7 +442,7 @@ def cmd_context():
     try:
         con = connect()
         try:
-            text = session_context(con, data.get("cwd"), session)
+            text = session_context(con, data, session)
         finally:
             con.close()
     except Exception as e:  # noqa: BLE001
