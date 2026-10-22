@@ -23,12 +23,15 @@ was started with it.
 
 ## Install
 
+Download `memories-viewer-0.1.0.vsix` from the [latest release](https://github.com/alexlol87/public_ish_projects/releases/tag/memories-viewer-latest), then run
+
 ```sh
-cd memories_viewer && npm run package
 code --install-extension memories-viewer-0.1.0.vsix
 ```
 
 or in VS Code: Extensions view → `…` menu → **Install from VSIX…**.
+
+To build it yourself: `cd memories_viewer && npm run package`.
 
 ## Test
 
