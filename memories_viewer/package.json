@@ -1,0 +1,59 @@
+{
+  "name": "memories-viewer",
+  "displayName": "Memories",
+  "description": "Browse the memories of local_memory_sqlite in a sidebar: global and per-repository, with full-text search.",
+  "version": "0.1.0",
+  "publisher": "alexlol87",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexlol87/public_ish_projects.git",
+    "directory": "memories_viewer"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "memories",
+          "title": "Memories",
+          "icon": "media/journal.svg"
+        }
+      ]
+    },
+    "views": {
+      "memories": [
+        {
+          "id": "memories.list",
+          "name": "Memories"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "memories.search", "title": "Search Memories", "icon": "$(search)" },
+      { "command": "memories.clearSearch", "title": "Clear Search", "icon": "$(clear-all)" },
+      { "command": "memories.refresh", "title": "Refresh Memories", "icon": "$(refresh)" },
+      { "command": "memories.open", "title": "Open Memory" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "memories.search", "when": "view == memories.list", "group": "navigation@1" },
+        { "command": "memories.clearSearch", "when": "view == memories.list && memories.searching", "group": "navigation@2" },
+        { "command": "memories.refresh", "when": "view == memories.list", "group": "navigation@3" }
+      ],
+      "commandPalette": [
+        { "command": "memories.open", "when": "false" }
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package": "npx @vscode/vsce package"
+  }
+}
