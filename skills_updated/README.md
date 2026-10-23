@@ -18,6 +18,7 @@ Agent skills for Claude Code (and other agents that read `SKILL.md`), copied at 
 | [`popular/ui-ux-pro-max/`](popular/ui-ux-pro-max/) | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill): the `ui-ux-pro-max` skill with its searchable design data | `56ea9cf` (2026-10-14) | MIT ([LICENSE](popular/ui-ux-pro-max/LICENSE)) |
 | [`popular/taste-skill/`](popular/taste-skill/) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill): the main `taste-skill` (`design-taste-frontend`, tasteskill v2 with its scripts, library, references and assets) | `6010f91` (2026-10-20) | MIT ([LICENSE](popular/taste-skill/LICENSE)) |
 | [`popular/impeccable/`](popular/impeccable/) | [pbakaus/impeccable](https://github.com/pbakaus/impeccable): the `impeccable` frontend design skill (v4.7.0) | `dad8dbb` (2026-10-20) | Apache-2.0 ([LICENSE](popular/impeccable/LICENSE), [NOTICE](popular/impeccable/NOTICE.md)) |
+| [`html-anything/`](html-anything/) | [nexu-io/html-anything](https://github.com/nexu-io/html-anything): three templates from `next/src/lib/templates/skills` (`deck-guizang-editorial`, `doc-kami-parchment`, `magazine-poster`), translated from Chinese to English | `975fb3b` (2026-10-13) | Apache-2.0 ([LICENSE](html-anything/LICENSE)) |
 
 ## New in this update (2026-10-05)
 
@@ -370,6 +371,14 @@ The names and descriptions below come from each skill's `SKILL.md`.
 | [`git-commit`](awesome-copilot/productivity/git-commit/SKILL.md) | Use this skill when the user wants to make a Git commit or split changes into more than one commit. Also use it when the user types "/commit" or asks for a conventional commit. The skill examines the diff, stages the related files, writes a Conventional Commits message, and runs git commit. Do not use it when the user wants only a commit message and no commit. Do not use it to push, open a pull request, rebase, or change the commit history. |
 | [`harness-engineering`](awesome-copilot/productivity/harness-engineering/SKILL.md) | Adopt repository-level harness engineering for coding agents. Use when a user wants to prevent repeated AI coding-agent mistakes by turning failures into durable instructions, drift checks, regression tests, failure memory, and adoption reports tailored to the target repository. |
 | [`remember`](awesome-copilot/productivity/remember/SKILL.md) | Transforms lessons learned into domain-organized memory instructions (global or workspace). Syntax: `/remember [>domain [scope]] lesson clue` where scope is `global` (default), `user`, `workspace`, or `ws`. |
+
+### HTML Anything (nexu-io, translated to English)
+
+| Skill | Description |
+|-------|-------------|
+| [`deck-guizang-editorial`](html-anything/deck-guizang-editorial/SKILL.md) | E-magazine × e-ink: 10 layouts and 5 palettes (Monocle ink, Indigo Porcelain, Forest Ink, Kraft Paper, Dune) |
+| [`doc-kami-parchment`](html-anything/doc-kami-parchment/SKILL.md) | Warm parchment ground (#f5f4ed) + single ink-blue accent (#1B365D) + one serif typeface: editorial-grade typesetting |
+| [`magazine-poster`](html-anything/magazine-poster/SKILL.md) | Sunday-paper style: large serif headline, two-column body text, numbered sections |
 <!-- skills:end -->
 
 ## Updating
