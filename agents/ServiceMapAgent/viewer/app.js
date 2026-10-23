@@ -36,7 +36,7 @@ const SERVICE_MAP = (() => {
         for (const [list, role] of [[s.produces, "producers"], [s.consumes, "consumers"]]) {
           for (const t of list || []) {
             const topic = topics[t.topic] ||= { name: t.topic, producers: [], consumers: [], events: new Set() };
-            topic[role].push(svc.id);
+            if (!topic[role].includes(svc.id)) topic[role].push(svc.id);
             (t.events || []).forEach(ev => topic.events.add(ev));
             if (t.question) questions.push({ text: t.question, where: `${svc.id} ${t.topic}`, href: `#/service/${enc(svc.id)}` });
           }
@@ -49,6 +49,8 @@ const SERVICE_MAP = (() => {
     const layerOrder = (state.system.layers || []).map(l => l.id);
     services.sort((a, b) => layerOrder.indexOf(a.layer) - layerOrder.indexOf(b.layer) || a.id.localeCompare(b.id));
     ix = { services, byId, endpoints, calls, topics, tables, glossary, notes, questions };
+    // Calls to a mapped service whose endpoint isn't in its data: the agent's `link` command fixes these.
+    ix.unresolved = calls.filter(c => byId[c.to] && !(byId[c.to].endpoints || []).some(e => matches(c.endpoint, e)));
   }
 
   // A call's target ("ANY /orders/**") matches an endpoint ("GET /orders/{id}").
@@ -121,7 +123,7 @@ const SERVICE_MAP = (() => {
           <a class="stat" href="#/calls"><b>${ix.calls.length}</b><span>calls between services</span></a>
           <a class="stat" href="#/calls"><b>${Object.keys(ix.topics).length}</b><span>Kafka topics</span></a>
           <a class="stat" href="#/data"><b>${ix.tables.length}</b><span>tables</span></a>
-          <a class="stat" href="#/questions"><b>${ix.questions.length}</b><span>open questions</span></a>
+          <a class="stat" href="#/questions"><b>${ix.questions.length + ix.unresolved.length}</b><span>open questions</span></a>
         </div>
         ${state.journeys.length ? `<h2>Start with a journey</h2><div class="grid">${state.journeys.map(j => `<a class="card" href="#/journey/${enc(j.id)}"><span class="title">${esc(j.title)}</span><p>${esc(j.story.split(". ")[0])}.</p></a>`).join("")}</div>` : ""}
         <h2>Things to know</h2>
@@ -140,9 +142,8 @@ const SERVICE_MAP = (() => {
         <div class="toggles" id="layer-toggles">${layers.map(l => `<label><input type="checkbox" value="${esc(l)}" checked> ${layerDot(l)} ${esc(l)}</label>`).join("")}
           <label><input type="checkbox" id="show-data" checked> databases</label><label><input type="checkbox" id="show-events" checked> topics</label></div>
         <div class="graph-wrap"><div id="graph" role="img" aria-label="Graph of services and their connections"></div><div id="graph-panel"><p class="muted">Click a service.</p></div></div>
-        <div class="legend"><span><i style="background:var(--domain)"></i>service (colour = layer)</span><span><i class="sq" style="background:var(--warn)"></i>topic</span>
-          <span><i class="sq" style="background:var(--infra)"></i>database</span><span><i style="background:var(--risk)"></i>external system</span>
-          <span>── HTTP call (number = endpoint calls)</span><span>- - - event</span></div>`;
+        <div class="legend"><span><i class="fill"></i>service</span><span><i class="ring"></i>external system</span><span><i class="topic"></i>topic</span>
+          <span><i class="db"></i>database</span><span>── HTTP call, number = endpoint calls</span><span>- - - event</span><span>····· own database</span></div>`;
     },
 
     endpoints() {
@@ -197,7 +198,7 @@ const SERVICE_MAP = (() => {
         ${foot(s)}`;
     },
 
-    endpoint(svcId, key) {
+    endpoint(svcId, key, mode) {
       const s = ix.byId[svcId], e = s && (s.endpoints || []).find(x => `${x.method} ${x.path}` === key);
       if (!e) return notFound(`No endpoint ${key} in ${svcId}.`);
       const callers = callersOf(svcId, e), out = (s.calls || []).filter(c => c.from === key), f = e.flow;
@@ -205,10 +206,11 @@ const SERVICE_MAP = (() => {
         <div class="eyebrow">${layerPill(s.layer)}<a href="#/service/${enc(s.id)}">${esc(s.id)}</a></div>
         <h1>${method(e.method)} <span class="mono">${esc(e.path)}</span></h1>
         <p class="lede">${esc(e.purpose)}</p>
-        <div class="use"><p><b>Use it when</b> ${esc(e.use_when)}</p>${e.dont_confuse ? `<p><b>Don't confuse with</b> ${esc(e.dont_confuse)}</p>` : ""}
+        <div class="use"><p class="when"><b>Use it when</b> ${esc(e.use_when)}</p>${e.dont_confuse ? `<p><b>Don't confuse with</b> ${esc(e.dont_confuse)}</p>` : ""}
           <p><b>Called by</b> ${callers.length ? callers.map(c => `${svcLink(c.svc.id)} <code>${esc(c.from)}</code>`).join(", ") : "clients (no service calls it)"} · <b>Auth</b> ${esc(e.auth)} · ${ref(e.ref)}</p></div>
         ${e.question ? callout("question", e.question) : ""}
-        ${f ? `<h2>What it does</h2>${diagram(f.diagram)}
+        ${impactSection(s, e, mode === "chain")}
+        ${f ? `<h2>What it does, step by step</h2>${diagram(f.diagram)}
           ${f.steps?.length ? `<h3>Steps</h3><ol class="steps">${f.steps.map(st => `<li>${esc(st.text)} ${ref(st.ref)}</li>`).join("")}</ol>` : ""}
           ${f.errors?.length ? `<h2>Validation and errors</h2>${table(["When", "Status", "Error"], f.errors.map(x => [esc(x.when), `<b>${esc(x.status)}</b>`, `<code>${esc(x.code)}</code>`]))}` : ""}
           ${f.changes ? `<h2>What changes</h2><p>${esc(f.changes)}</p>` : ""}`
@@ -262,7 +264,9 @@ const SERVICE_MAP = (() => {
 
     questions() {
       return `<h1>Open questions</h1><p class="lede">What the agent couldn't prove from the code. Ask the team, then tell the agent the answer.</p>
-        ${ix.questions.map(q => `<div class="callout question"><span class="tag">Open</span><p>${esc(q.text)} <a href="${q.href}">${esc(q.where)}</a></p></div>`).join("") || `<p class="muted">None.</p>`}`;
+        ${ix.questions.map(q => `<div class="callout question"><span class="tag">Open</span><p>${esc(q.text)} <a href="${q.href}">${esc(q.where)}</a></p></div>`).join("") || `<p class="muted">None.</p>`}
+        <h2>Unresolved links</h2><p>Calls whose target endpoint isn't in the target service's data yet, so endpoint graphs stop there. Say <code>link</code> to the agent to resolve them.</p>
+        ${table(["Caller", "From", "Calls", "Endpoint"], ix.unresolved.map(c => [svcLink(c.svc.id), `<code>${esc(c.from)}</code>`, svcLink(c.to), `<code>${esc(c.endpoint)}</code>`]))}`;
     },
 
     progress() {
@@ -274,9 +278,97 @@ const SERVICE_MAP = (() => {
     },
   };
 
+  // What one request to an endpoint touches, stitched at view time from every repository's data, so the agent needs
+  // no second pass. Default: one level (the endpoints it calls in other services are end nodes, each linking to its
+  // own graph). chain = true follows those endpoints, and the listeners of the events it sends, all the way down.
+  function impact(svcId, key, chain) {
+    const nodes = new Map(), edges = [], seen = new Set(), next = [];
+    const counts = { services: new Set([svcId]), endpoints: 0, tables: 0, topics: 0, external: 0, unresolved: 0 };
+    const add = (id, label, shape, group) => { if (!nodes.has(id)) nodes.set(id, { id, label, shape, group }); return id; };
+    const visit = (sid, k, depth) => {
+      const at = `${sid}::${k}`;
+      if (seen.has(at) || depth > 8) return;
+      seen.add(at);
+      const s = ix.byId[sid];
+      for (const c of (s.calls || []).filter(c => c.from === k)) {
+        const target = ix.byId[c.to];
+        if (!target) {
+          if (!nodes.has(`ext::${c.to}`)) counts.external++;
+          edges.push([at, add(`ext::${c.to}`, `${c.to}<br>${c.endpoint}`, "ext"), ""]);
+          continue;
+        }
+        counts.services.add(c.to);
+        const hits = (target.endpoints || []).filter(e => matches(c.endpoint, e));
+        if (hits.length === 1) {
+          const tk = `${hits[0].method} ${hits[0].path}`, tid = `${c.to}::${tk}`;
+          if (!nodes.has(tid)) counts.endpoints++;
+          edges.push([at, add(tid, tk, "ep", c.to), ""]);
+          if (depth === 0) next.push({ svc: c.to, key: tk });
+          if (chain) visit(c.to, tk, depth + 1);
+        } else {
+          if (!hits.length) counts.unresolved++;
+          const label = hits.length ? `${c.endpoint}<br>${hits.length} endpoints` : `${c.endpoint}<br>not mapped yet`;
+          edges.push([at, add(`${c.to}::${c.endpoint}`, label, hits.length ? "ep" : "unknown", c.to), ""]);
+        }
+      }
+      for (const t of s.tables || []) {
+        const w = (t.written_by || []).includes(k), r = (t.read_by || []).includes(k);
+        if (!w && !r) continue;
+        const tid = `${sid}::table::${t.name}`;
+        if (!nodes.has(tid)) counts.tables++;
+        edges.push([at, add(tid, t.name, "table", sid), w ? "writes" : "reads"]);
+      }
+      for (const t of (s.produces || []).filter(t => (t.from || []).includes(k))) {
+        if (!nodes.has(`topic::${t.topic}`)) counts.topics++;
+        const tid = add(`topic::${t.topic}`, t.topic, "topic");
+        edges.push([at, tid, (t.events || []).join(", ")]);
+        for (const cs of ix.services) for (const cons of (cs.consumes || []).filter(x => x.topic === t.topic && x.handler)) {
+          counts.services.add(cs.id);
+          edges.push([tid, add(`${cs.id}::${cons.handler}`, `${cons.handler}<br>listener`, "handler", cs.id), ""]);
+          if (chain) visit(cs.id, cons.handler, depth + 1);
+        }
+      }
+    };
+    const e = (ix.byId[svcId].endpoints || []).find(x => `${x.method} ${x.path}` === key);
+    const root = add(`${svcId}::${key}`, key, "root", svcId);
+    visit(svcId, key, 0);
+    const callers = callersOf(svcId, e);
+    for (const c of callers) edges.unshift([add(`${c.svc.id}::${c.from}`, c.from, "caller", c.svc.id), root, ""]);
+    if (!callers.length) edges.unshift([add("client", "Client", "client"), root, ""]);
+
+    const ids = new Map([...nodes.keys()].map((k, i) => [k, `n${i}`]));
+    const q = t => `"${String(t).replace(/"/g, "'")}"`;
+    const shape = n => ({ table: `[(${q(n.label)})]`, topic: `[[${q(n.label)}]]`, ext: `{{${q(n.label)}}}`, client: `([${q(n.label)}])`, handler: `[/${q(n.label)}/]` }[n.shape] || `[${q(n.label)}]`);
+    const lines = ["flowchart LR"], groups = {};
+    for (const n of nodes.values()) (groups[n.group || ""] ||= []).push(n);
+    Object.entries(groups).forEach(([g, list], gi) => {
+      if (g) lines.push(`  subgraph g${gi}[${q(g)}]`);
+      for (const n of list) lines.push(`    ${ids.get(n.id)}${shape(n)}`);
+      if (g) lines.push("  end");
+    });
+    for (const [a, b, l] of edges) lines.push(`  ${ids.get(a)} -->${l ? `|${q(l)}|` : ""} ${ids.get(b)}`);
+    lines.push(`  style ${ids.get(root)} fill:#1B365D,color:#f5f4ed,stroke:#1B365D`);
+    for (const n of nodes.values()) if (n.shape === "unknown") lines.push(`  style ${ids.get(n.id)} stroke-dasharray:4 3`);
+    return { src: lines.join("\n"), counts, size: nodes.size, next };
+  }
+
+  function impactSection(s, e, chain) {
+    const key = `${e.method} ${e.path}`, im = impact(s.id, key, chain), c = im.counts;
+    if (im.size <= 2 && !c.tables) return "";
+    const parts = [[c.services.size, "service", "services"], [c.endpoints, "endpoint in another service", "endpoints in other services"], [c.tables, "table", "tables"], [c.topics, "topic", "topics"], [c.external, "external system", "external systems"]]
+      .filter(([n]) => n).map(([n, one, many]) => [n, n === 1 ? one : many]);
+    const href = epHref(s.id, e);
+    return `<h2>${chain ? "Everything one call touches" : "What one call touches"}</h2>
+      <p>${chain ? "Following every call and event down the chain, one" : "One"} request to <code>${esc(key)}</code> reaches ${parts.map(([n, w]) => `<b>${n}</b> ${w}`).join(", ")}${c.unresolved ? `, plus <b>${c.unresolved}</b> call${c.unresolved > 1 ? "s" : ""} the map can't follow yet (dashed)` : ""}.
+        ${chain ? `<a href="${href}">Show direct calls only</a>` : `<a href="${href}/chain">Show the whole chain</a>`}</p>
+      ${diagram(im.src)}
+      ${!chain && im.next.length ? `<p class="caption">Open the next step: ${im.next.map(n => `<a href="${epHref(n.svc, ix.byId[n.svc].endpoints.find(x => `${x.method} ${x.path}` === n.key))}">${esc(n.svc)} <span class="mono">${esc(n.key)}</span></a>`).join(" · ")}</p>` : ""}
+      <p class="caption">Boxes group what belongs to one service. Arrows follow HTTP calls, table reads and writes, and events to the listeners that react to them.</p>`;
+  }
+
   function serviceCard(s) {
     return `<a class="card layer-${esc(s.layer)}" href="#/service/${enc(s.id)}"><span class="title">${layerDot(s.layer)}${esc(s.id)}</span><p>${esc(s.purpose)}</p>
-      <span class="meta"><span>${(s.endpoints || []).length} endpoints</span><span>${(s.calls || []).length} calls out</span>${(s.notes || []).some(n => n.level === "risk") ? `<span style="color:var(--risk)">has risks</span>` : ""}</span></a>`;
+      <span class="meta"><span>${(s.endpoints || []).length} endpoints</span><span>${(s.calls || []).length} calls out</span>${(s.notes || []).some(n => n.level === "risk") ? `<span style="color:var(--accent)">has risks</span>` : ""}</span></a>`;
   }
   const notFound = msg => `<h1>Not found</h1><p class="lede">${esc(msg)}</p><p><a href="#/">Back to the start</a></p>`;
 
@@ -285,7 +377,6 @@ const SERVICE_MAP = (() => {
     const box = document.getElementById("graph");
     if (!box || !window.cytoscape) return;
     const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
-    const layerColor = { Edge: v("--edge"), Domain: v("--domain"), Integration: v("--integration"), Workers: v("--workers") };
     const nodes = {}, edges = {};
     const node = (id, kind, layer) => nodes[id] ||= { data: { id, label: id, kind, layer: layer || "" } };
     const edge = (source, target, kind) => { const id = `${source}>${target}>${kind}`; (edges[id] ||= { data: { id, source, target, kind, count: 0 } }).data.count++; };
@@ -299,16 +390,15 @@ const SERVICE_MAP = (() => {
     const cy = cytoscape({
       container: box, elements: [...Object.values(nodes), ...Object.values(edges)], wheelSensitivity: 0.2,
       style: [
-        { selector: "node", style: { label: "data(label)", color: v("--fg"), "font-size": 11, "font-family": v("--font"), "text-valign": "bottom", "text-margin-y": 5, width: 30, height: 30, "background-color": v("--infra") } },
-        ...Object.entries(layerColor).map(([l, c]) => ({ selector: `node[layer = "${l}"]`, style: { "background-color": c } })),
-        { selector: 'node[kind = "topic"]', style: { shape: "round-rectangle", "background-color": v("--warn"), width: 44, height: 18 } },
-        { selector: 'node[kind = "db"]', style: { shape: "barrel", "background-color": v("--infra"), width: 24, height: 28 } },
-        { selector: 'node[kind = "external"]', style: { shape: "hexagon", "background-color": v("--risk") } },
-        { selector: "edge", style: { width: 1.6, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": v("--muted"), "target-arrow-color": v("--muted"), label: "data(count)", "font-size": 9, color: v("--muted"), "text-background-color": v("--surface"), "text-background-opacity": 1 } },
-        { selector: 'edge[kind = "event"]', style: { "line-style": "dashed", label: "", "line-color": v("--warn"), "target-arrow-color": v("--warn") } },
-        { selector: 'edge[kind = "data"]', style: { "line-style": "dotted", "target-arrow-shape": "none", label: "" } },
-        { selector: ".faded", style: { opacity: 0.12 } },
-        { selector: "node:selected", style: { "border-width": 3, "border-color": v("--accent") } },
+        { selector: "node", style: { label: "data(label)", color: v("--ink"), "font-size": 12, "font-family": v("--serif"), "text-valign": "bottom", "text-margin-y": 6, width: 26, height: 26, "background-color": v("--accent"), "border-width": 1, "border-color": v("--accent") } },
+        { selector: 'node[kind = "topic"]', style: { shape: "rectangle", "background-color": v("--paper-2"), width: 42, height: 16 } },
+        { selector: 'node[kind = "db"]', style: { shape: "barrel", "background-color": v("--paper-2"), width: 22, height: 26 } },
+        { selector: 'node[kind = "external"]', style: { "background-color": v("--paper"), "border-width": 2 } },
+        { selector: "edge", style: { width: 1, "curve-style": "bezier", "target-arrow-shape": "triangle", "arrow-scale": .8, "line-color": v("--ink-2"), "target-arrow-color": v("--ink-2"), label: "data(count)", "font-size": 10, "font-family": v("--mono"), color: v("--muted"), "text-background-color": v("--paper"), "text-background-opacity": 1 } },
+        { selector: 'edge[kind = "event"]', style: { "line-style": "dashed", label: "", "line-color": v("--accent"), "target-arrow-color": v("--accent") } },
+        { selector: 'edge[kind = "data"]', style: { "line-style": "dotted", "target-arrow-shape": "none", label: "", "line-color": v("--muted") } },
+        { selector: ".faded", style: { opacity: 0.15 } },
+        { selector: "node:selected", style: { "border-width": 3, "border-color": v("--ink") } },
       ],
       layout: { name: "breadthfirst", directed: true, spacingFactor: 1.15, roots: ix.services.filter(s => s.layer === (state.system.layers?.[0]?.id)).map(s => s.id) },
     });
@@ -341,7 +431,7 @@ const SERVICE_MAP = (() => {
   // ---------- nav, search, routing ----------
   function nav() {
     const pages = [["", "Start here"], ["graph", "System graph"], ["endpoints", "All endpoints"], ["calls", "Calls and events"], ["data", "Data"],
-      ["infra", "Infrastructure and CI/CD"], ["glossary", "Glossary"], ["questions", `Open questions (${ix.questions.length})`], ["progress", "Map progress"]];
+      ["infra", "Infrastructure and CI/CD"], ["glossary", "Glossary"], ["questions", `Open questions (${ix.questions.length + ix.unresolved.length})`], ["progress", "Map progress"]];
     const byLayer = {};
     ix.services.forEach(s => (byLayer[s.layer] ||= []).push(s));
     document.getElementById("nav").innerHTML =
@@ -385,8 +475,18 @@ const SERVICE_MAP = (() => {
   function start() {
     buildIndex();
     document.getElementById("brand-name").textContent = `${state.system.name} map`;
-    const dark = matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light" || document.documentElement.dataset.theme === "dark";
-    if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral", fontFamily: "system-ui, sans-serif" });
+    const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
+    if (window.mermaid) mermaid.initialize({
+      startOnLoad: false, securityLevel: "strict", theme: "base", fontFamily: v("--serif"),
+      themeVariables: {
+        background: v("--paper"), primaryColor: v("--paper-2"), primaryBorderColor: v("--accent"), primaryTextColor: v("--ink"),
+        secondaryColor: v("--paper"), tertiaryColor: v("--paper"), lineColor: v("--ink-2"), textColor: v("--ink"),
+        clusterBkg: v("--paper"), clusterBorder: v("--rule"), edgeLabelBackground: v("--paper"),
+        actorBkg: v("--paper-2"), actorBorder: v("--accent"), actorTextColor: v("--ink"), signalColor: v("--ink-2"), signalTextColor: v("--ink"),
+        noteBkgColor: v("--paper-2"), noteBorderColor: v("--accent"), noteTextColor: v("--ink"), labelBoxBkgColor: v("--paper-2"), labelBoxBorderColor: v("--accent"),
+        activationBkgColor: v("--paper-2"), sequenceNumberColor: v("--paper"), fontSize: "14px",
+      },
+    });
     nav(); search();
     addEventListener("hashchange", route);
     route();

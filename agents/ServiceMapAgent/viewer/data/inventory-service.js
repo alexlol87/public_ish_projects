@@ -17,10 +17,10 @@ SERVICE_MAP.repo({
       { kind: "Scheduled", name: "ReservationExpiryJob", does: "Every minute, frees reservations older than 15 minutes.", ref: "inventory-service/src/main/java/shop/inventory/ReservationExpiryJob.java:15" },
     ],
     calls: [],
-    consumes: [{ topic: "order-events", events: ["OrderPlaced", "OrderCancelled"] }],
+    consumes: [{ topic: "order-events", events: ["OrderPlaced", "OrderCancelled"], handler: "OrderEventsListener" }],
     tables: [
-      { name: "stock", written_by: ["order-events listener"], read_by: ["GET /stock/{sku}"] },
-      { name: "reservations", written_by: ["POST /stock/reservations", "DELETE /stock/reservations/{id}"], read_by: ["ReservationExpiryJob"] },
+      { name: "stock", written_by: ["OrderEventsListener"], read_by: ["GET /stock/{sku}", "POST /stock/reservations"] },
+      { name: "reservations", written_by: ["POST /stock/reservations", "DELETE /stock/reservations/{id}", "OrderEventsListener"], read_by: ["ReservationExpiryJob"] },
     ],
   }],
 });

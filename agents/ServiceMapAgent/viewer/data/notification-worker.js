@@ -8,13 +8,14 @@ SERVICE_MAP.repo({
     pipeline: { workflow: "deploy-notifications.yml", pr: "build, tests", merge: "deploy to dev, then test", prod: "manual approval" },
     endpoints: [],
     entry_points: [
-      { kind: "Kafka listener", name: "order-events", does: "OrderPlaced sends the confirmation; OrderCancelled sends the cancellation and refund notice.", ref: "notification-worker/src/main/java/shop/notify/OrderMails.java:20" },
-      { kind: "Kafka listener", name: "payment-events", does: "PaymentFailed asks the customer to update their card.", ref: "notification-worker/src/main/java/shop/notify/PaymentMails.java:18" },
+      { kind: "Kafka listener", name: "OrderMails", does: "OrderPlaced sends the confirmation; OrderCancelled sends the cancellation and refund notice.", ref: "notification-worker/src/main/java/shop/notify/OrderMails.java:20" },
+      { kind: "Kafka listener", name: "PaymentMails", does: "PaymentFailed asks the customer to update their card.", ref: "notification-worker/src/main/java/shop/notify/PaymentMails.java:18" },
     ],
     calls: [
-      { from: "order-events listener", to: "email-provider", endpoint: "POST /v3/mail/send", kind: "HTTP", on_failure: "3 retries, then the notifications-dlt topic", external: true },
+      { from: "OrderMails", to: "email-provider", endpoint: "POST /v3/mail/send", kind: "HTTP", on_failure: "3 retries, then the notifications-dlt topic", external: true },
+      { from: "PaymentMails", to: "email-provider", endpoint: "POST /v3/mail/send", kind: "HTTP", on_failure: "3 retries, then the notifications-dlt topic", external: true },
     ],
-    consumes: [{ topic: "order-events", events: ["OrderPlaced", "OrderCancelled"] }, { topic: "payment-events", events: ["PaymentFailed"] }],
+    consumes: [{ topic: "order-events", events: ["OrderPlaced", "OrderCancelled"], handler: "OrderMails" }, { topic: "payment-events", events: ["PaymentFailed"], handler: "PaymentMails" }],
     tables: [],
   }],
 });

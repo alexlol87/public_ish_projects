@@ -20,7 +20,7 @@ SERVICE_MAP.repo({
       { from: "POST /payments", to: "payment-provider", endpoint: "POST /v2/charges", kind: "HTTP (RestClient)", on_failure: "30 s timeout", external: true },
       { from: "POST /refunds", to: "payment-provider", endpoint: "POST /v2/refunds", kind: "HTTP (RestClient)", on_failure: "30 s timeout", external: true },
     ],
-    produces: [{ topic: "payment-events", events: ["PaymentFailed", "RefundCompleted"] }],
+    produces: [{ topic: "payment-events", events: ["PaymentFailed"], from: ["POST /payments"] }, { topic: "payment-events", events: ["RefundCompleted"], from: ["POST /refunds"] }],
     tables: [
       { name: "payments", written_by: ["POST /payments"], read_by: ["GET /payments/{id}"] },
       { name: "refunds", written_by: ["POST /refunds", "POST /refunds/partial"], read_by: [] },

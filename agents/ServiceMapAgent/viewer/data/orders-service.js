@@ -40,7 +40,7 @@ SERVICE_MAP.repo({
     OS->>I: DELETE /stock/reservations/{id}
     OC-->>C: 402 / 503
   end
-  rect rgba(127,127,127,0.12)
+  rect rgb(239,238,229)
   note over OS,DB: @Transactional
   OS->>DB: INSERT orders, order_lines
   OS->>DB: INSERT outbox (OrderPlaced)
@@ -80,7 +80,7 @@ SERVICE_MAP.repo({
   participant I as inventory-service
   participant K as order-events
   C->>OS: POST /orders/{id}/cancel
-  rect rgba(127,127,127,0.12)
+  rect rgb(239,238,229)
   note over OS,DB: @Transactional
   OS->>DB: SELECT orders WHERE id = ? FOR UPDATE
   alt not the owner and not support
@@ -126,12 +126,13 @@ SERVICE_MAP.repo({
       { from: "POST /orders/{id}/cancel", to: "billing-service", endpoint: "POST /refunds", kind: "HTTP (Feign)", on_failure: "Order stays CANCEL_PENDING, RefundRetryJob retries" },
       { from: "POST /orders/{id}/cancel", to: "inventory-service", endpoint: "DELETE /stock/reservations/{id}", kind: "HTTP (Feign)", on_failure: "Logged only; stock held until expiry" },
     ],
-    produces: [{ topic: "order-events", events: ["OrderPlaced", "OrderCancelled", "OrderShipped"] }],
-    consumes: [{ topic: "shipment-events", events: ["ShipmentDelivered"], question: "No producer in the mapped repositories; probably the external warehouse." }],
+    produces: [{ topic: "order-events", events: ["OrderPlaced"], from: ["POST /orders"] }, { topic: "order-events", events: ["OrderCancelled"], from: ["POST /orders/{id}/cancel"] }],
+    consumes: [{ topic: "shipment-events", events: ["ShipmentDelivered"], handler: "ShipmentListener", question: "No producer in the mapped repositories; probably the external warehouse." }],
     tables: [
       { name: "orders", written_by: ["POST /orders", "POST /orders/{id}/cancel", "ShipmentListener"], read_by: ["GET /orders", "GET /orders/{id}"] },
       { name: "order_lines", written_by: ["POST /orders"], read_by: ["GET /orders/{id}"] },
       { name: "outbox", written_by: ["POST /orders", "POST /orders/{id}/cancel"], read_by: ["OutboxRelay"] },
+      { name: "refund_retries", written_by: ["RefundRetryJob"], read_by: [] },
     ],
     er: `erDiagram
   orders ||--o{ order_lines : has
