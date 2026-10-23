@@ -1,0 +1,18 @@
+repo: api-gateway
+commit: 8d41e07
+mapped: 2026-10-23
+services:
+  - id: api-gateway
+    layer: Edge
+    purpose: Single public entry point. Checks the JWT and routes /api/** to the domain services.
+    page: services/api-gateway/index.html
+    endpoints:
+      - {method: ANY, path: /api/orders/**, use_when: "Any client call to orders; forwards to orders-service /orders/**"}
+      - {method: ANY, path: /api/stock/**, use_when: "Any client call to stock; forwards to inventory-service /stock/**"}
+    calls:
+      - {from: "ANY /api/orders/**", to: orders-service, endpoint: "ANY /orders/**", kind: sync}
+      - {from: "ANY /api/stock/**", to: inventory-service, endpoint: "ANY /stock/**", kind: sync}
+    produces: []
+    consumes: []
+    tables: []
+    deployed: {runtime: ECS Fargate, environments: [dev, test, prod], pipeline: deploy-gateway.yml}

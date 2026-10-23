@@ -1,0 +1,23 @@
+repo: orders-service
+commit: 3f2a9c1
+mapped: 2026-10-23
+services:
+  - id: orders-service
+    layer: Domain
+    purpose: Owns orders, from the basket being checked out to delivery or cancellation.
+    page: services/orders-service/index.html
+    endpoints:
+      - {method: POST, path: /orders, page: services/orders-service/POST-orders.html, use_when: "Checking out a basket: reserves stock, takes the payment, creates the order"}
+      - {method: GET, path: "/orders/{id}", use_when: "Showing one order with its lines and status"}
+      - {method: GET, path: /orders, use_when: "Listing a customer's orders, newest first, paged"}
+      - {method: POST, path: "/orders/{id}/cancel", page: services/orders-service/POST-orders-id-cancel.html, use_when: "Customer or support cancels an order that hasn't shipped; refunds and frees stock"}
+    calls:
+      - {from: POST /orders, to: inventory-service, endpoint: POST /stock/reservations, kind: sync}
+      - {from: POST /orders, to: billing-service, endpoint: POST /payments, kind: sync}
+      - {from: "POST /orders/{id}/cancel", to: billing-service, endpoint: POST /refunds, kind: sync}
+      - {from: "POST /orders/{id}/cancel", to: inventory-service, endpoint: "DELETE /stock/reservations/{id}", kind: sync}
+    produces: [order-events]
+    consumes: [shipment-events]
+    tables: [orders, order_lines]
+    database: orders-db
+    deployed: {runtime: ECS Fargate, environments: [dev, test, prod], pipeline: deploy-orders.yml}

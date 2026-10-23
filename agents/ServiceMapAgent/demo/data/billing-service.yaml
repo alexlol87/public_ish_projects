@@ -1,0 +1,21 @@
+repo: billing-service
+commit: c72be90
+mapped: 2026-10-23
+services:
+  - id: billing-service
+    layer: Domain
+    purpose: Takes payments and refunds through the external payment provider.
+    page: services/billing-service/index.html
+    endpoints:
+      - {method: POST, path: /payments, use_when: "Charging a customer for an order. Idempotent per orderId; call it again safely after a timeout"}
+      - {method: POST, path: /refunds, use_when: "Giving money back for a cancelled or returned order. Not for partial refunds; use POST /refunds/partial"}
+      - {method: POST, path: /refunds/partial, use_when: "Refunding some order lines only (returns)"}
+      - {method: GET, path: "/payments/{id}", use_when: "Support checking a payment's status at the provider"}
+    calls:
+      - {from: POST /payments, to: payment-provider, endpoint: POST /v2/charges, kind: sync, external: true}
+      - {from: POST /refunds, to: payment-provider, endpoint: POST /v2/refunds, kind: sync, external: true}
+    produces: [payment-events]
+    consumes: []
+    tables: [payments, refunds]
+    database: billing-db
+    deployed: {runtime: ECS Fargate, environments: [dev, test, prod], pipeline: deploy-billing.yml}
