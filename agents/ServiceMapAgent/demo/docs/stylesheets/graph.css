@@ -1,5 +1,0 @@
-.graph-wrap { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1rem; }
-#service-graph { height: 560px; border: 1px solid var(--md-default-fg-color--lightest); border-radius: 6px; }
-#graph-panel { max-height: 560px; overflow: auto; font-size: .75rem; }
-#graph-layers label { margin-right: 1rem; }
-@media (max-width: 760px) { .graph-wrap { grid-template-columns: 1fr; } #service-graph { height: 420px; } }

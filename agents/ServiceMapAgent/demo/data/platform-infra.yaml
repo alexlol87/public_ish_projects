@@ -1,9 +1,0 @@
-repo: platform-infra
-commit: a1b2c3d
-mapped: 2026-10-23
-# Terraform repository: deployment facts are copied into each service above; shared infrastructure is listed here only.
-shared:
-  - {name: shop-vpc, kind: VPC, file: "modules/network/main.tf"}
-  - {name: shop-msk, kind: Kafka cluster (MSK), file: "modules/kafka/main.tf"}
-  - {name: shop.example.com, kind: Route 53 zone, file: "dns.tf"}
-services: []

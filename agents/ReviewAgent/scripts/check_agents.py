@@ -88,8 +88,8 @@ def problems(path):
         elif name.lower() not in known and "/" not in name:
             yield f"unknown tool {tool!r} (VS Code would ignore it)"
     if {"edit/createFile", "edit/editFiles"} & set(tools) and not any(
-            marker in body for marker in ("REVIEW-", "RUN-ORDER", "docs/service-map/")):
-        yield "edit tools are only for the agent's own output files; the body must describe them (REVIEW-..., RUN-ORDER.md, docs/service-map/)"
+            marker in body for marker in ("REVIEW-", "RUN-ORDER", "service-map/data/")):
+        yield "edit tools are only for the agent's own output files; the body must describe them (REVIEW-..., RUN-ORDER.md, service-map/data/)"
     for handoff in meta.get("handoffs") or []:
         if not isinstance(handoff, dict) or not handoff.get("label") or not handoff.get("agent"):
             yield f"handoff without a label or an agent: {handoff!r}"
