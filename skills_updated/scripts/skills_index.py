@@ -36,6 +36,7 @@ GROUPS = [
     ("popular/ui-ux-pro-max", "New: UI UX Pro Max"),
     ("popular/taste-skill", "New: Taste Skill"),
     ("popular/impeccable", "New: Impeccable"),
+    ("awesome-copilot", "New: Awesome Copilot (GitHub, picked for Java, Spring Boot, Hibernate, Python)"),
 ]
 
 
