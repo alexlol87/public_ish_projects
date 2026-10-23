@@ -376,9 +376,9 @@ The names and descriptions below come from each skill's `SKILL.md`.
 
 | Skill | Description |
 |-------|-------------|
-| [`deck-guizang-editorial`](html-anything/deck-guizang-editorial/SKILL.md) | E-magazine × e-ink: 10 layouts and 5 palettes (Monocle ink, Indigo Porcelain, Forest Ink, Kraft Paper, Dune) |
-| [`doc-kami-parchment`](html-anything/doc-kami-parchment/SKILL.md) | Warm parchment ground (#f5f4ed) + single ink-blue accent (#1B365D) + one serif typeface: editorial-grade typesetting |
-| [`magazine-poster`](html-anything/magazine-poster/SKILL.md) | Sunday-paper style: large serif headline, two-column body text, numbered sections |
+| [`html-anything-deck-guizang-editorial`](html-anything/html-anything-deck-guizang-editorial/SKILL.md) | E-magazine × e-ink: 10 layouts and 5 palettes (Monocle ink, Indigo Porcelain, Forest Ink, Kraft Paper, Dune) |
+| [`html-anything-doc-kami-parchment`](html-anything/html-anything-doc-kami-parchment/SKILL.md) | Warm parchment ground (#f5f4ed) + single ink-blue accent (#1B365D) + one serif typeface: editorial-grade typesetting |
+| [`html-anything-magazine-poster`](html-anything/html-anything-magazine-poster/SKILL.md) | Sunday-paper style: large serif headline, two-column body text, numbered sections |
 <!-- skills:end -->
 
 ## Updating
