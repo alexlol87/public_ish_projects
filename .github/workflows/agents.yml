@@ -38,3 +38,12 @@ jobs:
       - run: python3 -m pip install pyyaml
       - run: python3 agents/ReviewAgent/scripts/check_agents.py agents/TesterAgent/.github/agents
 
+
+  service-map-agent:
+    name: ServiceMapAgent
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install pyyaml
+      - run: python3 agents/ReviewAgent/scripts/check_agents.py agents/ServiceMapAgent/.github/agents --may-edit
