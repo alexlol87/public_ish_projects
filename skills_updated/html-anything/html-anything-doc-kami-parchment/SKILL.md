@@ -1,5 +1,5 @@
 ---
-name: doc-kami-parchment
+name: html-anything-doc-kami-parchment
 emoji: "📜"
 description: "Warm parchment ground (#f5f4ed) + single ink-blue accent (#1B365D) + one serif typeface: editorial-grade typesetting"
 category: doc

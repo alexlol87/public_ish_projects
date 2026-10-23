@@ -1,5 +1,5 @@
 ---
-name: deck-guizang-editorial
+name: html-anything-deck-guizang-editorial
 emoji: "🖋️"
 description: "E-magazine × e-ink: 10 layouts and 5 palettes (Monocle ink, Indigo Porcelain, Forest Ink, Kraft Paper, Dune)"
 category: slides

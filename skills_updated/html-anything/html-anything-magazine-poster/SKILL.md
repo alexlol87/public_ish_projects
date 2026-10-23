@@ -1,5 +1,5 @@
 ---
-name: magazine-poster
+name: html-anything-magazine-poster
 emoji: "🗞️"
 description: "Sunday-paper style: large serif headline, two-column body text, numbered sections"
 category: poster
