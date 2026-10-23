@@ -1,7 +1,7 @@
 name: agents
 
-# agents/: ReviewAgent's and TesterAgent's custom agents have a name and a description, use only known tools that
-# can't edit files (except creating them), and have valid handoffs.
+# agents/: ReviewAgent's, TesterAgent's and ServiceMapAgent's custom agents have a name and a description, use only known tools that
+# can't edit files (except creating them; ServiceMapAgent may edit its own data files), and have valid handoffs.
 on:
   pull_request:
     paths:
@@ -38,3 +38,11 @@ jobs:
       - run: python3 -m pip install pyyaml
       - run: python3 agents/ReviewAgent/scripts/check_agents.py agents/TesterAgent/.github/agents
 
+  service-map-agent:
+    name: ServiceMapAgent
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install pyyaml
+      - run: python3 agents/ReviewAgent/scripts/check_agents.py agents/ServiceMapAgent/.github/agents --may-edit
