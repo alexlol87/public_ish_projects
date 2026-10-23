@@ -29,6 +29,7 @@ It never changes code, never builds or runs anything, and writes only the map's 
 | [`.github/agents/service-mapper.agent.md`](.github/agents/service-mapper.agent.md) | The agent: its tools and its instructions. |
 | [`viewer/index.html`](viewer/index.html), `app.js`, `app.css` | The viewer, styled after the Kami Parchment skill (warm paper, one ink-blue accent, one serif): start page, system graph, all endpoints, service and endpoint pages, journeys, calls and events, data, infrastructure and CI/CD, glossary, open questions, progress. Fixed; the agent never edits it. |
 | [`viewer/vendor/`](viewer/vendor/) | Mermaid 11.17.2 and Cytoscape.js 3.30.2 (MIT), bundled so the map works offline. |
+| [`scripts/scan_repo.py`](scripts/scan_repo.py) | The scanner (Python 3, standard library): pulls endpoints, clients and where they're called, listeners, producers, jobs, entities, URL config, workflows and Terraform out of one repository as JSON, with `path:line` for each. Tested by `scripts/test_scan_repo.py`. |
 | [`viewer/data/`](viewer/data/) | What the agent writes: `repos.js` (system, layers, repository order), one `<repo>.js` per repository, `journeys.js`. Here: the shop's data. |
 
 ## How it works
@@ -45,10 +46,30 @@ It never changes code, never builds or runs anything, and writes only the map's 
 Start with a pilot of two or three repositories, look at the result, then do the rest. One repository per chat keeps
 the agent's context small and the result accurate; the data files carry everything between chats.
 
+## Scanner first, agent second
+
+Most of what the agent would otherwise search for is mechanical: annotations, client interfaces, listener topics,
+entity tables. `scan_repo.py` finds those in a second without spending tokens, and also lists, for every Feign or
+`@HttpExchange` client method, the class and method that call it, which is the expensive part of linking endpoint to
+endpoint. The agent reads that facts file first and spends its reading on what needs judgement: which endpoint
+triggers each call, when to use each endpoint, the step-by-step flows, the risks. On `update`, re-running the scanner
+and comparing with the data file shows added and removed endpoints, clients and tables before any code is read.
+
+The scanner is regex-based, so it is a checklist rather than the truth: the agent confirms what it uses in the code and
+still searches for what the scanner can't see (URLs built at runtime, multi-line annotations, `RouterFunction`
+routes). Without Python the agent skips it and reads everything itself.
+
+```bash
+python3 service-map/tools/scan_repo.py ../orders-service --out service-map/facts/orders-service.json
+python3 -m unittest discover -s agents/ServiceMapAgent/scripts   # the scanner's tests, from this repository
+```
+
 ## Set up
 
 1. Create a folder (or a small repository) for the map and copy [`viewer/`](viewer/) into it as `service-map/`.
-   Delete the shop's files in `service-map/data/` (the agent writes `repos.js` on `start`).
+   Delete the shop's files in `service-map/data/` (the agent writes `repos.js` on `start`), and copy
+   [`scripts/scan_repo.py`](scripts/scan_repo.py) to `service-map/tools/scan_repo.py`. Add `service-map/facts/` to
+   `.gitignore` if the map is a repository: those are scratch files.
 2. Install the agent, from that folder:
 
    ```bash
@@ -73,8 +94,8 @@ The optional `codeLink` in `repos.js` turns every `path:line` into a link that o
 `tools: ['read', 'search', 'execute', 'edit/createFile', 'edit/editFiles', 'todo', 'vscode/askQuestions']`
 
 - `read` and `search` read the code, specs, config, Terraform and workflows.
-- `execute` is limited by its instructions to read-only git (`rev-parse`, `log`, `diff --name-only`, `ls-files`), for
-  the commit stamps and `update`. Keep terminal approvals on to see each command.
+- `execute` is limited by its instructions to the scanner and read-only git (`rev-parse`, `log`, `diff --name-only`,
+  `ls-files`), for the facts, the commit stamps and `update`. Keep terminal approvals on to see each command.
 - `edit/createFile` and `edit/editFiles` write the data files. The instructions limit them to `service-map/data/`;
   tool lists can't restrict paths, so keep edit approvals on or review the diff before you commit.
 - No web, no MCP servers, no subagents: everything comes from the code on your machine.
