@@ -82,6 +82,7 @@ cp -r skills_updated/ponytail-companions/* ~/.claude/skills/   # the five ponyta
 cp -r skills_updated/superpowers/* ~/.claude/skills/        # every superpowers skill (plus its LICENSE file)
 cp -r skills_updated/shadcn/improve skills_updated/cursor/thermo-nuclear-code-quality-review ~/.claude/skills/
 cp -r skills_updated/humanlayer/*/ ~/.claude/skills/
+cp -r skills_updated/own/reverse-grill-me ~/.claude/skills/   # pairs with humanlayer/show-me
 cp -r skills_updated/popular/vercel/find-skills skills_updated/popular/anthropic/frontend-design ~/.claude/skills/
 ```
 
@@ -100,7 +101,9 @@ first. Superpowers' `using-superpowers` skill is what makes the agent reach for 
 install it with them. The original repositories also offer installers (`npx skills@latest add mattpocock/skills`,
 plugin marketplaces) that keep a copy up to date.
 
-HumanLayer's `visual-pr` and `show-me` only run when you ask for them (`/visual-pr`, `/show-me`). `visual-pr` needs the
+HumanLayer's `visual-pr` and `show-me` only run when you ask for them (`/visual-pr`, `/show-me`). So does
+`/reverse-grill-me` (in `own/`): it quizzes you, one yes/no question at a time, on every change in a PR or diff,
+and explains the ones you didn't know about, with `show-me` style diagrams. `visual-pr` needs the
 `gh` CLI: it creates or updates the current branch's PR, and saves the description under `.humanlayer/tasks/`. Its
 `{SKILLBASE}` paths mean the skill's own folder.
 
@@ -232,6 +235,12 @@ The names and descriptions below come from each skill's `SKILL.md`.
 | [`rpi`](humanlayer/rpi/SKILL.md) | Only use when the user explicitly invokes this skill by name. |
 | [`show-me`](humanlayer/show-me/SKILL.md) | Help the user understand the current topic visually with concise diagrams, code-shape sketches, and focused HTML artifacts. |
 | [`visual-pr`](humanlayer/visual-pr/SKILL.md) | Only use when the user explicitly invokes this skill by name. |
+
+### Own skills (written for this repository)
+
+| Skill | Description |
+|-------|-------------|
+| [`reverse-grill-me`](own/reverse-grill-me/SKILL.md) | Quiz the user, one yes/no question at a time, on whether they understand every change in a pull request or diff, and explain each change they didn't know about. Use when the user wants to check they understand a PR or diff before approving or merging it, often one an agent wrote. |
 
 ### New: Vercel (find-skills, agent-browser, React and web design)
 

@@ -28,6 +28,7 @@ GROUPS = [
     ("shadcn", "shadcn"),
     ("cursor", "Cursor"),
     ("humanlayer", "HumanLayer"),
+    ("own", "Own skills (written for this repository)"),
     ("popular/vercel", "New: Vercel (find-skills, agent-browser, React and web design)"),
     ("popular/anthropic", "New: Anthropic (official skills)"),
     ("popular/karpathy", "New: Karpathy guidelines"),
