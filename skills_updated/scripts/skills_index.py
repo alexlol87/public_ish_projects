@@ -42,6 +42,7 @@ GROUPS = [
     ("awesome-copilot/debugging", "Awesome Copilot: debugging"),
     ("awesome-copilot/docs-and-onboarding", "Awesome Copilot: docs and onboarding"),
     ("awesome-copilot/productivity", "Awesome Copilot: productivity"),
+    ("html-anything", "HTML Anything (nexu-io, translated to English)"),
 ]
 
 
