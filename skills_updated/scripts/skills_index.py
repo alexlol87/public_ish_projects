@@ -36,7 +36,13 @@ GROUPS = [
     ("popular/ui-ux-pro-max", "New: UI UX Pro Max"),
     ("popular/taste-skill", "New: Taste Skill"),
     ("popular/impeccable", "New: Impeccable"),
-    ("awesome-copilot", "New: Awesome Copilot (GitHub, picked for Java, Spring Boot, Hibernate, Python)"),
+    ("awesome-copilot/review", "Awesome Copilot: review"),
+    ("awesome-copilot/development", "Awesome Copilot: development"),
+    ("awesome-copilot/testing", "Awesome Copilot: testing"),
+    ("awesome-copilot/debugging", "Awesome Copilot: debugging"),
+    ("awesome-copilot/docs-and-onboarding", "Awesome Copilot: docs and onboarding"),
+    ("awesome-copilot/productivity", "Awesome Copilot: productivity"),
+    ("html-anything", "HTML Anything (nexu-io, translated to English)"),
 ]
 
 
