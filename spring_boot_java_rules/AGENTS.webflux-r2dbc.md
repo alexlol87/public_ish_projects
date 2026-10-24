@@ -584,17 +584,27 @@ Fixed:
 Flux<Order> findAllByCustomerId(Long customerId, Pageable pageable);
 Mono<Long> countByCustomerId(Long customerId);
 
-public Mono<Page<OrderResponse>> page(Long customerId, Pageable pageable) {
+// service
+public Mono<PagedModel<OrderResponse>> page(Long customerId, Pageable pageable) {
     return orderRepository.findAllByCustomerId(customerId, pageable)
             .map(orderMapper::toResponse)
             .collectList()
             .zipWith(orderRepository.countByCustomerId(customerId),
-                    (content, total) -> new PageImpl<>(content, pageable, total));
+                    (content, total) -> new PagedModel<>(new PageImpl<>(content, pageable, total)));
+}
+
+// controller: Spring Boot does not resolve Pageable parameters in WebFlux
+@GetMapping
+public Mono<PagedModel<OrderResponse>> list(
+        @RequestParam Long customerId,
+        @RequestParam(defaultValue = "0") @PositiveOrZero int page,
+        @RequestParam(defaultValue = "20") @Positive @Max(100) int size) {
+    return orderService.page(customerId, PageRequest.of(page, size, Sort.by("createdAt").descending()));
 }
 ```
 
-- [ ] **A: offset pagination as above (derived query with `Pageable` + count query), response as in C-12.3 A**
-  *(recommended)*.
+- [ ] **A: offset pagination as above (derived query with `Pageable` + count query), `PagedModel` response with the
+  same JSON as C-12.3 A; `page` / `size` read as `@RequestParam` and turned into a `PageRequest`** *(recommended)*.
 - [ ] **B: keyset pagination (`WHERE id > :after ORDER BY id LIMIT :size`)** for large tables / infinite scroll.
 
 **Decision:** ____

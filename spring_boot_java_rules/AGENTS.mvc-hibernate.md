@@ -130,8 +130,11 @@ Fixed:
   `@PostMapping`, `@PutMapping`, `@PatchMapping`, `@DeleteMapping`.
 - Controllers do not use `HttpServletRequest` / `HttpServletResponse` unless they must read something not available
   through `@RequestHeader`, `@CookieValue`, `@RequestParam`, `@PathVariable`. Never pass them to services.
-- `@Valid` on `@RequestBody`; `@Validated` on the controller class to validate `@PathVariable` / `@RequestParam`
-  constraints (`@Positive Long id`).
+- `@Valid` on `@RequestBody`; constraint annotations directly on `@PathVariable` / `@RequestParam` parameters
+  (`@PathVariable @Positive Long id`). Spring MVC validates them itself (Spring Framework 6.1+) and raises
+  `HandlerMethodValidationException`, which `ResponseEntityExceptionHandler` turns into a 400. Never put `@Validated`
+  on a controller class: it switches to AOP method validation, which throws `ConstraintViolationException` and
+  returns a 500 unless the advice maps it.
 - One `@RestControllerAdvice` (extending `ResponseEntityExceptionHandler` when using Problem Details, C-9.3).
 - Cross-cutting HTTP concerns (logging, correlation ID, auth headers) in a `OncePerRequestFilter` or
   `HandlerInterceptor`, not in controllers.
@@ -545,7 +548,8 @@ Fixed:
 - No remote HTTP calls, message sends or long computations inside a transaction: they hold a DB connection and
   cannot be rolled back. Do the call before, or publish after commit (M-7.2).
 - Spring rolls back on unchecked exceptions only. With checked exceptions (if C-9.1 B) add `rollbackFor`.
-- `Propagation.REQUIRES_NEW` only with a comment explaining why (it takes a second connection).
+- `Propagation.REQUIRES_NEW` only with a comment explaining why (it takes a second connection). It is required for
+  database work in `AFTER_COMMIT` listeners (M-7.2).
 - A `@Transactional` method that catches an exception from an inner transactional call still rolls back if the inner
   call marked the transaction rollback-only (`UnexpectedRollbackException`).
 
@@ -587,6 +591,17 @@ public class OrderService {
   AFTER_COMMIT)`** *(recommended for in-process side effects)*.
 - [ ] **B: transactional outbox table + relay** (guaranteed delivery to a broker).
 - [ ] **C: call the external system after the transactional method returns**.
+
+Fixed with A:
+
+- An `AFTER_COMMIT` listener runs while the finished transaction's resources are still bound to the thread. A
+  `@Transactional` (default `REQUIRED`) call from the listener joins that finished transaction and its writes are
+  **never committed**, with no error. Database work in the listener goes through a method annotated
+  `@Transactional(propagation = Propagation.REQUIRES_NEW)`: the allowed exception to the `REQUIRES_NEW` rule in M-7.
+- Exceptions thrown in an `AFTER_COMMIT` listener are logged by Spring and never reach the caller or a retry. Catch
+  and handle them in the listener (log with the IDs needed to replay). A side effect that must not be lost uses B.
+- The listener does not run when the transaction rolls back, or when the event is published outside a transaction
+  (unless `fallbackExecution = true`).
 
 **Decision:** ____
 

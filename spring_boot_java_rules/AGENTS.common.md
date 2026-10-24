@@ -955,9 +955,11 @@ public ResponseEntity<OrderResponse> create(@Valid @RequestBody CreateOrderReque
 
 ### C-12.3 Pagination
 
-- [ ] **A: `page`/`size`/`sort` query parameters, response `{ content, page, size, totalElements, totalPages }`
-  (Spring Data `PagedModel` / `Page` serialised via `@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)`)**
-  *(recommended)*.
+- [ ] **A: `page`/`size`/`sort` query parameters, response is Spring Data's `PagedModel`** *(recommended)*:
+  `{ "content": [...], "page": { "size": 20, "number": 0, "totalElements": 42, "totalPages": 3 } }`. Return
+  `new PagedModel<>(page)` (works on both stacks), or in Spring MVC return `Page` with
+  `@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)`. Never serialise a raw `PageImpl`: its JSON is not
+  stable.
 - [ ] **B: cursor-based (`?after=<id>&limit=50`)** for large or fast-changing collections.
 - [ ] **C: no pagination unless a list can exceed N items**.
 
