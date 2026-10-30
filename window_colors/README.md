@@ -37,12 +37,12 @@ entries.
 
 ## Install
 
-Download `window-colors-0.2.2.vsix` (the `window-colors-vsix` artifact of the
+Download `window-colors-0.2.3.vsix` (the `window-colors-vsix` artifact of the
 latest [window_colors workflow run](https://github.com/alexlol87/public_ish_projects/actions/workflows/window-colors.yml)),
 then either run
 
 ```sh
-code --install-extension window-colors-0.2.2.vsix
+code --install-extension window-colors-0.2.3.vsix
 ```
 
 or in VS Code: Extensions view → `…` menu → **Install from VSIX…**. Reload open windows to color them.
