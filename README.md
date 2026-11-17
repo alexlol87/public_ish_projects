@@ -16,6 +16,7 @@ Things that others can use.
 | [`memories_viewer/`](memories_viewer/) | **Memories**: a VS Code sidebar that shows the memories of `local_memory_sqlite`, global and per repository, with full-text search; click one to read it (plain JavaScript, VS Code 1.75+). | [Latest build](https://github.com/alexlol87/public_ish_projects/releases/tag/memories-viewer-latest) |
 | [`local_memory/`](local_memory/) | **Local Memory** (older, file-based): memory and learned habits ("instincts") for GitHub Copilot in VS Code when Copilot Memory is turned off, as plain files managed by one Python script, two skills and four hooks. | `./install.sh` |
 | [`claude_statusline/`](claude_statusline/) | **Claude Code status line**: Victor Rentea's [victor-statusline](https://github.com/victorrentea/victor-statusline) with a Dracula colour theme and calendar days for the weekly reset, self-contained (script, `install.sh` that merges only the `statusLine` setting, my previous bar to switch back). | `./install.sh` |
+| [`ai_presentation/`](ai_presentation/) | **AI at work presentation**: a single-file HTML slide deck (HTML, CSS and JS in one file) with a TL;DR on GitHub Copilot and AI agents: choosing a model (cheap GPT-6 Luna / Claude Haiku 5.5 vs. frontier GPT-6.1 Sol / Claude Opus 5.5, with Artificial Analysis Intelligence Index scores, price, cost and time per task), reasoning effort, permissions, hooks, MD instruction files, custom agents and skills. Keyboard, click and swipe navigation, `F` for fullscreen. | Open `ai_presentation/index.html` in a browser |
 
 ## Window Borders
 

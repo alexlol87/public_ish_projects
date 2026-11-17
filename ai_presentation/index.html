@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How We Use GitHub Copilot & AI</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --green: #3fb950; --orange: #d29922; --purple: #bc8cff; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
+
+  .slide { position: absolute; inset: 0; padding: 6vh 8vw 10vh; display: flex; flex-direction: column;
+    justify-content: center; opacity: 0; pointer-events: none; transform: translateX(40px);
+    transition: opacity .35s ease, transform .35s ease; }
+  .slide.active { opacity: 1; pointer-events: auto; transform: none; }
+  .slide.prev { transform: translateX(-40px); }
+
+  h1 { font-size: clamp(2.2rem, 5vw, 4rem); line-height: 1.1; margin-bottom: 1.5rem; }
+  h2 { font-size: clamp(1.6rem, 3.2vw, 2.6rem); margin-bottom: 2.5vh; }
+  h2 .tag { font-size: .45em; vertical-align: middle; color: var(--muted); border: 1px solid var(--border);
+    padding: .2em .6em; border-radius: 999px; margin-left: .6em; font-weight: 500; }
+  h3 { font-size: 1.15rem; margin-bottom: .5rem; }
+  p, li { font-size: clamp(1rem, 1.45vw, 1.3rem); line-height: 1.55; }
+  .muted { color: var(--muted); }
+  .accent { color: var(--accent); }
+  ul { padding-left: 1.3em; } li { margin: .35em 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #1f2630;
+    padding: .1em .4em; border-radius: 6px; font-size: .9em; color: #ffa657; }
+  pre { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.2rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: clamp(.8rem, 1.1vw, 1rem);
+    line-height: 1.5; overflow-x: auto; color: #c9d1d9; }
+  pre .c { color: var(--muted); } pre .k { color: #ff7b72; } pre .s { color: #a5d6ff; }
+
+  .grid { display: grid; gap: 1.2rem; }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.4rem; }
+  .card p, .card li { font-size: clamp(.9rem, 1.2vw, 1.1rem); }
+  .card.blue { border-top: 3px solid var(--accent); }
+  .card.green { border-top: 3px solid var(--green); }
+  .card.orange { border-top: 3px solid var(--orange); }
+  .card.purple { border-top: 3px solid var(--purple); }
+  .card.red { border-top: 3px solid var(--red); }
+  .big { font-size: 2.4rem; font-weight: 700; }
+
+  /* title slide */
+  .title-slide { align-items: flex-start; }
+  .title-slide .kicker { color: var(--accent); font-weight: 600; letter-spacing: .15em; text-transform: uppercase; margin-bottom: 1rem; }
+  .gradient { background: linear-gradient(90deg, #58a6ff, #bc8cff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  /* bar chart */
+  .chart { display: flex; flex-direction: column; gap: .8rem; }
+  .bar-row { display: grid; grid-template-columns: 13rem 1fr 4rem; align-items: center; gap: 1rem; }
+  .bar-row .name { font-size: clamp(.9rem, 1.2vw, 1.1rem); }
+  .bar-row .name small { display: block; color: var(--muted); font-size: .8em; }
+  .bar-track { background: #1f2630; border-radius: 8px; height: 2.1rem; overflow: hidden; }
+  .bar { height: 100%; width: 0; border-radius: 8px; transition: width 1s cubic-bezier(.2,.8,.2,1); }
+  .slide.active .bar { width: var(--w); }
+  .bar-row .val { font-weight: 700; font-size: 1.3rem; text-align: right; }
+  .anthropic { background: linear-gradient(90deg, #d97757, #f0a080); }
+  .openai { background: linear-gradient(90deg, #3fb950, #7ee787); }
+
+  table { width: 100%; border-collapse: collapse; font-size: clamp(.9rem, 1.25vw, 1.15rem); }
+  th, td { padding: .7rem .9rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: .85em; text-transform: uppercase; letter-spacing: .05em; }
+  td.num { font-variant-numeric: tabular-nums; }
+  tr.hl td { background: rgba(88,166,255,.06); }
+
+  .effort { display: flex; gap: .6rem; align-items: flex-end; height: 12rem; margin: 1rem 0 .4rem; }
+  .effort div { flex: 1; border-radius: 8px 8px 0 0; display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: .5rem; font-weight: 600; background: linear-gradient(180deg, #bc8cff, #58a6ff); }
+
+  .source { position: absolute; bottom: 7vh; left: 8vw; right: 8vw; font-size: .85rem; color: var(--muted); }
+  .source a { color: var(--muted); }
+
+  /* nav */
+  #progress { position: fixed; left: 0; bottom: 0; height: 4px; background: var(--accent); transition: width .3s; z-index: 10; }
+  #counter { position: fixed; right: 1.5rem; bottom: 1rem; color: var(--muted); font-size: .9rem; z-index: 10; }
+  #hint { position: fixed; left: 1.5rem; bottom: 1rem; color: var(--muted); font-size: .8rem; z-index: 10; opacity: .7; }
+  .navbtn { position: fixed; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--muted);
+    font-size: 2.5rem; cursor: pointer; padding: 1rem; opacity: .25; transition: opacity .2s; z-index: 10; }
+  .navbtn:hover, .navbtn:focus-visible { opacity: 1; }
+  #prevBtn { left: 0; } #nextBtn { right: 0; }
+
+  @media (max-width: 900px) { .g3, .g4 { grid-template-columns: 1fr 1fr; } .bar-row { grid-template-columns: 8rem 1fr 3rem; } }
+  @media print { .slide { position: relative; opacity: 1; transform: none; page-break-after: always; height: 100vh; }
+    .navbtn, #progress, #counter, #hint { display: none; } .bar { width: var(--w); } }
+</style>
+</head>
+<body>
+
+<!-- 1. Title -->
+<section class="slide title-slide">
+  <div class="kicker">Team Knowledge Share</div>
+  <h1>How we use <span class="gradient">GitHub Copilot &amp; AI</span><br>in our daily work</h1>
+  <p class="muted">Part 1 — The TL;DR: models, effort, permissions, hooks, agents, MD files &amp; skills</p>
+</section>
+
+<!-- 2. Agenda -->
+<section class="slide">
+  <h2>Agenda</h2>
+  <div class="grid g4">
+    <div class="card blue"><div class="big">01</div><h3>Models</h3><p class="muted">Cheap vs. frontier — which one when?</p></div>
+    <div class="card purple"><div class="big">02</div><h3>Effort</h3><p class="muted">How hard the model thinks</p></div>
+    <div class="card orange"><div class="big">03</div><h3>Permissions &amp; Hooks</h3><p class="muted">Guardrails &amp; automation</p></div>
+    <div class="card green"><div class="big">04</div><h3>Agents, MD files &amp; Skills</h3><p class="muted">Customizing the AI for our repo</p></div>
+  </div>
+</section>
+
+<!-- 3. Models: tiers -->
+<section class="slide">
+  <h2>01 · Models — not all are equal <span class="tag">cost vs. brains</span></h2>
+  <div class="grid g2">
+    <div class="card green">
+      <h3>⚡ Small &amp; cheap</h3>
+      <p><b>GPT-6 Luna</b>, <b>Claude Haiku 5.5</b></p>
+      <ul>
+        <li>Fast, ~$0.10 / $0.50 per 1M tokens (in/out)</li>
+        <li>Great for: autocomplete, renames, boilerplate, simple tests, summaries, commit messages</li>
+        <li>Struggles with: multi-file refactors, subtle bugs, architecture</li>
+      </ul>
+    </div>
+    <div class="card purple">
+      <h3>🧠 Frontier &amp; pricier</h3>
+      <p><b>GPT-6.1 Sol</b>, <b>Claude Opus 5.5</b></p>
+      <ul>
+        <li>$2–$4 in / $10–$20 out per 1M tokens</li>
+        <li>Great for: agent mode, debugging, design, large refactors, code review</li>
+        <li>Overkill for: one-line edits and trivial questions</li>
+      </ul>
+    </div>
+  </div>
+  <p style="margin-top:2.5vh" class="muted">Rule of thumb: <span class="accent">start cheap for simple tasks, switch up the moment the model goes in circles.</span> A retry loop on a weak model usually costs more than one shot with a strong one.</p>
+</section>
+
+<!-- 4. Models: intelligence chart -->
+<section class="slide">
+  <h2>Intelligence — Artificial Analysis Index <span class="tag">higher is better</span></h2>
+  <div class="chart">
+    <div class="bar-row"><div class="name">Claude Opus 5.5<small>Anthropic · frontier</small></div><div class="bar-track"><div class="bar anthropic" style="--w:90.8%"></div></div><div class="val">59</div></div>
+    <div class="bar-row"><div class="name">GPT-6.1 Sol<small>OpenAI · frontier</small></div><div class="bar-track"><div class="bar openai" style="--w:84.6%"></div></div><div class="val">55</div></div>
+    <div class="bar-row"><div class="name">Claude Haiku 5.5<small>Anthropic · small</small></div><div class="bar-track"><div class="bar anthropic" style="--w:55.4%"></div></div><div class="val">36</div></div>
+    <div class="bar-row"><div class="name">GPT-6 Luna<small>OpenAI · small</small></div><div class="bar-track"><div class="bar openai" style="--w:43.1%"></div></div><div class="val">28</div></div>
+  </div>
+  <p style="margin-top:3vh" class="muted">The index combines 9 evals incl. <b>Terminal-Bench 4.0</b> and <b>FrontierCode-AA 2.0</b> (agentic coding). For reference: best model today (Claude Fable 5.2) scores 65; median of comparable models ≈ 41.</p>
+  <div class="source">Source: <a href="https://artificialanalysis.ai/leaderboards/models" target="_blank" rel="noopener">artificialanalysis.ai</a> — Intelligence Index v5.0.1, max effort variants, retrieved Nov 17, 2026.</div>
+</section>
+
+<!-- 5. Models: cost/speed table -->
+<section class="slide">
+  <h2>Price, speed &amp; value <span class="tag">same benchmark, same tasks</span></h2>
+  <table>
+    <thead><tr><th>Model</th><th>Intelligence</th><th>Price / 1M tokens (in · out)</th><th>Cost per task</th><th>Time per task</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>Claude Opus 5.5</b></td><td class="num">59</td><td class="num">$4.00 · $20.00</td><td class="num">$10.04</td><td class="num">24.6 min</td></tr>
+      <tr class="hl"><td><b>GPT-6.1 Sol</b></td><td class="num">55</td><td class="num">$2.00 · $10.00</td><td class="num">$1.27</td><td class="num">22.9 min</td></tr>
+      <tr><td><b>Claude Haiku 5.5</b></td><td class="num">36</td><td class="num">$0.10 · $0.50</td><td class="num">$0.41</td><td class="num">14.6 min</td></tr>
+      <tr><td><b>GPT-6 Luna</b></td><td class="num">28</td><td class="num">$0.10 · $0.50</td><td class="num">$0.15</td><td class="num">12.2 min</td></tr>
+    </tbody>
+  </table>
+  <div class="grid g3" style="margin-top:3vh">
+    <div class="card blue"><p><b>Opus</b> is ~2× smarter than Luna on the index, but ~67× the cost per task.</p></div>
+    <div class="card green"><p><b>GPT-6.1 Sol</b> is the value pick: 93% of Opus' score at ~13% of its cost per task (far fewer tokens used).</p></div>
+    <div class="card orange"><p><b>Token price ≠ task cost.</b> Verbose models burn more tokens — Opus used 218M output tokens on the index vs. Sol's 64M.</p></div>
+  </div>
+  <div class="source">Source: <a href="https://artificialanalysis.ai/leaderboards/models" target="_blank" rel="noopener">artificialanalysis.ai</a> — cost &amp; time per Intelligence Index task, max effort, retrieved Nov 17, 2026.</div>
+</section>
+
+<!-- 6. Which model when -->
+<section class="slide">
+  <h2>Cheat sheet — which model when?</h2>
+  <table>
+    <thead><tr><th>Task</th><th>Pick</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Inline completions, quick "what does this do?"</td><td>Luna / Haiku</td><td class="muted">Speed matters, task is easy</td></tr>
+      <tr><td>Unit tests, docs, small single-file edits</td><td>Haiku / Sol</td><td class="muted">Cheap enough, good enough</td></tr>
+      <tr><td>Agent mode, multi-file features</td><td>Sol / Opus</td><td class="muted">Needs planning + tool use</td></tr>
+      <tr><td>Hard bugs, architecture, security review</td><td>Opus</td><td class="muted">Mistakes cost more than tokens</td></tr>
+      <tr><td>Bulk/batch work (100s of files)</td><td>Sol or Haiku</td><td class="muted">Cost per task adds up fast</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:2.5vh" class="muted">In Copilot: pick the model from the dropdown in Chat. Premium models consume more of the monthly premium-request quota.</p>
+</section>
+
+<!-- 7. Effort -->
+<section class="slide">
+  <h2>02 · Effort — how hard should it think?</h2>
+  <div class="grid g2">
+    <div>
+      <p>Reasoning models "think" before answering. <b>Effort</b> sets the thinking budget.</p>
+      <div class="effort">
+        <div style="height:20%">low</div><div style="height:38%">medium</div><div style="height:58%">high</div><div style="height:80%">xhigh</div><div style="height:100%">max</div>
+      </div>
+      <p class="muted" style="font-size:.95rem">more thinking → better on hard problems, but slower &amp; more tokens</p>
+    </div>
+    <div class="grid" style="gap:1rem">
+      <div class="card green"><h3>Low</h3><p>Quick edits, lookups, formatting. Near-instant, cheap.</p></div>
+      <div class="card blue"><h3>Medium / High</h3><p>Default for most coding work. Good balance.</p></div>
+      <div class="card purple"><h3>XHigh / Max</h3><p>Gnarly bugs, algorithms, big plans. Can take minutes and many tokens.</p></div>
+    </div>
+  </div>
+  <p style="margin-top:2vh" class="muted"><span class="accent">Model and effort are two separate knobs.</span> A small model at max effort is still a small model — and a frontier model at low effort is often enough.</p>
+</section>
+
+<!-- 8. Permissions -->
+<section class="slide">
+  <h2>03 · Permissions — what may the agent do alone?</h2>
+  <div class="grid g3">
+    <div class="card green"><h3>✅ Allow</h3><p>Runs without asking. Safe, read-only or reversible: <code>git status</code>, <code>npm test</code>, reading files.</p></div>
+    <div class="card orange"><h3>❓ Ask</h3><p>Pauses for your approval. File edits, installing packages, network calls.</p></div>
+    <div class="card red"><h3>⛔ Deny</h3><p>Never allowed. <code>rm -rf</code>, <code>git push --force</code>, reading <code>.env</code> / secrets.</p></div>
+  </div>
+  <pre style="margin-top:2.5vh"><span class="c">// e.g. Claude Code .claude/settings.json — Copilot has equivalent tool-approval settings</span>
+{
+  <span class="s">"permissions"</span>: {
+    <span class="s">"allow"</span>: [<span class="s">"Bash(npm test:*)"</span>, <span class="s">"Bash(git status)"</span>],
+    <span class="s">"deny"</span>:  [<span class="s">"Bash(git push --force:*)"</span>, <span class="s">"Read(./.env)"</span>]
+  }
+}</pre>
+  <p style="margin-top:2vh" class="muted">Goal: fewer interruptions for safe stuff, a hard stop for dangerous stuff. Never "allow everything" on a machine with prod credentials.</p>
+</section>
+
+<!-- 9. Hooks -->
+<section class="slide">
+  <h2>Hooks — your scripts, run automatically</h2>
+  <p>Hooks are shell commands that fire on agent <b>lifecycle events</b>. Deterministic — they always run, unlike instructions the model might ignore.</p>
+  <div class="grid g3" style="margin-top:2.5vh">
+    <div class="card blue"><h3>Before a tool runs</h3><p>Block dangerous commands, protect files, validate inputs.</p></div>
+    <div class="card green"><h3>After a tool runs</h3><p>Auto-format, lint, run tests on edited files.</p></div>
+    <div class="card purple"><h3>Session start / stop</h3><p>Load context, send a notification, log usage.</p></div>
+  </div>
+  <pre style="margin-top:2.5vh"><span class="c"># "after every file edit, run prettier on it"</span>
+{ <span class="s">"hooks"</span>: { <span class="s">"PostToolUse"</span>: [ { <span class="s">"matcher"</span>: <span class="s">"Edit|Write"</span>,
+    <span class="s">"hooks"</span>: [ { <span class="s">"type"</span>: <span class="s">"command"</span>, <span class="s">"command"</span>: <span class="s">"npx prettier --write \"$FILE\""</span> } ] } ] } }</pre>
+  <p style="margin-top:2vh" class="muted"><span class="accent">Instructions = suggestions. Hooks = guarantees.</span></p>
+</section>
+
+<!-- 10. MD files -->
+<section class="slide">
+  <h2>04 · MD files — the project's memory</h2>
+  <p>Markdown files the agent reads automatically at the start of every chat. Write once, stop repeating yourself.</p>
+  <div class="grid g3" style="margin-top:2.5vh">
+    <div class="card blue"><h3><code>.github/copilot-instructions.md</code></h3><p>Repo-wide rules for Copilot: stack, conventions, how to build &amp; test.</p></div>
+    <div class="card purple"><h3><code>AGENTS.md</code> / <code>CLAUDE.md</code></h3><p>Same idea, open standard read by most agents (Copilot, Claude, Codex…). Can be nested per folder.</p></div>
+    <div class="card green"><h3><code>*.instructions.md</code></h3><p>Scoped rules via <code>applyTo: "**/*.ts"</code> — only loaded for matching files.</p></div>
+  </div>
+  <pre style="margin-top:2.5vh"><span class="k">## Build &amp; test</span>
+- Run `npm run test:unit` before finishing any task
+<span class="k">## Conventions</span>
+- Use our `ApiClient` wrapper, never raw fetch
+- No new dependencies without asking</pre>
+  <p style="margin-top:2vh" class="muted">Keep it short &amp; concrete. Every line costs context on every request.</p>
+</section>
+
+<!-- 11. Agents -->
+<section class="slide">
+  <h2>Agents — specialised AI teammates</h2>
+  <div class="grid g2">
+    <div>
+      <p>An <b>agent</b> = a model + its own instructions + a limited set of tools, working in a loop until the task is done.</p>
+      <ul style="margin-top:1rem">
+        <li><b>Agent mode</b> in Copilot Chat — edits files, runs commands, iterates</li>
+        <li><b>Copilot coding agent</b> — assign an issue, get a PR back</li>
+        <li><b>Custom agents</b> — e.g. "reviewer", "test-writer", "docs" with focused prompts</li>
+        <li><b>Sub-agents</b> — the main agent delegates research to a helper with fresh context</li>
+      </ul>
+    </div>
+    <pre><span class="c"># .github/agents/reviewer.agent.md</span>
+---
+<span class="k">name</span>: reviewer
+<span class="k">description</span>: Reviews diffs for bugs
+  and security issues
+<span class="k">tools</span>: [<span class="s">'read'</span>, <span class="s">'search'</span>]
+<span class="k">model</span>: Claude Opus 5.5
+---
+You are a strict code reviewer.
+Report only real bugs, one per line,
+with file:line and a suggested fix.</pre>
+  </div>
+</section>
+
+<!-- 12. Skills -->
+<section class="slide">
+  <h2>Skills — reusable know-how, loaded on demand</h2>
+  <div class="grid g2">
+    <div>
+      <p>A <b>skill</b> is a folder with a <code>SKILL.md</code> (+ optional scripts/templates). Only the short <b>description</b> is always in context; the full content loads when the task matches.</p>
+      <ul style="margin-top:1rem">
+        <li>"How we write DB migrations"</li>
+        <li>"Release checklist"</li>
+        <li>"Generate a PDF report with our template"</li>
+      </ul>
+      <p class="muted" style="margin-top:1rem">MD files = always on. Skills = pulled in only when relevant → saves context.</p>
+    </div>
+    <pre><span class="c"># .github/skills/db-migration/SKILL.md</span>
+---
+<span class="k">name</span>: db-migration
+<span class="k">description</span>: Use when creating or
+  changing database migrations.
+---
+1. Run `npm run migrate:new &lt;name&gt;`
+2. Always write the `down` step
+3. Test on a copy of staging data
+4. Never edit a merged migration</pre>
+  </div>
+</section>
+
+<!-- 13. Summary -->
+<section class="slide">
+  <h2>TL;DR</h2>
+  <div class="grid g3">
+    <div class="card blue"><h3>Models</h3><p>Cheap for easy, frontier for hard. Check cost <i>per task</i>, not per token.</p></div>
+    <div class="card purple"><h3>Effort</h3><p>Thinking budget. Separate knob from model choice.</p></div>
+    <div class="card orange"><h3>Permissions</h3><p>Allow safe, ask risky, deny dangerous.</p></div>
+    <div class="card red"><h3>Hooks</h3><p>Scripts that always run — guarantees, not suggestions.</p></div>
+    <div class="card green"><h3>MD files</h3><p>Always-on project memory. Short &amp; concrete.</p></div>
+    <div class="card blue"><h3>Agents &amp; Skills</h3><p>Specialised roles &amp; on-demand know-how.</p></div>
+  </div>
+  <p style="margin-top:3vh; font-size:1.6rem">Questions? 🙋</p>
+</section>
+
+<button class="navbtn" id="prevBtn" aria-label="Previous slide">‹</button>
+<button class="navbtn" id="nextBtn" aria-label="Next slide">›</button>
+<div id="progress"></div>
+<div id="counter"></div>
+<div id="hint">← → / space to navigate · F fullscreen</div>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = Math.min(Math.max((parseInt(location.hash.slice(1)) || 1) - 1, 0), slides.length - 1);
+
+  function show(n) {
+    i = Math.min(Math.max(n, 0), slides.length - 1);
+    slides.forEach((s, k) => { s.classList.toggle('active', k === i); s.classList.toggle('prev', k < i); });
+    document.getElementById('progress').style.width = ((i + 1) / slides.length * 100) + '%';
+    document.getElementById('counter').textContent = (i + 1) + ' / ' + slides.length;
+    history.replaceState(null, '', '#' + (i + 1));
+  }
+
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(i + 1); }
+    else if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); show(i - 1); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key.toLowerCase() === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  });
+  document.getElementById('prevBtn').onclick = () => show(i - 1);
+  document.getElementById('nextBtn').onclick = () => show(i + 1);
+
+  let x0 = null;
+  document.addEventListener('touchstart', e => x0 = e.touches[0].clientX);
+  document.addEventListener('touchend', e => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0;
+    if (Math.abs(dx) > 50) show(i + (dx < 0 ? 1 : -1)); x0 = null; });
+
+  show(i);
+</script>
+</body>
+</html>
