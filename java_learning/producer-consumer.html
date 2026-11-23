@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Producer-Consumer and Utilities</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs></svg>
+<main>
+<h1>4. Producer-consumer & the concurrency utilities</h1>
+<p class="lead">The most common concurrency pattern, built four ways (from <code>wait/notify</code> to virtual threads), then a tour of <code>java.util.concurrent</code>: queues, Semaphore, CountDownLatch, CyclicBarrier, Phaser, Exchanger, concurrent collections, ForkJoin.</p>
+
+<h2 id="pattern">The pattern</h2>
+<figure>
+<svg viewBox="0 0 760 220" role="img" aria-label="Producers put into a bounded buffer, consumers take from it">
+  <rect class="box" x="10" y="30" width="140" height="40" rx="8"/><text x="80" y="55" text-anchor="middle">Producer 1</text>
+  <rect class="box" x="10" y="90" width="140" height="40" rx="8"/><text x="80" y="115" text-anchor="middle">Producer 2</text>
+  <rect class="box" x="10" y="150" width="140" height="40" rx="8"/><text x="80" y="175" text-anchor="middle">Producer N</text>
+  <rect class="box2" x="250" y="80" width="260" height="60" rx="8"/>
+  <rect class="box3" x="262" y="92" width="36" height="36" rx="4"/><rect class="box3" x="304" y="92" width="36" height="36" rx="4"/><rect class="box3" x="346" y="92" width="36" height="36" rx="4"/>
+  <rect class="box" x="388" y="92" width="36" height="36" rx="4" stroke-dasharray="4 3"/><rect class="box" x="430" y="92" width="36" height="36" rx="4" stroke-dasharray="4 3"/>
+  <text x="380" y="70" text-anchor="middle" font-weight="700">bounded buffer (capacity 5)</text>
+  <text x="380" y="162" text-anchor="middle" font-size="12" class="muted">full → producers wait · empty → consumers wait</text>
+  <rect class="box" x="610" y="50" width="140" height="40" rx="8"/><text x="680" y="75" text-anchor="middle">Consumer 1</text>
+  <rect class="box" x="610" y="130" width="140" height="40" rx="8"/><text x="680" y="155" text-anchor="middle">Consumer 2</text>
+  <line class="line" x1="150" y1="50" x2="248" y2="100" marker-end="url(#ah)"/><line class="line" x1="150" y1="110" x2="248" y2="110" marker-end="url(#ah)"/><line class="line" x1="150" y1="170" x2="248" y2="120" marker-end="url(#ah)"/>
+  <text x="200" y="40" font-size="12">put()</text>
+  <line class="line" x1="510" y1="100" x2="608" y2="72" marker-end="url(#ah)"/><line class="line" x1="510" y1="120" x2="608" y2="148" marker-end="url(#ah)"/>
+  <text x="560" y="72" font-size="12">take()</text>
+</svg>
+</figure>
+<p>Producers create work, consumers process it, a <b>buffer</b> between them decouples their speeds. The buffer must be <b>thread-safe</b> and should be <b>bounded</b>: an unbounded buffer just moves the problem to an <code>OutOfMemoryError</code>. A full bounded buffer makes producers wait: that is <b>backpressure</b>.</p>
+<p>You meet this pattern everywhere: a thread pool (submitters → work queue → workers), Tomcat (acceptor → queue → worker threads), logging appenders (async appender), RabbitMQ (publishers → queue → consumers), Reactor (<code>Flux</code> with <code>request(n)</code>).</p>
+
+<h2 id="waitnotify">Version 1: wait / notify (how it works underneath)</h2>
+<pre><code class="language-java">class BoundedBuffer&lt;T&gt; {
+    private final Deque&lt;T&gt; items = new ArrayDeque&lt;&gt;();
+    private final int capacity;
+    BoundedBuffer(int capacity) { this.capacity = capacity; }
+
+    public synchronized void put(T item) throws InterruptedException {
+        while (items.size() == capacity) {   // WHILE, not if: re-check after waking (spurious wakeups, other producers)
+            wait();                          // releases the monitor and sleeps
+        }
+        items.addLast(item);
+        notifyAll();                         // wake consumers (notify() could wake another producer and stall)
+    }
+
+    public synchronized T take() throws InterruptedException {
+        while (items.isEmpty()) {
+            wait();
+        }
+        T item = items.removeFirst();
+        notifyAll();                         // wake producers waiting for space
+        return item;
+    }
+}</code></pre>
+<div class="callout"><b class="t">The rules of wait/notify</b>
+<ul>
+<li>You must hold the object's monitor (<code>synchronized</code>) to call <code>wait</code>/<code>notify</code>, else <code>IllegalMonitorStateException</code>.</li>
+<li>Always wait in a <code>while</code> loop that re-checks the condition.</li>
+<li>Prefer <code>notifyAll()</code> when producers and consumers wait on the same monitor.</li>
+<li>In real code, don't write this: use a <code>BlockingQueue</code>.</li>
+</ul></div>
+
+<h2 id="conditions">Version 2: ReentrantLock + two Conditions</h2>
+<p>Separate wait sets for "not full" and "not empty" mean we wake only the right kind of thread. This is essentially how <code>ArrayBlockingQueue</code> is implemented.</p>
+<pre><code class="language-java">class BoundedBuffer2&lt;T&gt; {
+    private final Object[] items;
+    private int putIdx, takeIdx, count;
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition notFull = lock.newCondition();
+    private final Condition notEmpty = lock.newCondition();
+
+    BoundedBuffer2(int capacity) { items = new Object[capacity]; }
+
+    public void put(T x) throws InterruptedException {
+        lock.lockInterruptibly();
+        try {
+            while (count == items.length) notFull.await();
+            items[putIdx] = x;
+            putIdx = (putIdx + 1) % items.length;       // circular array
+            count++;
+            notEmpty.signal();                          // wake ONE consumer
+        } finally { lock.unlock(); }
+    }
+
+    @SuppressWarnings("unchecked")
+    public T take() throws InterruptedException {
+        lock.lockInterruptibly();
+        try {
+            while (count == 0) notEmpty.await();
+            T x = (T) items[takeIdx];
+            items[takeIdx] = null;
+            takeIdx = (takeIdx + 1) % items.length;
+            count--;
+            notFull.signal();                           // wake ONE producer
+            return x;
+        } finally { lock.unlock(); }
+    }
+}</code></pre>
+
+<h2 id="blockingqueue">Version 3: BlockingQueue (the right way)</h2>
+<pre><code class="language-java">record Job(long id, String payload) {}
+static final Job POISON = new Job(-1, "");                       // "poison pill": tells a consumer to stop
+
+BlockingQueue&lt;Job&gt; queue = new ArrayBlockingQueue&lt;&gt;(1_000);
+
+Runnable producer = () -&gt; {
+    try {
+        for (long i = 0; i &lt; 10_000; i++) queue.put(new Job(i, "data-" + i));   // blocks while full
+    } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+};
+
+Runnable consumer = () -&gt; {
+    try {
+        while (true) {
+            Job job = queue.take();                              // blocks while empty
+            if (job == POISON) return;
+            process(job);
+        }
+    } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+};
+
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    int consumers = 4;
+    for (int i = 0; i &lt; consumers; i++) exec.submit(consumer);
+    exec.submit(() -&gt; { producer.run(); for (int i = 0; i &lt; consumers; i++) queue.put(POISON); return null; });
+}   // close() waits for everybody</code></pre>
+<h4>The four ways to put and take</h4>
+<table>
+<tr><th></th><th>Throws exception</th><th>Returns special value</th><th>Blocks</th><th>Times out</th></tr>
+<tr><td>Insert</td><td><code>add(e)</code></td><td><code>offer(e)</code> → false</td><td><code>put(e)</code></td><td><code>offer(e, 100, ms)</code></td></tr>
+<tr><td>Remove</td><td><code>remove()</code></td><td><code>poll()</code> → null</td><td><code>take()</code></td><td><code>poll(100, ms)</code></td></tr>
+<tr><td>Examine</td><td><code>element()</code></td><td><code>peek()</code></td><td>—</td><td>—</td></tr>
+</table>
+<p>Also handy: <code>drainTo(list, max)</code> takes many at once, perfect for <b>batching</b> (e.g. insert 500 rows per DB round trip).</p>
+<h4>BlockingQueue implementations</h4>
+<table>
+<tr><th>Class</th><th>Bounded?</th><th>Notes</th></tr>
+<tr><td><code>ArrayBlockingQueue</code></td><td>yes (fixed)</td><td>array, one lock for put and take, optional fairness. Good default.</td></tr>
+<tr><td><code>LinkedBlockingQueue</code></td><td>optional (default <code>Integer.MAX_VALUE</code>!)</td><td>two locks (put/take) → higher throughput. Always give a capacity.</td></tr>
+<tr><td><code>SynchronousQueue</code></td><td>capacity 0</td><td>a direct hand-off: <code>put</code> waits until a consumer takes. Used by <code>newCachedThreadPool</code>.</td></tr>
+<tr><td><code>PriorityBlockingQueue</code></td><td>no</td><td>takes by priority (<code>Comparable</code>/<code>Comparator</code>).</td></tr>
+<tr><td><code>DelayQueue</code></td><td>no</td><td>elements become available after their delay: scheduling, retry-later.</td></tr>
+<tr><td><code>LinkedTransferQueue</code></td><td>no</td><td><code>transfer(e)</code> waits until a consumer received it.</td></tr>
+<tr><td><code>LinkedBlockingDeque</code></td><td>optional</td><td>double-ended; suits work-stealing designs (ForkJoinPool uses its own internal deques).</td></tr>
+</table>
+
+<h2 id="stopping">Stopping consumers cleanly</h2>
+<div class="grid2">
+<div class="card"><h4>Poison pill</h4><p>Put one special element per consumer after the last real item. Consumers finish everything queued before stopping. Simple, but you must know the consumer count.</p></div>
+<div class="card"><h4>Interrupt / shutdownNow</h4><p><code>executor.shutdownNow()</code> interrupts the consumers; <code>take()</code> throws <code>InterruptedException</code>. Fast, but items still in the queue are not processed (<code>shutdownNow</code> returns only the executor's never-started tasks, not the items left in your <code>BlockingQueue</code>).</p></div>
+</div>
+
+<h2 id="spring">Producer-consumer in Spring Boot</h2>
+<h3>In-process: an audit-event writer that batches inserts</h3>
+<p>Request threads produce audit events; one background consumer drains the queue and writes them in batches. <code>SmartLifecycle</code> lets Spring start it after the context is ready and stop it (flushing the queue) on shutdown.</p>
+<pre class="mermaid">
+flowchart LR
+  R1[request thread] -- offer --> Q[(ArrayBlockingQueue 10 000)]
+  R2[request thread] -- offer --> Q
+  R3[request thread] -- offer --> Q
+  Q -- "poll + drainTo(500)" --> W[audit-writer thread]
+  W -- batch INSERT --> DB[(DB)]
+</pre>
+<pre><code class="language-java">@Component
+public class AuditWriter implements SmartLifecycle {
+    private static final Logger log = LoggerFactory.getLogger(AuditWriter.class);
+    private final BlockingQueue&lt;AuditEvent&gt; queue = new ArrayBlockingQueue&lt;&gt;(10_000);
+    private final JdbcTemplate jdbc;
+    private volatile boolean running;
+    private Thread worker;
+
+    public AuditWriter(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+
+    /** Producer side: called from request threads. Never blocks the request. */
+    public void record(AuditEvent e) {
+        if (!queue.offer(e)) log.warn("audit queue full, dropping {}", e);   // or: metrics + fallback
+    }
+
+    @Override public void start() {
+        running = true;
+        worker = Thread.ofPlatform().name("audit-writer").start(this::consume);
+    }
+
+    private void consume() {
+        List&lt;AuditEvent&gt; batch = new ArrayList&lt;&gt;(500);
+        while (running || !queue.isEmpty()) {
+            try {
+                AuditEvent first = queue.poll(1, TimeUnit.SECONDS);    // wait at most 1 s
+                if (first == null) continue;
+                batch.add(first);
+                queue.drainTo(batch, 499);                             // grab up to 499 more without waiting
+                jdbc.batchUpdate("insert into audit(at, who, what) values (?,?,?)", batch, batch.size(),
+                        (ps, ev) -&gt; { ps.setObject(1, ev.at()); ps.setString(2, ev.who()); ps.setString(3, ev.what()); });
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception ex) {
+                log.error("audit batch failed", ex);
+            } finally {
+                batch.clear();
+            }
+        }
+    }
+
+    @Override public void stop() {
+        running = false;                       // consumer drains what is left, then exits
+        try { worker.join(5_000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+    @Override public boolean isRunning() { return running; }
+}</code></pre>
+<div class="callout warn"><b class="t">The limit of in-process queues</b>
+If the pod crashes, everything in memory is lost, and each instance has its own queue. When the work must survive restarts or be shared by several instances, put a <b>message broker</b> in the middle: RabbitMQ (<a href="q-rabbitmq.html">Q56–65</a>) or Kafka. The pattern is the same, the buffer just lives outside your JVM.</div>
+<h3>Across services: RabbitMQ</h3>
+<pre><code class="language-java">@Service
+class OrderEvents {                           // producer
+    private final RabbitTemplate rabbit;
+    OrderEvents(RabbitTemplate rabbit) { this.rabbit = rabbit; }
+    void orderPlaced(Order o) { rabbit.convertAndSend("orders", "order.placed", new OrderPlaced(o.id())); }
+}
+
+@Component
+class InvoiceListener {                       // consumer: concurrency = number of consumer threads
+    @RabbitListener(queues = "invoice.order-placed", concurrency = "4-8")
+    void on(OrderPlaced e) { invoices.create(e.orderId()); }
+}</code></pre>
+
+<h2 id="semaphore">Semaphore: limit how many at once</h2>
+<p>A counter of <b>permits</b>. <code>acquire()</code> takes one (waits if none), <code>release()</code> gives one back. Use it to cap concurrent access to something, e.g. a partner API that allows 10 parallel calls. Especially important with <a href="sync-tools.html#virtual">virtual threads</a>, where there is no pool size to limit you.</p>
+<pre class="mermaid">
+flowchart LR
+  T1[thread] --> S{{Semaphore permits=3}}
+  T2[thread] --> S
+  T3[thread] --> S
+  T4[thread waits] -.-> S
+  S --> API[partner API: max 3 concurrent]
+</pre>
+<pre><code class="language-java">private final Semaphore permits = new Semaphore(10, true);   // fair
+
+public Quote quote(Request r) throws InterruptedException {
+    if (!permits.tryAcquire(200, TimeUnit.MILLISECONDS)) throw new TooBusyException();  // → HTTP 429/503
+    try { return partner.quote(r); }
+    finally { permits.release(); }
+}</code></pre>
+<p>A semaphore with 1 permit acts like a lock, but any thread may release it (no ownership).</p>
+
+<h2 id="latch">CountDownLatch: wait until N things happened</h2>
+<p>A one-shot gate: initialized with a count; threads call <code>countDown()</code>; <code>await()</code> blocks until the count reaches zero. Cannot be reset.</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant M as main thread
+  participant A as cache warm-up
+  participant B as connect broker
+  participant C as load config
+  M->>M: latch = new CountDownLatch(3)
+  M->>M: await()
+  A-->>M: countDown() → 2
+  C-->>M: countDown() → 1
+  B-->>M: countDown() → 0
+  M->>M: continues
+</pre>
+<pre><code class="language-java">CountDownLatch ready = new CountDownLatch(3);
+for (Runnable init : List.&lt;Runnable&gt;of(this::warmCache, this::connectBroker, this::loadConfig)) {
+    Thread.startVirtualThread(() -&gt; { try { init.run(); } finally { ready.countDown(); } });
+}
+if (!ready.await(30, TimeUnit.SECONDS)) throw new IllegalStateException("startup timed out");
+
+// Classic test trick: release many threads at the same instant to provoke races
+CountDownLatch startGun = new CountDownLatch(1);
+for (int i = 0; i &lt; 100; i++) exec.submit(() -&gt; { startGun.await(); service.reserve("sku", 1); return null; });
+startGun.countDown();</code></pre>
+
+<h2 id="barrier">CyclicBarrier: N threads meet, then all continue</h2>
+<p>N threads each call <code>await()</code>; all wait until the N-th arrives, an optional barrier action runs, then all continue. <b>Reusable</b> for the next round (hence "cyclic").</p>
+<pre><code class="language-java">int workers = 4;
+CyclicBarrier barrier = new CyclicBarrier(workers, () -&gt; log.info("all parts done, merging round"));
+for (int w = 0; w &lt; workers; w++) {
+    int part = w;
+    exec.submit(() -&gt; {
+        for (int round = 0; round &lt; 10; round++) {
+            simulatePart(part, round);
+            barrier.await();                // everyone waits for the slowest each round
+        }
+        return null;
+    });
+}</code></pre>
+<table>
+<tr><th></th><th>CountDownLatch</th><th>CyclicBarrier</th><th>Phaser</th></tr>
+<tr><td>Who waits?</td><td>one or more "waiters" for N events</td><td>the N parties wait for each other</td><td>parties, per phase</td></tr>
+<tr><td>Reusable?</td><td>no</td><td>yes</td><td>yes, many phases</td></tr>
+<tr><td>Parties change?</td><td>no</td><td>no</td><td><b>yes</b>: <code>register()</code> / <code>arriveAndDeregister()</code></td></tr>
+</table>
+
+<h2 id="phaser">Phaser and Exchanger</h2>
+<pre><code class="language-java">// Phaser: like a CyclicBarrier whose number of parties can change between phases
+Phaser phaser = new Phaser(1);                     // the coordinator itself is registered
+for (Task t : tasks) {
+    phaser.register();
+    exec.submit(() -&gt; {
+        t.stepOne();  phaser.arriveAndAwaitAdvance();   // phase 0
+        t.stepTwo();  phaser.arriveAndDeregister();     // phase 1, then leave
+        return null;
+    });
+}
+phaser.arriveAndAwaitAdvance();                    // coordinator waits for phase 0
+phaser.arriveAndDeregister();
+
+// Exchanger: two threads swap objects at a meeting point (e.g. swap a full buffer for an empty one)
+Exchanger&lt;List&lt;Row&gt;&gt; ex = new Exchanger&lt;&gt;();
+// filler:  buffer = ex.exchange(fullBuffer);  → receives an empty one
+// drainer: buffer = ex.exchange(emptyBuffer); → receives the full one</code></pre>
+
+<h2 id="collections">Concurrent collections</h2>
+<table>
+<tr><th>Instead of</th><th>Use</th><th>How it's thread-safe</th></tr>
+<tr><td><code>HashMap</code></td><td><code>ConcurrentHashMap</code></td><td>lock-free reads; CAS or a lock on a single bin for writes. Atomic compound ops: <code>putIfAbsent</code>, <code>computeIfAbsent</code>, <code>compute</code>, <code>merge</code>. No null keys/values.</td></tr>
+<tr><td><code>TreeMap</code></td><td><code>ConcurrentSkipListMap</code></td><td>sorted, lock-free skip list</td></tr>
+<tr><td><code>ArrayList</code> (read-mostly)</td><td><code>CopyOnWriteArrayList</code></td><td>every write copies the array; iteration never fails. For listener lists, rarely-changed config.</td></tr>
+<tr><td><code>LinkedList</code> as queue</td><td><code>ConcurrentLinkedQueue</code> / <code>Deque</code></td><td>lock-free, non-blocking (no waiting <code>take</code>)</td></tr>
+<tr><td>any collection</td><td><code>Collections.synchronizedList(...)</code></td><td>one lock around every method; you must still lock manually while iterating. Mostly legacy.</td></tr>
+</table>
+<pre><code class="language-java">ConcurrentHashMap&lt;String, LongAdder&gt; hitsPerUrl = new ConcurrentHashMap&lt;&gt;();
+hitsPerUrl.computeIfAbsent(url, k -&gt; new LongAdder()).increment();   // atomic create-if-missing + thread-safe increment
+
+ConcurrentHashMap&lt;String, Integer&gt; wordCount = new ConcurrentHashMap&lt;&gt;();
+wordCount.merge(word, 1, Integer::sum);                                 // atomic read-modify-write
+
+// WRONG, even on a ConcurrentHashMap: two separate calls are not atomic together
+if (!map.containsKey(k)) map.put(k, load(k));
+// RIGHT
+map.computeIfAbsent(k, this::load);   // keep the function short: it runs while holding the bin's lock</code></pre>
+
+<h2 id="forkjoin">ForkJoinPool and work stealing</h2>
+<p>For CPU-bound <b>divide and conquer</b>: split a big task into subtasks until small, compute, join results. Each worker has its own deque; idle workers <b>steal</b> tasks from the tail of busy workers' deques, keeping all cores busy.</p>
+<pre class="mermaid">
+flowchart TB
+  T["sum(0..1 000 000)"] --> A["sum(0..500 000)"]
+  T --> B["sum(500 000..1 000 000)"]
+  A --> A1["sum(0..250 000)"]
+  A --> A2["sum(250 000..500 000)"]
+  B --> B1["..."]
+  B --> B2["..."]
+</pre>
+<pre><code class="language-java">class SumTask extends RecursiveTask&lt;Long&gt; {
+    private final long[] a; private final int lo, hi;
+    SumTask(long[] a, int lo, int hi) { this.a = a; this.lo = lo; this.hi = hi; }
+    protected Long compute() {
+        if (hi - lo &lt;= 10_000) {                     // small enough: do it directly
+            long s = 0; for (int i = lo; i &lt; hi; i++) s += a[i]; return s;
+        }
+        int mid = (lo + hi) &gt;&gt;&gt; 1;
+        SumTask left = new SumTask(a, lo, mid);
+        left.fork();                                  // push to my deque (others may steal it)
+        long right = new SumTask(a, mid, hi).compute();   // do the other half myself
+        return right + left.join();
+    }
+}
+long total = ForkJoinPool.commonPool().invoke(new SumTask(data, 0, data.length));
+// Parallel streams use the same common pool under the hood:
+long total2 = Arrays.stream(data).parallel().sum();</code></pre>
+<div class="callout warn">Never do blocking I/O in the common pool or in parallel streams inside a web app: the pool is shared by the whole JVM and has only <code>cores − 1</code> threads.</div>
+
+<h2 id="scheduled">ScheduledExecutorService</h2>
+<pre><code class="language-java">ScheduledExecutorService ses = Executors.newScheduledThreadPool(2);
+ses.schedule(() -&gt; sendReminder(), 10, TimeUnit.MINUTES);                     // once, later
+ses.scheduleAtFixedRate(this::pollPrices, 0, 5, TimeUnit.SECONDS);            // start-to-start
+ses.scheduleWithFixedDelay(this::cleanup, 0, 30, TimeUnit.SECONDS);           // end-to-start
+// If a periodic task throws, its future runs are silently cancelled: catch exceptions inside!</code></pre>
+<p>In Spring Boot you normally use <code>@Scheduled</code> instead (<a href="multithreading.html#spring">page 1</a>).</p>
+
+<h2 id="cheatsheet">Cheat sheet</h2>
+<table>
+<tr><th>Need</th><th>Utility</th></tr>
+<tr><td>Hand work from producers to consumers</td><td><code>BlockingQueue</code> (<code>ArrayBlockingQueue</code>), or a broker across services</td></tr>
+<tr><td>Run tasks on a bounded set of threads</td><td><code>ThreadPoolExecutor</code> / Spring <code>ThreadPoolTaskExecutor</code></td></tr>
+<tr><td>Many blocking tasks</td><td><code>Executors.newVirtualThreadPerTaskExecutor()</code></td></tr>
+<tr><td>Cap concurrent use of a resource</td><td><code>Semaphore</code></td></tr>
+<tr><td>Wait for N events once</td><td><code>CountDownLatch</code></td></tr>
+<tr><td>N threads sync up each round</td><td><code>CyclicBarrier</code> / <code>Phaser</code></td></tr>
+<tr><td>Combine async results</td><td><code>CompletableFuture</code>, <code>StructuredTaskScope</code> (preview)</td></tr>
+<tr><td>Thread-safe map / counters</td><td><code>ConcurrentHashMap</code>, <code>LongAdder</code>, <code>AtomicLong</code></td></tr>
+<tr><td>Split CPU work across cores</td><td><code>ForkJoinPool</code>, parallel streams</td></tr>
+<tr><td>Run later / periodically</td><td><code>ScheduledExecutorService</code>, <code>@Scheduled</code></td></tr>
+<tr><td>Asynchronous stream with backpressure</td><td>Reactor <code>Flux</code> (<a href="webflux.html#backpressure">page 2</a>), <code>java.util.concurrent.Flow</code></td></tr>
+</table>
+</main>
+</body>
+</html>

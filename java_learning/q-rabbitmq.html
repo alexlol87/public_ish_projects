@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RabbitMQ Interview Questions</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<main>
+<h1>Q56–Q65: RabbitMQ & asynchronous communication</h1>
+<p class="lead">Brokers, AMQP, exchanges, reliability, dead letters and retries, ordering, duplicates, Kafka comparison, Spring AMQP, and a design for a client → sales → trader price-request flow.</p>
+
+<h2>Fundamentals</h2>
+
+<details class="qa" id="q56"><summary><span class="qn">Q56.</span>What is a message broker, and why use async messaging in a workflow like ASTRO's?</summary><div class="ans">
+<p>A <b>message broker</b> is a server that receives messages from <b>producers</b>, stores them safely, and delivers them to <b>consumers</b>. Producers and consumers don't know about each other, only about the broker. It is the <a href="producer-consumer.html">producer-consumer pattern</a> with the buffer moved out of your JVM into a durable, shared, networked service.</p>
+<pre class="mermaid">
+flowchart LR
+  P1[Client-facing app] -->|publish| B{{Broker: RabbitMQ}}
+  P2[Pricing engine] -->|publish| B
+  B -->|deliver| C1[Sales desk service]
+  B -->|deliver| C2[Trader desk service]
+  B -->|deliver| C3[Audit / reporting]
+</pre>
+<p>Why async messaging in a multi-step business workflow (here: an internal system where a client's request goes through sales and traders, which I'll call "ASTRO" since the question does):</p>
+<ul>
+<li><b>Decoupling in time</b>: the trader desk service can be restarting or slow; requests wait in a queue instead of failing.</li>
+<li><b>Human steps</b>: a salesperson or trader may answer in seconds or minutes. Holding an HTTP connection (and a thread) open that long is wrong; a message + state machine is natural.</li>
+<li><b>Load leveling</b>: bursts of requests (market open, news) are buffered and consumed at a sustainable rate.</li>
+<li><b>Fan-out</b>: the same event (quote accepted) goes to booking, risk, audit and notifications without the sender knowing them.</li>
+<li><b>Reliability</b>: persistent messages + acknowledgements → no request is lost if a service crashes.</li>
+<li><b>Auditability</b>: every step is an explicit message that can be logged and replayed for compliance.</li>
+<li><b>Scalability</b>: add consumers to process more in parallel.</li>
+</ul>
+<p>Costs: eventual consistency, duplicates, ordering, and a broker to operate and monitor. See <a href="#q65">Q65</a> for a concrete design.</p>
+</div></details>
+
+<details class="qa" id="q57"><summary><span class="qn">Q57.</span>Explain RabbitMQ's architecture.</summary><div class="ans">
+<p>RabbitMQ implements <b>AMQP 0-9-1</b> (also AMQP 1.0, MQTT, STOMP, and its own Streams protocol). The key idea: <b>producers never publish to a queue directly; they publish to an exchange</b>, which routes copies to queues according to <b>bindings</b>.</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph Producer app
+    P[Producer] --- CH1[Channel]
+  end
+  CH1 -->|"publish(exchange=orders, routingKey=order.created)"| X{{Exchange: orders, type topic}}
+  subgraph Broker[RabbitMQ broker, virtual host /shop]
+    X -->|binding: order.*| Q1[(Queue: billing.orders)]
+    X -->|binding: order.created| Q2[(Queue: email.orders)]
+    X -->|binding: #| Q3[(Queue: audit)]
+  end
+  Q1 -->|push + ack| C1[Consumer: billing]
+  Q2 -->|push + ack| C2[Consumer: email]
+  Q3 -->|push + ack| C3[Consumer: audit]
+</pre>
+<table>
+<tr><th>Element</th><th>Role</th></tr>
+<tr><td><b>Connection</b></td><td>A TCP connection from your app to the broker (long-lived, expensive).</td></tr>
+<tr><td><b>Channel</b></td><td>A lightweight virtual connection inside a connection. Each thread should use its own channel (Spring manages this).</td></tr>
+<tr><td><b>Virtual host (vhost)</b></td><td>A namespace: own exchanges, queues, permissions. Like a database schema.</td></tr>
+<tr><td><b>Exchange</b></td><td>Receives messages and routes them by type + routing key + bindings (<a href="#q58">Q58</a>). Stores nothing.</td></tr>
+<tr><td><b>Binding</b></td><td>A rule "queue Q wants messages from exchange X matching key K".</td></tr>
+<tr><td><b>Queue</b></td><td>Ordered buffer storing messages until consumed. Types: <b>classic</b>, <b>quorum</b> (replicated with Raft, the recommended durable type), <b>stream</b> (append-only log, replayable, Kafka-like).</td></tr>
+<tr><td><b>Message</b></td><td>Body (bytes) + properties: routing key, headers, <code>delivery_mode</code> (2 = persistent), <code>message_id</code>, <code>correlation_id</code>, <code>reply_to</code>, <code>expiration</code>, priority.</td></tr>
+<tr><td><b>Consumer</b></td><td>Subscribes to a queue; broker <b>pushes</b> messages, limited by <b>prefetch</b> (QoS); consumer sends <b>ack</b>/<b>nack</b>.</td></tr>
+<tr><td><b>Cluster</b></td><td>Several broker nodes sharing metadata; quorum queues replicate data across nodes.</td></tr>
+</table>
+<p>Management UI (port 15672) shows queues, rates, unacked counts, consumers, and lets you publish/get messages for debugging.</p>
+</div></details>
+
+<details class="qa" id="q58"><summary><span class="qn">Q58.</span>What exchange types does RabbitMQ have?</summary><div class="ans">
+<table>
+<tr><th>Type</th><th>Routing rule</th><th>Typical use</th></tr>
+<tr><td><b>direct</b></td><td>routing key == binding key (exact match)</td><td>commands to a specific worker queue: <code>pdf.generate</code></td></tr>
+<tr><td><b>fanout</b></td><td>ignores the key, copies to every bound queue</td><td>broadcast: cache invalidation, "price updated" to all instances</td></tr>
+<tr><td><b>topic</b></td><td>pattern match on dot-separated words: <code>*</code> = exactly one word, <code>#</code> = zero or more words</td><td>events by category: <code>trade.eur.booked</code>, bind <code>trade.*.booked</code> or <code>trade.#</code></td></tr>
+<tr><td><b>headers</b></td><td>match on message headers (<code>x-match: all</code> or <code>any</code>), key ignored</td><td>routing on several attributes; rare</td></tr>
+<tr><td><b>default</b> (nameless direct)</td><td>every queue is bound by its own name</td><td><code>rabbitTemplate.convertAndSend("my-queue", msg)</code> sends straight to that queue</td></tr>
+</table>
+<pre class="mermaid">
+flowchart LR
+  M1["key: quote.eur.request"] --> T{{topic exchange: rfq}}
+  T -->|"quote.eur.*"| QE[(eur-desk)]
+  T -->|"quote.*.request"| QR[(all-requests)]
+  T -->|"quote.#"| QA[(audit)]
+  T -.->|"quote.usd.*" no match| QU[(usd-desk)]
+</pre>
+<p>Plugins add more: <b>consistent-hash</b> exchange (partition by key, see <a href="#q61">Q61</a>), <b>delayed-message</b> exchange (deliver after a delay). Exchanges can also be bound to other exchanges.</p>
+</div></details>
+
+<h2>Reliability</h2>
+
+<details class="qa" id="q59"><summary><span class="qn">Q59.</span>How do you make sure messages aren't lost in RabbitMQ?</summary><div class="ans">
+<p>A message can be lost at three points. Protect each one:</p>
+<pre class="mermaid">
+flowchart LR
+  P[Producer] -- "1. publisher confirms<br/>+ mandatory/returns" --> X{{Exchange}}
+  X --> Q[("2. durable quorum queue<br/>persistent messages")]
+  Q -- "3. manual ack AFTER processing" --> C[Consumer]
+</pre>
+<ol>
+<li><b>Producer → broker</b>
+<ul>
+<li><b>Publisher confirms</b>: the broker acks each message once it is safely stored (for quorum queues: replicated to a majority). No confirm / a nack → resend.</li>
+<li><b>Mandatory flag + returns</b>: if the exchange can't route the message to any queue, it is returned instead of silently dropped.</li>
+<li>Publish from an <b>outbox</b> table so a crash between DB commit and publish doesn't lose the event (<a href="q-distributed.html#q50">Q50</a>).</li>
+</ul></li>
+<li><b>Inside the broker</b>
+<ul>
+<li><b>Durable</b> exchanges and queues (survive restart) and <b>persistent</b> messages (<code>delivery_mode=2</code>, Spring's default).</li>
+<li><b>Quorum queues</b> replicated across 3+ nodes (survive a node loss). Classic mirrored queues are removed in RabbitMQ 4.</li>
+<li>Avoid overflowing: <code>x-max-length</code> with <code>reject-publish</code> rather than silently dropping, monitor queue depth and disk/memory alarms.</li>
+</ul></li>
+<li><b>Broker → consumer</b>
+<ul>
+<li><b>Manual (or Spring AUTO) acknowledgement</b>: ack only <b>after</b> the work is done (DB committed). If the consumer dies before acking, the broker redelivers.</li>
+<li>Never use auto-ack (Spring's <code>NONE</code>) for important messages: the broker forgets the message as soon as it is sent.</li>
+<li>Failed messages go to a <b>dead letter queue</b> instead of being dropped (<a href="#q60">Q60</a>).</li>
+</ul></li>
+</ol>
+<pre><code class="language-yaml">spring:
+  rabbitmq:
+    publisher-confirm-type: correlated   # enable publisher confirms
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        acknowledge-mode: auto           # Spring acks after the listener returns normally, nacks on exception
+        prefetch: 20</code></pre>
+<p>Result: <b>at-least-once</b> delivery. The flip side: duplicates are possible, so consumers must be idempotent (<a href="#q62">Q62</a>).</p>
+</div></details>
+
+<details class="qa" id="q60"><summary><span class="qn">Q60.</span>What is a dead letter queue, and how do you handle retries?</summary><div class="ans">
+<p>A <b>dead letter exchange (DLX)</b> is where RabbitMQ re-publishes a message from a queue when it:</p>
+<ul>
+<li>is <b>rejected/nacked with requeue=false</b> by a consumer,</li>
+<li><b>expires</b> (message TTL or queue <code>x-message-ttl</code>),</li>
+<li>is dropped because the queue exceeded its <b>max length</b>,</li>
+<li>exceeded the quorum queue <b>delivery limit</b> (<code>x-delivery-limit</code>; RabbitMQ 4 sets a default of 20).</li>
+</ul>
+<p>The queue bound to that DLX is the <b>dead letter queue (DLQ)</b>: a parking lot for messages that need a human or a later replay. The <code>x-death</code> header records why and how often.</p>
+<h4>Retry strategies</h4>
+<table>
+<tr><th>Strategy</th><th>How</th><th>Trade-off</th></tr>
+<tr><td>Immediate requeue</td><td>nack with requeue=true</td><td>A "poison" message loops forever at full speed. Avoid.</td></tr>
+<tr><td>In-memory retry</td><td>Spring retry interceptor: retry 3× with backoff inside the listener, then reject → DLQ</td><td>Simple; blocks the consumer thread during backoff; retries lost if the app dies.</td></tr>
+<tr><td>Delayed retry via TTL queue</td><td>On failure publish to <code>orders.retry.10s</code> (TTL 10 s, DLX = main exchange) → message comes back after 10 s. Several tiers: 10 s, 1 min, 10 min.</td><td>Non-blocking, survives restarts; more topology.</td></tr>
+<tr><td>Delayed-message plugin</td><td>publish with <code>x-delay</code> header</td><td>Simple; plugin needed.</td></tr>
+</table>
+<pre class="mermaid">
+flowchart LR
+  X{{orders exchange}} --> Q[(orders.queue)]
+  Q --> C[Consumer]
+  C -- "fails: transient, attempt &lt; 3" --> RX{{retry exchange}} --> RQ[("orders.retry<br/>TTL 30s, DLX = orders exchange")]
+  RQ -- "after 30 s, dead-lettered back" --> X
+  C -- "fails: permanent or attempt = 3" --> DLX{{orders.dlx}} --> DLQ[(orders.dlq: alert + manual replay)]
+</pre>
+<pre><code class="language-java">@Configuration
+class RabbitTopology {
+    @Bean Queue orders() {
+        return QueueBuilder.durable("orders.queue")
+                .quorum()
+                .deadLetterExchange("orders.dlx")          // rejected messages go here
+                .deadLetterRoutingKey("orders.dlq")
+                .build();
+    }
+    @Bean DirectExchange dlx() { return new DirectExchange("orders.dlx"); }
+    @Bean Queue dlq() { return QueueBuilder.durable("orders.dlq").quorum().build(); }
+    @Bean Binding dlqBinding() { return BindingBuilder.bind(dlq()).to(dlx()).with("orders.dlq"); }
+}</code></pre>
+<pre><code class="language-yaml">spring.rabbitmq.listener.simple:
+  default-requeue-rejected: false     # an exception rejects WITHOUT requeue → goes to the DLX
+  retry:
+    enabled: true                     # stateless in-memory retry before rejecting
+    max-attempts: 3
+    initial-interval: 1s
+    multiplier: 2</code></pre>
+<p>Distinguish <b>transient</b> errors (DB timeout: retry) from <b>permanent</b> ones (invalid JSON, business rule: no retry, straight to DLQ; throw <code>AmqpRejectAndDontRequeueException</code>). Monitor and alert on DLQ depth.</p>
+</div></details>
+
+<details class="qa" id="q61"><summary><span class="qn">Q61.</span>How do you handle message ordering and scaling consumers?</summary><div class="ans">
+<p>A single queue is FIFO, and with <b>one consumer</b> messages are processed in order. As soon as you add consumers (<b>competing consumers</b>) or prefetch &gt; 1 with concurrency, ordering across the queue is lost: message 2 may finish before message 1. Redeliveries after a failure also break order.</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph S1["Scale out: no global order"]
+    Q[(queue: m1 m2 m3 m4)] --> C1[consumer 1: m1, m3]
+    Q --> C2[consumer 2: m2, m4]
+  end
+</pre>
+<p>Usually you don't need global order, only <b>order per entity</b> (per order id, per client). Options:</p>
+<ol>
+<li><b>Partition by key</b>: N queues, route each entity always to the same queue (consistent-hash exchange plugin, or compute <code>hash(orderId) % N</code> as the routing key), one consumer per queue. Order per key, parallelism N.</li>
+<li><b>Single active consumer</b> (<code>x-single-active-consumer</code>): many consumers registered for failover, only one receives at a time; prefetch 1 for strict order.</li>
+<li><b>Make order irrelevant</b>: include a version/sequence number or timestamp and let the consumer ignore stale updates (<code>update ... where version &lt; :newVersion</code>). Often the most robust choice.</li>
+<li><b>RabbitMQ Streams / super streams</b> (partitioned streams), or Kafka, which orders within a partition by design.</li>
+</ol>
+<pre class="mermaid">
+flowchart LR
+  P[producer] --> H{{"consistent-hash exchange<br/>key = clientId"}}
+  H --> Q1[(rfq.0)] --> C1[consumer A]
+  H --> Q2[(rfq.1)] --> C2[consumer B]
+  H --> Q3[(rfq.2)] --> C3[consumer C]
+</pre>
+<h4>Scaling consumers</h4>
+<ul>
+<li>More consumer threads per instance: <code>@RabbitListener(concurrency = "4-10")</code> or <code>spring.rabbitmq.listener.simple.concurrency</code>/<code>max-concurrency</code>.</li>
+<li>More instances (pods): all consume the same queue, the broker round-robins among consumers.</li>
+<li><b>Prefetch</b> (default 250 in Spring AMQP): how many unacked messages each consumer may hold. High = throughput; low (1–10) = fairer distribution of slow tasks and less work stuck on a dying consumer.</li>
+<li>Scale on queue depth (KEDA) rather than CPU.</li>
+<li>Downstream limits: 50 consumers × DB calls may overload the DB.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q62"><summary><span class="qn">Q62.</span>How do you deal with duplicate messages?</summary><div class="ans">
+<p>With at-least-once delivery, duplicates happen: producer resends after a missing confirm, consumer crashes after doing the work but before acking, network hiccups. "Exactly once" end-to-end isn't something the broker can give you; you get <b>effectively once</b> by making consumers <b>idempotent</b>: processing the same message twice has the same effect as once.</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant Q as Queue
+  participant C as Consumer
+  participant DB as DB
+  Q->>C: msg id=abc (1st delivery)
+  C->>DB: BEGIN, INSERT processed_messages(abc), do work, COMMIT
+  C--xQ: crash before ack
+  Q->>C: msg id=abc (redelivered)
+  C->>DB: INSERT processed_messages(abc) → unique violation
+  C->>Q: ack (already done, skip)
+</pre>
+<ol>
+<li><b>Deduplication table</b>: store the <code>message_id</code> in a table with a unique constraint, in the <b>same transaction</b> as the business change. If the insert fails → already processed → just ack.</li>
+<li><b>Naturally idempotent operations</b>: "set status = BOOKED where id = 42" (not "increment"), upserts (<code>MERGE</code> / <code>INSERT … ON CONFLICT DO NOTHING</code>), unique business keys (one quote per RFQ id).</li>
+<li><b>Version checks</b>: apply only if <code>event.version &gt; current.version</code>.</li>
+<li><b>Idempotency key</b> in a fast store (Redis <code>SET key NX EX 86400</code>) for non-DB side effects, accepting the small window it leaves.</li>
+</ol>
+<pre><code class="language-java">@RabbitListener(queues = "billing.orders")
+@Transactional
+public void on(OrderPlaced e, @Header(AmqpHeaders.MESSAGE_ID) String messageId) {
+    int inserted = jdbc.update("insert into processed_message(id) values (?) on conflict do nothing", messageId);
+    if (inserted == 0) return;                // duplicate → ack and skip
+    invoiceService.createFor(e.orderId());    // same transaction as the dedup row
+}</code></pre>
+<p>Producers should set a stable <code>message_id</code> (e.g. the outbox row id), not a random one per send attempt.</p>
+</div></details>
+
+<details class="qa" id="q63"><summary><span class="qn">Q63.</span>RabbitMQ vs Kafka?</summary><div class="ans">
+<div class="grid2">
+<div class="card"><h4>RabbitMQ: smart broker, message queue</h4>
+<p>Routes messages through exchanges to queues; a message is <b>deleted once acked</b>. Push delivery to consumers, per-message acks, flexible routing, priorities, TTL, DLX, request/reply. Great for <b>commands, work queues, task distribution, RPC-style workflows</b>.</p></div>
+<div class="card"><h4>Kafka: distributed commit log</h4>
+<p>Producers append to <b>partitioned topics</b>; messages are <b>retained</b> (days, or forever with compaction) regardless of consumption. Consumers <b>pull</b> and track their own <b>offset</b>; many consumer groups read the same data independently and can <b>replay</b>. Great for <b>event streaming, high throughput, event sourcing, analytics pipelines</b>.</p></div>
+</div>
+<table>
+<tr><th></th><th>RabbitMQ</th><th>Kafka</th></tr>
+<tr><td>Model</td><td>queue (consumed = gone)</td><td>log (retained, replayable)</td></tr>
+<tr><td>Delivery</td><td>push, prefetch</td><td>pull, batches</td></tr>
+<tr><td>Ordering</td><td>per queue with one consumer</td><td>per partition (by key)</td></tr>
+<tr><td>Scaling consumers</td><td>add consumers freely (competing)</td><td>max parallelism = number of partitions per group</td></tr>
+<tr><td>Routing</td><td>rich (direct, topic, fanout, headers)</td><td>by topic + partition key only</td></tr>
+<tr><td>Throughput</td><td>tens of thousands msg/s per queue</td><td>millions msg/s per cluster</td></tr>
+<tr><td>Per-message features</td><td>TTL, priority, DLX, delays</td><td>none built-in (DLQ is an app pattern)</td></tr>
+<tr><td>Replay old messages</td><td>no (except Streams)</td><td>yes, reset offsets</td></tr>
+<tr><td>Spring</td><td>Spring AMQP (<code>@RabbitListener</code>)</td><td>Spring for Apache Kafka (<code>@KafkaListener</code>)</td></tr>
+</table>
+<p>Rule of thumb: "do this task" → RabbitMQ; "this happened, anyone may care, maybe later" at high volume → Kafka. RabbitMQ Streams narrow the gap for replayable logs.</p>
+</div></details>
+
+<h2>Spring & design</h2>
+
+<details class="qa" id="q64"><summary><span class="qn">Q64.</span>How do you use RabbitMQ with Spring?</summary><div class="ans">
+<p>Add <code>spring-boot-starter-amqp</code> (Spring AMQP). Boot auto-configures a <code>ConnectionFactory</code> (caching channels), a <code>RabbitTemplate</code> for sending, a <code>RabbitAdmin</code> that declares your queues/exchanges/bindings beans on the broker at startup, and listener containers for <code>@RabbitListener</code>.</p>
+<pre><code class="language-yaml">spring:
+  rabbitmq:
+    host: rabbit.internal
+    port: 5672
+    username: orders
+    password: ${RABBIT_PASSWORD}
+    virtual-host: /shop
+    listener:
+      simple:
+        concurrency: 2
+        max-concurrency: 8
+        prefetch: 20</code></pre>
+<pre><code class="language-java">@Configuration
+class RabbitConfig {
+    @Bean TopicExchange ordersExchange() { return new TopicExchange("orders"); }
+    @Bean Queue billingQueue() { return QueueBuilder.durable("billing.orders").quorum().deadLetterExchange("orders.dlx").build(); }
+    @Bean Binding billingBinding() { return BindingBuilder.bind(billingQueue()).to(ordersExchange()).with("order.*"); }
+
+    @Bean MessageConverter json() { return new Jackson2JsonMessageConverter(); }   // JSON instead of Java serialization
+    // (Spring AMQP 4 / Boot 4 with Jackson 3: JacksonJsonMessageConverter)
+}
+
+public record OrderPlaced(long orderId, BigDecimal amount) {}
+
+@Service
+class OrderPublisher {
+    private final RabbitTemplate rabbit;
+    OrderPublisher(RabbitTemplate rabbit) { this.rabbit = rabbit; }
+
+    void publish(OrderPlaced e) {
+        rabbit.convertAndSend("orders", "order.placed", e, m -&gt; {
+            m.getMessageProperties().setMessageId("order-" + e.orderId());   // stable id for dedup
+            return m;
+        });
+    }
+}
+
+@Component
+class BillingListener {
+    @RabbitListener(queues = "billing.orders")
+    void handle(OrderPlaced event) {             // JSON → record by the MessageConverter
+        billing.invoice(event);                  // returns normally → ack; throws → nack (→ DLQ if not requeued)
+    }
+}</code></pre>
+<ul>
+<li><b>Request/reply</b>: <code>rabbit.convertSendAndReceive(...)</code> + a listener returning a value (uses <code>reply_to</code> and <code>correlation_id</code>); set a reply timeout.</li>
+<li><b>Testing</b>: Testcontainers <code>RabbitMQContainer</code> with <code>@ServiceConnection</code>; <code>@RabbitListenerTest</code> for spying listeners.</li>
+<li>Tracing: Boot can propagate trace headers through RabbitTemplate and listeners (enable observation: <code>spring.rabbitmq.template.observation-enabled</code>, <code>spring.rabbitmq.listener.simple.observation-enabled</code>).</li>
+<li>With <code>spring.threads.virtual.enabled=true</code>, listener containers use virtual threads.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q65"><summary><span class="qn">Q65.</span>How would you design the messaging for a client → sales → trader price request flow?</summary><div class="ans">
+<p>This is an <b>RFQ (Request For Quote)</b> workflow: a client asks for a price, a salesperson enriches/approves it, a trader prices it, the quote goes back through sales to the client, who can accept within a short validity window. Design goals: no lost requests, clear state, timeouts (prices go stale fast), auditability, per-request ordering, and the ability to route to the right desk.</p>
+<h4>1. Model the RFQ as a state machine, persisted by an RFQ service</h4>
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> REQUESTED: client submits
+  REQUESTED --> WITH_SALES: routed to sales desk
+  WITH_SALES --> WITH_TRADER: sales forwards (adds client tier / margin)
+  WITH_SALES --> REJECTED: sales declines
+  WITH_TRADER --> QUOTED: trader prices
+  WITH_TRADER --> REJECTED: trader declines
+  QUOTED --> ACCEPTED: client accepts before expiry
+  QUOTED --> EXPIRED: validity (e.g. 15 s) passes
+  REQUESTED --> EXPIRED: no answer in time
+  WITH_SALES --> EXPIRED
+  WITH_TRADER --> EXPIRED
+  ACCEPTED --> BOOKED: trade booked
+</pre>
+<h4>2. Topology</h4>
+<pre class="mermaid">
+flowchart LR
+  CL[Client portal / API] -->|"rfq.requested.{assetClass}.{ccy}"| X{{topic exchange: rfq}}
+  X -->|"rfq.requested.#"| QS[(sales.desk.requests<br/>quorum)]
+  QS --> SALES[Sales service + sales UI]
+  SALES -->|"rfq.forwarded.fx.eur"| X
+  X -->|"rfq.forwarded.fx.*"| QT[(trader.fx.requests)]
+  X -->|"rfq.forwarded.rates.*"| QR[(trader.rates.requests)]
+  QT --> TR[Trader service + trader UI / pricing engine]
+  TR -->|"rfq.quoted.fx.eur"| X
+  X -->|"rfq.quoted.#"| QQ[(sales.quotes)] --> SALES
+  SALES -->|"rfq.quote-published"| X
+  X -->|"rfq.quote-published"| QC[(client.notifications)] --> CL
+  X -->|"#"| QA[(audit: every event)]
+  QS -. failures .-> DLX{{rfq.dlx}} --> DLQ[(rfq.dlq)]
+</pre>
+<ul>
+<li><b>Topic exchange</b> with routing keys <code>rfq.{event}.{assetClass}.{currency}</code> so desks bind only to what they handle (FX vs rates, EUR desk vs USD desk) and audit binds <code>#</code>.</li>
+<li><b>Quorum queues</b>, persistent messages, publisher confirms, manual acks (<a href="#q59">Q59</a>), DLX per queue (<a href="#q60">Q60</a>).</li>
+<li>Every message carries <code>rfqId</code> as <code>correlation_id</code>, a unique <code>message_id</code>, a <code>version</code>/sequence, the <code>validUntil</code> timestamp, and the <code>traceparent</code> header.</li>
+</ul>
+<h4>3. Timeouts and staleness</h4>
+<ul>
+<li>Set a per-message <b>TTL</b> (<code>expiration</code>) equal to the remaining validity: an RFQ nobody picked up in time expires and dead-letters to an <code>rfq.expired</code> handler that marks it EXPIRED and notifies the client.</li>
+<li>Consumers also check <code>validUntil</code> before acting (TTL is only checked at the head of the queue).</li>
+<li>Quotes carry their own expiry; acceptance after expiry is rejected by the RFQ service (the source of truth), not by the broker.</li>
+</ul>
+<h4>4. Correctness</h4>
+<ul>
+<li><b>Idempotent</b> handlers: transitions are conditional updates (<code>update rfq set state='QUOTED' where id=? and state='WITH_TRADER'</code>); a duplicate or late message changes nothing (<a href="#q62">Q62</a>).</li>
+<li><b>Ordering</b> per RFQ is guaranteed by the state machine + versions, so many consumers can work in parallel (<a href="#q61">Q61</a>). If a desk needs strict per-client order, partition by <code>clientId</code>.</li>
+<li><b>Outbox</b>: each service writes its state change and the outgoing event in one DB transaction (<a href="q-distributed.html#q50">Q50</a>).</li>
+<li><b>Real-time UIs</b>: sales/trader screens get updates over WebSocket/SSE from their service, which consumes the queues; the human click goes back as an HTTP command that produces the next event.</li>
+<li><b>Auditability</b>: the audit queue persists every event (and/or a RabbitMQ Stream for replay) for compliance (who quoted what, when).</li>
+<li><b>Observability</b>: one trace per RFQ across all hops, dashboards on queue depth and time-in-state, alerts on DLQ messages and expiry rate.</li>
+</ul>
+<pre class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant R as RFQ / Sales service
+  participant MQ as RabbitMQ
+  participant T as Trader service
+  C->>R: POST /rfq (EUR/USD 10M)
+  R->>R: save REQUESTED + outbox (1 tx)
+  R->>MQ: rfq.forwarded.fx.eur (TTL 15s)
+  MQ->>T: deliver
+  T->>T: trader prices 1.0842
+  T->>MQ: rfq.quoted.fx.eur (correlationId = rfqId)
+  MQ->>R: deliver
+  R->>R: WITH_TRADER → QUOTED (conditional update)
+  R-->>C: quote 1.0842 valid 10s (WebSocket)
+  C->>R: accept
+  R->>R: QUOTED → ACCEPTED if not expired
+</pre>
+</div></details>
+</main>
+</body>
+</html>

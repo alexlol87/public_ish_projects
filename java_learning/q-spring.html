@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spring Interview Questions</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<main>
+<h1>Q31–Q45: Spring Framework</h1>
+<p class="lead">Try to answer each question out loud first, then open it. New to Spring? Read <a href="spring-basics.html">Spring Boot basics</a> before this page.</p>
+
+<h2>Core container</h2>
+
+<details class="qa" id="q31"><summary><span class="qn">Q31.</span>Explain IoC and dependency injection in Spring. What bean scopes exist?</summary><div class="ans">
+<p><b>IoC (Inversion of Control)</b>: instead of your objects creating their collaborators with <code>new</code>, a container (the <code>ApplicationContext</code>) creates them and controls their lifecycle. <b>DI (Dependency Injection)</b> is how IoC is done: the container passes ("injects") dependencies into an object.</p>
+<p>Three injection styles:</p>
+<pre><code class="language-java">// 1. Constructor injection (recommended): immutable, required, easy to unit test
+@Service
+class OrderService {
+    private final OrderRepository repo;
+    OrderService(OrderRepository repo) { this.repo = repo; }
+}
+// 2. Setter injection: optional dependencies
+@Autowired void setAuditor(Auditor a) { this.auditor = a; }
+// 3. Field injection: concise but hides dependencies, needs reflection in tests; avoid
+@Autowired private OrderRepository repo;</code></pre>
+<p>When several beans match a type: <code>@Primary</code> marks the default, <code>@Qualifier("name")</code> picks one, injecting <code>List&lt;PaymentProvider&gt;</code> gets all of them, and <code>ObjectProvider&lt;T&gt;</code> gives lazy/optional access.</p>
+<h4>Bean scopes</h4>
+<table>
+<tr><th>Scope</th><th>Instances</th><th>Use</th></tr>
+<tr><td><b>singleton</b> (default)</td><td>one per ApplicationContext</td><td>services, repositories, controllers. Must be thread-safe / stateless.</td></tr>
+<tr><td><b>prototype</b></td><td>new one every time it is requested from the container</td><td>stateful helpers. Spring does not call destroy callbacks for prototypes.</td></tr>
+<tr><td><b>request</b></td><td>one per HTTP request</td><td>request-specific data (web apps only)</td></tr>
+<tr><td><b>session</b></td><td>one per HTTP session</td><td>user's shopping cart in a server-rendered app</td></tr>
+<tr><td><b>application</b></td><td>one per <code>ServletContext</code></td><td>rare</td></tr>
+<tr><td><b>websocket</b></td><td>one per WebSocket session</td><td>rare</td></tr>
+</table>
+<div class="callout warn"><b class="t">Classic trap: prototype inside a singleton</b>
+A prototype injected into a singleton is created <b>once</b> (when the singleton is built), so it behaves like a singleton. Fix: inject <code>ObjectProvider&lt;MyPrototype&gt;</code> and call <code>getObject()</code> each time, or use <code>@Lookup</code>. Request/session-scoped beans injected into singletons work because Spring injects a <b>scoped proxy</b> that resolves the current request's instance on each call.</div>
+</div></details>
+
+<details class="qa" id="q32"><summary><span class="qn">Q32.</span>How does Spring Boot auto-configuration work?</summary><div class="ans">
+<p><code>@SpringBootApplication</code> includes <code>@EnableAutoConfiguration</code>. At startup Boot loads a list of auto-configuration classes from every JAR's <code>META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports</code> file (older versions used <code>spring.factories</code>; 2.7 introduced the <code>.imports</code> file and 3.0 dropped the old way). Each is a normal <code>@Configuration</code> class guarded by <b>conditions</b>; only those whose conditions pass contribute beans. Your own beans are processed first, so auto-configuration <b>backs off</b> when you define your own.</p>
+<pre class="mermaid">
+flowchart TD
+  A["@EnableAutoConfiguration"] --> B[Read AutoConfiguration.imports from all JARs<br/>e.g. DataSourceAutoConfiguration, JacksonAutoConfiguration ...]
+  B --> C{"@ConditionalOnClass(DataSource, HikariDataSource)?<br/>is the library on the classpath"}
+  C -- no --> X[skip]
+  C -- yes --> D{"@ConditionalOnMissingBean(DataSource)?<br/>did the user define one"}
+  D -- user defined one --> X2[back off: use the user's bean]
+  D -- no --> E{"@ConditionalOnProperty(spring.datasource.url)…"}
+  E --> F[create HikariDataSource from spring.datasource.* properties]
+</pre>
+<pre><code class="language-java">// A simplified auto-configuration you could write for your own company starter
+@AutoConfiguration
+@ConditionalOnClass(AuditClient.class)
+@EnableConfigurationProperties(AuditProperties.class)
+public class AuditAutoConfiguration {
+    @Bean
+    @ConditionalOnMissingBean                              // user can override
+    @ConditionalOnProperty(prefix = "audit", name = "enabled", havingValue = "true", matchIfMissing = true)
+    AuditClient auditClient(AuditProperties props) { return new AuditClient(props.url()); }
+}
+// + file src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+//   containing: com.acme.audit.AuditAutoConfiguration</code></pre>
+<p>Other common conditions: <code>@ConditionalOnBean</code>, <code>@ConditionalOnWebApplication</code>, <code>@ConditionalOnMissingClass</code>, <code>@ConditionalOnResource</code>.</p>
+<p><b>Debugging</b>: run with <code>--debug</code> (or <code>debug=true</code>) to print the <b>condition evaluation report</b> (which auto-configs matched and why), or <code>GET /actuator/conditions</code>. Exclude one: <code>@SpringBootApplication(exclude = DataSourceAutoConfiguration.class)</code> or <code>spring.autoconfigure.exclude</code>.</p>
+<p>Spring Boot 4 split auto-configuration into many smaller modules (one per technology, e.g. <code>spring-boot-webmvc</code>, <code>spring-boot-jdbc</code>), so the classpath holds only what your starters need; the mechanism above is unchanged.</p>
+</div></details>
+
+<details class="qa" id="q33"><summary><span class="qn">Q33.</span>What is the Spring bean lifecycle?</summary><div class="ans">
+<pre class="mermaid">
+flowchart TD
+  A[1. Instantiate: call constructor, constructor injection] --> B[2. Populate properties: setter and field injection]
+  B --> C["3. Aware callbacks: BeanNameAware, BeanFactoryAware, ApplicationContextAware"]
+  C --> D["4. BeanPostProcessor.postProcessBeforeInitialization<br/>(@PostConstruct runs here)"]
+  D --> E["5. InitializingBean.afterPropertiesSet()"]
+  E --> F["6. custom init method: @Bean(initMethod = ...)"]
+  F --> G["7. BeanPostProcessor.postProcessAfterInitialization<br/>AOP PROXIES are created here (@Transactional, @Async ...)"]
+  G --> H[8. Bean in use]
+  H --> I["9. Shutdown: @PreDestroy → DisposableBean.destroy() → @Bean(destroyMethod)"]
+</pre>
+<pre><code class="language-java">@Component
+class PriceCache implements InitializingBean, DisposableBean {
+    PriceCache(PriceClient client) { ... }                        // 1
+    @PostConstruct void warmUp() { ... }                          // 4: dependencies are injected now
+    @Override public void afterPropertiesSet() { ... }            // 5
+    @PreDestroy void flush() { ... }                              // 9
+    @Override public void destroy() { ... }                       // 9
+}</code></pre>
+<ul>
+<li>Before instances exist, <b>BeanFactoryPostProcessors</b> can modify bean <em>definitions</em> (e.g. resolving <code>${...}</code> placeholders).</li>
+<li><code>@PostConstruct</code> runs before proxies exist: calling a <code>@Transactional</code> method of the same bean there gets no transaction. For "do something when the app is fully up" use <code>@EventListener(ApplicationReadyEvent.class)</code> or <code>ApplicationRunner</code>.</li>
+<li>Prototype beans get steps 1–7 but never the destroy callbacks.</li>
+<li><code>SmartLifecycle</code> beans get <code>start()</code> after all singletons are ready and <code>stop()</code> early during shutdown (used for message listeners, schedulers; see the audit writer on <a href="producer-consumer.html#spring">page 4</a>).</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q34"><summary><span class="qn">Q34.</span>How does @Transactional work, and what are the pitfalls?</summary><div class="ans">
+<p>Spring wraps the bean in a <b>proxy</b>. On a call the proxy asks the <code>PlatformTransactionManager</code> (e.g. <code>JpaTransactionManager</code>) to begin a transaction, binds the connection/EntityManager to the <b>current thread</b> (ThreadLocal), calls your method, then commits, or rolls back if a <code>RuntimeException</code>/<code>Error</code> escapes.</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant C as Caller
+  participant P as Proxy (TransactionInterceptor)
+  participant TM as TransactionManager
+  participant S as Your service
+  C->>P: placeOrder()
+  P->>TM: getTransaction(): BEGIN, bind connection to thread
+  P->>S: placeOrder()
+  S-->>P: returns / throws
+  alt success or checked exception
+    P->>TM: COMMIT
+  else RuntimeException or Error
+    P->>TM: ROLLBACK
+  end
+  P-->>C: result
+</pre>
+<h4>Main attributes</h4>
+<ul>
+<li><b>propagation</b>: <code>REQUIRED</code> (default: join existing or start new), <code>REQUIRES_NEW</code> (suspend the outer one, start an independent one, e.g. audit log that must persist even if the business tx rolls back), <code>NESTED</code> (savepoint), <code>MANDATORY</code>, <code>SUPPORTS</code>, <code>NOT_SUPPORTED</code>, <code>NEVER</code>.</li>
+<li><b>isolation</b>: DB isolation level (<a href="q-nosql-sql.html#q76">Q76</a>).</li>
+<li><b>readOnly = true</b>: hint; Hibernate skips dirty checking and flushes, some drivers route to replicas.</li>
+<li><b>rollbackFor</b> / <b>noRollbackFor</b>, <b>timeout</b>.</li>
+</ul>
+<h4>Pitfalls</h4>
+<ol>
+<li><b>Self-invocation</b>: <code>this.otherTransactionalMethod()</code> bypasses the proxy, so its settings (e.g. <code>REQUIRES_NEW</code>) are ignored.</li>
+<li><b>Method visibility</b>: private methods are never intercepted (keep transactional methods public; since Spring 6 protected/package-private work with class-based proxies, but private never does).</li>
+<li><b>Checked exceptions do not roll back</b> by default. Use <code>rollbackFor = Exception.class</code> or throw unchecked exceptions.</li>
+<li><b>Catching the exception</b> inside the method means the proxy never sees it → commit. And if an inner <code>REQUIRED</code> method threw and marked the tx rollback-only, the outer commit fails with <code>UnexpectedRollbackException</code>.</li>
+<li><b>Other threads</b>: <code>@Async</code>, <code>CompletableFuture</code>, parallel streams run outside the transaction (it is in a ThreadLocal).</li>
+<li><b>Long transactions</b>: calling a remote HTTP service or waiting on a queue inside a transaction holds a DB connection (and locks) the whole time. Keep transactions short; do remote calls before/after.</li>
+<li><b>The bean must be a Spring bean</b>: objects created with <code>new</code> get no proxy.</li>
+<li><b>Sending messages/events before commit</b>: if the tx then rolls back, the message is already out. Use <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> or the outbox pattern (<a href="q-distributed.html#q50">Q50</a>).</li>
+<li><b>Open Session in View</b> (<code>spring.jpa.open-in-view</code>, true by default with a warning): keeps the persistence context open during view rendering, hiding lazy-loading problems and holding connections longer. Many teams set it to <code>false</code>.</li>
+</ol>
+<pre><code class="language-java">@Service
+class OrderService {
+    private final AuditService audit;   // separate bean so REQUIRES_NEW goes through its proxy
+
+    @Transactional(rollbackFor = Exception.class)
+    public void placeOrder(Order o) throws PaymentException {
+        repo.save(o);
+        payments.charge(o);              // throws checked PaymentException → rollback thanks to rollbackFor
+        audit.log("order placed");       // REQUIRES_NEW: committed even if placeOrder later rolls back
+    }
+}
+@Service
+class AuditService {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void log(String msg) { ... }
+}</code></pre>
+</div></details>
+
+<h2>Web: MVC, reactive, errors, config</h2>
+
+<details class="qa" id="q35"><summary><span class="qn">Q35.</span>Spring MVC vs WebFlux: when do you use each? What's your reactive experience?</summary><div class="ans">
+<p>The full explanation, with diagrams, is on <a href="webflux.html#compare">page 2</a>. The interview-length answer:</p>
+<ul>
+<li><b>Spring MVC</b>: Servlet stack, blocking, thread-per-request on Tomcat. Simple to write, debug and test; works with JPA/JDBC and every library. Default choice for CRUD and business services. Since Java 21, with <code>spring.threads.virtual.enabled=true</code>, it also scales to many concurrent I/O-bound requests.</li>
+<li><b>Spring WebFlux</b>: reactive, non-blocking, event loop on Netty, <code>Mono</code>/<code>Flux</code>. Use it when the whole chain is non-blocking (R2DBC, WebClient, reactive Mongo/Redis) and you need streaming (SSE, WebSockets), backpressure, gateways (Spring Cloud Gateway), or huge fan-out of remote calls with few threads.</li>
+<li>Don't choose WebFlux and then call JDBC or blocking SDKs everywhere: you get the complexity without the benefit.</li>
+</ul>
+<p><b>Answering "your reactive experience"</b>: talk about something concrete: e.g. "I wrote WebFlux endpoints returning <code>Mono</code>/<code>Flux</code>, used <code>WebClient</code> with <code>timeout</code> + <code>retryWhen(Retry.backoff…)</code>, R2DBC repositories, tested with <code>StepVerifier</code> and <code>WebTestClient</code>, and fixed a production issue where a blocking call ran on the Netty event loop (moved it to <code>boundedElastic</code>, added BlockHound in tests)". The pitfalls you mention matter more than the list of operators.</p>
+</div></details>
+
+<details class="qa" id="q36"><summary><span class="qn">Q36.</span>What is backpressure, and what happens if you block inside a reactive chain?</summary><div class="ans">
+<p><b>Backpressure</b> is the consumer telling the producer how much it can handle, so a fast producer cannot overwhelm a slow consumer. In Reactive Streams it is built into the protocol: the subscriber calls <code>subscription.request(n)</code> and the publisher may send at most n items.</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant Pub as Publisher (fast: DB cursor)
+  participant Sub as Subscriber (slow: writes to a client)
+  Sub->>Pub: request(10)
+  Pub->>Sub: 10 × onNext
+  Note over Sub: processes slowly, requests more only when ready
+  Sub->>Pub: request(10)
+  Pub->>Sub: 10 × onNext
+</pre>
+<p>When the source cannot slow down (mouse clicks, market ticks: a "hot" source), you choose a strategy: <code>onBackpressureBuffer</code> (bounded), <code>onBackpressureDrop</code>, <code>onBackpressureLatest</code>, or <code>onBackpressureError</code>. <code>limitRate(n)</code> controls the request batch size. Across the network, backpressure maps to TCP flow control.</p>
+<h4>Blocking inside a reactive chain</h4>
+<p>WebFlux runs your operators on a few Netty event-loop threads (≈ number of cores). A blocking call (JDBC, <code>Thread.sleep</code>, <code>RestTemplate</code>, <code>.block()</code>) freezes one of them, and with it <b>every</b> connection served by that loop. A handful of slow blocking calls can make the whole service unresponsive, throughput collapses, latency explodes, health checks time out.</p>
+<ul>
+<li><code>.block()</code> on a Reactor Netty thread throws <code>IllegalStateException: block()/blockFirst()/blockLast() are blocking, which is not supported in thread reactor-http-nio-N</code>.</li>
+<li>Other blocking calls are <b>not</b> detected at runtime; use <b>BlockHound</b> in tests.</li>
+<li>If you must call blocking code: <code>Mono.fromCallable(() -&gt; blockingCall()).subscribeOn(Schedulers.boundedElastic())</code>.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q37"><summary><span class="qn">Q37.</span>How do you handle errors in a Spring REST API?</summary><div class="ans">
+<p>Goal: one consistent error format, correct HTTP status codes, no stack traces leaked to clients, and full details in the logs. Use a global <code>@RestControllerAdvice</code> and the standard <b>Problem Details</b> format (RFC 9457, <code>application/problem+json</code>), supported natively since Spring 6 via <code>ProblemDetail</code>.</p>
+<pre class="mermaid">
+flowchart LR
+  C[Controller / Service throws] --> D[DispatcherServlet]
+  D --> H{"@ExceptionHandler in the same controller?"}
+  H -- no --> A{"@RestControllerAdvice handler?"}
+  A -- yes --> P[ProblemDetail JSON + status]
+  A -- no --> DEF[Spring default error handling → /error → 500]
+</pre>
+<pre><code class="language-java">public class OrderNotFoundException extends RuntimeException {
+    public OrderNotFoundException(long id) { super("Order " + id + " not found"); }
+}
+
+@RestControllerAdvice
+class GlobalExceptionHandler extends ResponseEntityExceptionHandler {   // handles Spring's own exceptions (400s) too
+
+    @ExceptionHandler(OrderNotFoundException.class)
+    ProblemDetail notFound(OrderNotFoundException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        pd.setTitle("Order not found");
+        pd.setType(URI.create("https://errors.example.com/order-not-found"));
+        return pd;
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ProblemDetail conflict(OptimisticLockingFailureException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "The order was modified by someone else, reload and retry");
+    }
+
+    @ExceptionHandler(Exception.class)
+    ProblemDetail unexpected(Exception ex) {
+        log.error("Unexpected error", ex);                                 // full details only in logs
+        return ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected error");
+    }
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "https://errors.example.com/order-not-found",
+  "title": "Order not found",
+  "status": 404,
+  "detail": "Order 42 not found",
+  "instance": "/orders/42"
+}</code></pre>
+<ul>
+<li><b>Validation</b>: <code>@Valid @RequestBody</code> → <code>MethodArgumentNotValidException</code> → 400; override <code>handleMethodArgumentNotValid</code> to list field errors.</li>
+<li>Status mapping: 400 bad input, 401 not authenticated, 403 not allowed, 404 not found, 409 conflict, 422 business rule violated, 429 rate limited, 500 bug, 502/503/504 downstream problems.</li>
+<li>Include a <code>traceId</code> in the response so support can find the logs (<a href="q-distributed.html#q55">Q55</a>).</li>
+<li><code>spring.mvc.problemdetails.enabled=true</code> makes Spring's built-in exceptions use ProblemDetail without writing an advice.</li>
+<li>WebFlux: same <code>@RestControllerAdvice</code>, or operators like <code>onErrorResume</code>.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q38"><summary><span class="qn">Q38.</span>How do you manage configuration across environments?</summary><div class="ans">
+<p>Principle (from the "12-factor app"): <b>build one artifact, configure it per environment from the outside</b>. Never rebuild the JAR for prod.</p>
+<pre class="mermaid">
+flowchart BT
+  A["application.yml inside the JAR (defaults)"] --> B["application-{profile}.yml (e.g. application-prod.yml)"]
+  B --> C["external config file / config server / K8s ConfigMap"]
+  C --> D["OS environment variables (SHOP_PAYMENT_TIMEOUT=5s)"]
+  D --> E["Java system properties -D..."]
+  E --> F["command-line args --server.port=9090 (highest)"]
+</pre>
+<p>(Simplified; higher in the picture overrides lower.)</p>
+<ul>
+<li><b>Profiles</b>: <code>SPRING_PROFILES_ACTIVE=prod</code> activates <code>application-prod.yml</code> and <code>@Profile("prod")</code> beans. Use profiles for environment differences, not for business features (use feature flags for those).</li>
+<li><b>Type-safe properties</b>: <code>@ConfigurationProperties</code> records with <code>@Validated</code> so the app fails fast at startup if a value is missing or wrong.</li>
+<li><b>Secrets</b> never in Git: environment variables from a vault (HashiCorp Vault, AWS Secrets Manager, K8s Secrets, Jenkins credentials), referenced as <code>${DB_PASSWORD}</code>.</li>
+<li><b>Centralized config</b>: Spring Cloud Config Server (Git-backed), Consul, or K8s ConfigMaps mounted as files plus <code>spring.config.import=optional:configtree:/etc/config/</code>.</li>
+<li><b>Refresh without restart</b>: <code>@RefreshScope</code> (Spring Cloud) or just roll the pods.</li>
+</ul>
+<pre><code class="language-java">@Validated
+@ConfigurationProperties("shop.payment")
+public record PaymentProperties(@NotNull URI baseUrl, @NotNull Duration timeout, @Min(1) int maxRetries) {}</code></pre>
+</div></details>
+
+<details class="qa" id="q39"><summary><span class="qn">Q39.</span>What is Spring Boot Actuator, and how do you use it?</summary><div class="ans">
+<p>Actuator (<code>spring-boot-starter-actuator</code>) adds production-ready <b>endpoints</b> for monitoring and managing the app, plus Micrometer metrics.</p>
+<table>
+<tr><th>Endpoint</th><th>What it shows</th></tr>
+<tr><td><code>/actuator/health</code></td><td>UP/DOWN, with indicators (DB, disk, Redis, RabbitMQ…). <code>/health/liveness</code> and <code>/health/readiness</code> for Kubernetes probes.</td></tr>
+<tr><td><code>/actuator/info</code></td><td>app version, Git commit, build info</td></tr>
+<tr><td><code>/actuator/metrics</code>, <code>/actuator/prometheus</code></td><td>JVM, HTTP latency, Hikari pool, custom metrics; Prometheus format (needs <code>micrometer-registry-prometheus</code>)</td></tr>
+<tr><td><code>/actuator/loggers</code></td><td>read and <b>change log levels at runtime</b> (POST)</td></tr>
+<tr><td><code>/actuator/env</code>, <code>/configprops</code></td><td>effective configuration (values masked by default)</td></tr>
+<tr><td><code>/actuator/threaddump</code>, <code>/heapdump</code></td><td>diagnose deadlocks, memory leaks</td></tr>
+<tr><td><code>/actuator/beans</code>, <code>/conditions</code>, <code>/mappings</code></td><td>beans, auto-config report, all URL mappings</td></tr>
+</table>
+<pre><code class="language-yaml">management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,loggers   # over HTTP only "health" is exposed by default
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  server:
+    port: 8081            # separate port, not reachable from the internet</code></pre>
+<pre><code class="language-java">@Component
+class PaymentProviderHealth implements HealthIndicator {          // custom health check
+    public Health health() {
+        return client.ping() ? Health.up().build() : Health.down().withDetail("provider", "timeout").build();
+    }
+}
+// custom metric
+meterRegistry.counter("orders.created", "channel", "web").increment();
+Timer.builder("pricing.call").register(meterRegistry).record(() -&gt; pricing.call());</code></pre>
+<div class="callout warn">Secure Actuator: endpoints like <code>env</code>, <code>heapdump</code>, <code>loggers</code> expose sensitive data or allow changes. Expose only what you need, put it on a management port and/or behind Spring Security.</div>
+</div></details>
+
+<h2>Security</h2>
+
+<details class="qa" id="q40"><summary><span class="qn">Q40.</span>Explain how Spring Security works.</summary><div class="ans">
+<p>Spring Security is a chain of <b>servlet filters</b> that runs before your controllers. Each filter does one job (CSRF, authentication, exception translation, authorization).</p>
+<pre class="mermaid">
+flowchart LR
+  R[HTTP request] --> DFP[DelegatingFilterProxy<br/>servlet filter registered in Tomcat]
+  DFP --> FCP[FilterChainProxy]
+  FCP --> SFC{pick the first SecurityFilterChain<br/>whose matcher fits the URL}
+  SFC --> F1[CorsFilter / CsrfFilter]
+  F1 --> F2[Authentication filter<br/>e.g. BearerTokenAuthenticationFilter,<br/>UsernamePasswordAuthenticationFilter]
+  F2 --> F3[ExceptionTranslationFilter]
+  F3 --> F4[AuthorizationFilter]
+  F4 --> DS[DispatcherServlet → your controller]
+</pre>
+<p><b>Authentication</b> (who are you?):</p>
+<pre class="mermaid">
+flowchart LR
+  F[Auth filter extracts credentials] --> AM[AuthenticationManager<br/>ProviderManager]
+  AM --> P1[DaoAuthenticationProvider<br/>UserDetailsService + PasswordEncoder]
+  AM --> P2[JwtAuthenticationProvider<br/>JwtDecoder]
+  P1 --> OK[Authenticated Authentication<br/>principal + authorities]
+  P2 --> OK
+  OK --> SC[SecurityContextHolder<br/>ThreadLocal for this request]
+</pre>
+<ul>
+<li><code>Authentication</code>: principal (who), credentials, <b>authorities</b> (<code>ROLE_ADMIN</code>, <code>SCOPE_orders.read</code>).</li>
+<li><code>SecurityContextHolder</code>: stores the Authentication in a ThreadLocal so any code in the request can read it (WebFlux: <code>ReactiveSecurityContextHolder</code>).</li>
+<li><b>Authorization</b> (what may you do?): URL rules in the filter chain (<code>AuthorizationFilter</code>) plus method security (<code>@PreAuthorize</code>).</li>
+<li><code>ExceptionTranslationFilter</code> turns <code>AuthenticationException</code> into <b>401</b> and <code>AccessDeniedException</code> into <b>403</b>.</li>
+</ul>
+<pre><code class="language-java">@Configuration
+@EnableWebSecurity
+class SecurityConfig {
+    @Bean
+    SecurityFilterChain api(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -&gt; csrf.disable())                              // stateless REST API with tokens, no cookies
+            .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -&gt; auth
+                .requestMatchers("/actuator/health/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/orders/**").hasAuthority("SCOPE_orders.read")
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .anyRequest().authenticated())
+            .oauth2ResourceServer(o -&gt; o.jwt(Customizer.withDefaults()));
+        return http.build();
+    }
+}</code></pre>
+<p>Defaults when you just add the starter: everything requires authentication, a generated user password is logged, form login + HTTP Basic, CSRF protection on, security headers added.</p>
+</div></details>
+
+<details class="qa" id="q41"><summary><span class="qn">Q41.</span>How do you secure a microservice with OAuth2/JWT and method-level rules?</summary><div class="ans">
+<p>The microservice is an <b>OAuth2 Resource Server</b>: it does not log users in, it only validates the <b>access token</b> (a JWT) that an <b>Authorization Server</b> (Keycloak, Okta, Entra ID, Spring Authorization Server) issued.</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant U as User / client app
+  participant AS as Authorization server (Keycloak)
+  participant GW as API gateway
+  participant S as Orders service (resource server)
+  U->>AS: login (OIDC authorization code + PKCE)
+  AS-->>U: access token (JWT, signed with private key, expires in 5 min)
+  U->>GW: GET /orders  Authorization: Bearer eyJ...
+  GW->>S: forwards the token
+  S->>AS: (once, cached) GET JWKS public keys
+  S->>S: verify signature, exp, iss, aud → build Authentication with authorities from scopes/roles
+  S-->>U: 200 or 401/403
+</pre>
+<p>A JWT has three Base64URL parts: <code>header.payload.signature</code>. Payload claims: <code>sub</code> (user id), <code>iss</code> (issuer), <code>aud</code> (audience), <code>exp</code> (expiry), <code>scope</code>, custom roles. The service validates it <b>locally</b> with the issuer's public key: no call per request.</p>
+<pre><code class="language-yaml">spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://auth.example.com/realms/shop   # discovers the JWKS URL, validates "iss"
+          audiences: orders-api                               # validates "aud" (Boot 3.2+)</code></pre>
+<pre><code class="language-java">@Configuration
+@EnableMethodSecurity                    // turns on @PreAuthorize / @PostAuthorize
+class SecurityConfig {
+    @Bean
+    SecurityFilterChain chain(HttpSecurity http) throws Exception {
+        return http
+            .authorizeHttpRequests(a -&gt; a.anyRequest().authenticated())
+            .oauth2ResourceServer(o -&gt; o.jwt(j -&gt; j.jwtAuthenticationConverter(keycloakRoles())))
+            .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .csrf(c -&gt; c.disable())
+            .build();
+    }
+
+    // By default "scope" claim → SCOPE_xxx authorities. Map Keycloak realm roles → ROLE_xxx too:
+    private Converter&lt;Jwt, AbstractAuthenticationToken&gt; keycloakRoles() {
+        var conv = new JwtAuthenticationConverter();
+        var scopes = new JwtGrantedAuthoritiesConverter();                 // keep the default SCOPE_xxx mapping
+        conv.setJwtGrantedAuthoritiesConverter(jwt -&gt; {
+            Map&lt;String, Object&gt; realm = jwt.getClaimAsMap("realm_access");
+            List&lt;String&gt; roles = realm == null ? List.of() : (List&lt;String&gt;) realm.getOrDefault("roles", List.of());
+            List&lt;GrantedAuthority&gt; all = new ArrayList&lt;&gt;(scopes.convert(jwt));
+            roles.forEach(r -&gt; all.add(new SimpleGrantedAuthority("ROLE_" + r)));
+            return all;
+        });
+        return conv;
+    }
+}
+
+@Service
+class OrderService {
+    @PreAuthorize("hasRole('TRADER') or hasAuthority('SCOPE_orders.read')")
+    public Order get(long id) { ... }
+
+    @PreAuthorize("#customerId == authentication.name")         // only your own orders (SpEL with method args)
+    public List&lt;Order&gt; forCustomer(String customerId) { ... }
+
+    @PostAuthorize("returnObject.ownerId == authentication.name")   // check the result
+    public Order load(long id) { ... }
+}</code></pre>
+<ul>
+<li>Service-to-service calls: the <b>client credentials</b> grant (the calling service gets its own token), or propagate the user's token.</li>
+<li>Keep access tokens short-lived; revocation is hard with JWTs (they are valid until <code>exp</code>).</li>
+<li>Test with <code>spring-security-test</code>: <code>mockMvc.perform(get("/orders/1").with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_orders.read"))))</code>.</li>
+</ul>
+</div></details>
+
+<h2>Batch, testing, JPA</h2>
+
+<details class="qa" id="q42"><summary><span class="qn">Q42.</span>What is Spring Batch, and what are its main concepts?</summary><div class="ans">
+<p>A framework for <b>large, non-interactive, bulk data processing</b>: end-of-day trade files, nightly reconciliation, migrating millions of rows. It gives you chunked transactions, restartability, skip/retry, and a metadata store recording every run.</p>
+<pre class="mermaid">
+flowchart LR
+  JL[JobLauncher / JobOperator] -->|run with JobParameters| J[Job: endOfDayJob]
+  J --> S1[Step 1: importTrades<br/>chunk-oriented]
+  J --> S2[Step 2: reconcile]
+  J --> S3[Step 3: sendReport<br/>tasklet]
+  S1 --> R[ItemReader<br/>FlatFileItemReader] --> P[ItemProcessor<br/>validate / transform] --> W[ItemWriter<br/>JdbcBatchItemWriter]
+  JR[(JobRepository: BATCH_JOB_INSTANCE,<br/>JOB_EXECUTION, STEP_EXECUTION tables)]
+  J -.records state.-> JR
+  S1 -.records read/write counts, commit points.-> JR
+</pre>
+<table>
+<tr><th>Concept</th><th>Meaning</th></tr>
+<tr><td><b>Job</b></td><td>The whole batch process, a sequence (or flow) of steps.</td></tr>
+<tr><td><b>JobInstance</b></td><td>A logical run: job + identifying <b>JobParameters</b> (e.g. <code>date=2026-11-23</code>).</td></tr>
+<tr><td><b>JobExecution</b></td><td>One attempt to run a JobInstance (a failed instance can have several executions).</td></tr>
+<tr><td><b>Step / StepExecution</b></td><td>An independent phase of the job, and one attempt of it.</td></tr>
+<tr><td><b>Chunk-oriented step</b></td><td>Read items one by one, process each, write them in chunks of N inside one transaction.</td></tr>
+<tr><td><b>Tasklet step</b></td><td>A single action (delete a file, call a procedure).</td></tr>
+<tr><td><b>ExecutionContext</b></td><td>Key/value state saved at each commit (e.g. reader position) → enables restart.</td></tr>
+<tr><td><b>JobRepository</b></td><td>Stores all of the above in database tables.</td></tr>
+</table>
+<pre><code class="language-java">// Spring Batch 5 style (Boot 3). Batch 6 (Boot 4) keeps the concepts; some builder methods changed.
+@Configuration
+class EodJobConfig {
+    @Bean
+    Job endOfDayJob(JobRepository repo, Step importTrades, Step sendReport) {
+        return new JobBuilder("endOfDayJob", repo)
+                .start(importTrades)
+                .next(sendReport)
+                .build();
+    }
+
+    @Bean
+    Step importTrades(JobRepository repo, PlatformTransactionManager tx,
+                      FlatFileItemReader&lt;TradeCsv&gt; reader, TradeProcessor processor, JdbcBatchItemWriter&lt;Trade&gt; writer) {
+        return new StepBuilder("importTrades", repo)
+                .&lt;TradeCsv, Trade&gt;chunk(500, tx)       // 500 items per transaction
+                .reader(reader)
+                .processor(processor)                   // return null to filter an item out
+                .writer(writer)
+                .faultTolerant()
+                .skip(ValidationException.class).skipLimit(100)
+                .retry(TransientDataAccessException.class).retryLimit(3)
+                .build();
+    }
+}</code></pre>
+<figure>
+<svg viewBox="0 0 760 120" role="img" aria-label="Chunk processing: read 500, process 500, write 500, commit">
+  <rect class="box" x="10" y="30" width="200" height="50" rx="8"/><text x="110" y="52" text-anchor="middle">read() × 500</text><text x="110" y="70" text-anchor="middle" font-size="12" class="muted">one item at a time</text>
+  <rect class="box2" x="250" y="30" width="200" height="50" rx="8"/><text x="350" y="52" text-anchor="middle">process() × 500</text><text x="350" y="70" text-anchor="middle" font-size="12" class="muted">one item at a time</text>
+  <rect class="box3" x="490" y="30" width="200" height="50" rx="8"/><text x="590" y="52" text-anchor="middle">write(chunk of 500)</text><text x="590" y="70" text-anchor="middle" font-size="12" class="muted">then COMMIT + save state</text>
+  <path class="line" d="M210,55 L248,55"/><path class="line" d="M450,55 L488,55"/>
+  <text x="380" y="108" text-anchor="middle" font-size="13">repeat until read() returns null</text>
+</svg>
+</figure>
+</div></details>
+
+<details class="qa" id="q43"><summary><span class="qn">Q43.</span>How does Spring Batch handle failures and restarts?</summary><div class="ans">
+<ul>
+<li><b>Chunk transactions</b>: if writing chunk #7 fails, only chunk #7 is rolled back; chunks 1–6 are committed.</li>
+<li><b>State at every commit</b>: the step's <code>ExecutionContext</code> (e.g. "read 3 000 lines") is saved in the JobRepository in the same transaction as the chunk.</li>
+<li><b>Restart</b>: launching the <b>same JobInstance</b> (same identifying parameters) again creates a new JobExecution that skips steps already <code>COMPLETED</code> and resumes the failed step from the last saved position. Readers implementing <code>ItemStream</code> (most built-in ones) restore their position.</li>
+<li>A <b>completed</b> JobInstance cannot be re-run with the same parameters (<code>JobInstanceAlreadyCompleteException</code>). For "run every day", use a date parameter or a <code>RunIdIncrementer</code>.</li>
+<li><b>Skip</b>: <code>.skip(X.class).skipLimit(n)</code> skips bad records (e.g. a malformed line) up to n; skipped items can be logged with a <code>SkipListener</code>.</li>
+<li><b>Retry</b>: <code>.retry(X.class).retryLimit(n)</code> for transient errors (deadlock, timeout).</li>
+<li>When a skippable error happens during write, Batch rolls back the chunk and re-processes it <b>item by item</b> ("scan" mode) to find the bad item.</li>
+<li><code>allowStartIfComplete(true)</code> on a step forces it to re-run on restart; <code>startLimit(n)</code> limits attempts.</li>
+<li>A crashed process leaves the execution in <code>STARTED</code>; you must mark it <code>FAILED</code> (or use <code>JobOperator</code>) before restarting.</li>
+</ul>
+<pre class="mermaid">
+sequenceDiagram
+  participant Op as Operator / scheduler
+  participant B as Spring Batch
+  participant JR as JobRepository
+  Op->>B: run endOfDayJob(date=2026-11-23)
+  B->>JR: JobInstance #1, Execution #1
+  B->>B: step importTrades: chunks 1..6 committed
+  B--xB: chunk 7 fails (DB down)
+  B->>JR: Execution #1 FAILED, read.count = 3000
+  Op->>B: run endOfDayJob(date=2026-11-23) again
+  B->>JR: same JobInstance #1, new Execution #2
+  B->>B: resume importTrades at item 3001
+  B->>JR: Execution #2 COMPLETED
+</pre>
+</div></details>
+
+<details class="qa" id="q44"><summary><span class="qn">Q44.</span>How do you test Spring Boot applications?</summary><div class="ans">
+<p>The <b>test pyramid</b>: many fast unit tests, fewer slice tests, few full integration tests.</p>
+<pre class="mermaid">
+flowchart TB
+  E2E["Few: end-to-end / contract tests"]
+  INT["Some: @SpringBootTest + Testcontainers (real DB, RabbitMQ), WireMock for HTTP"]
+  SLICE["More: slice tests @WebMvcTest, @DataJpaTest, @JsonTest, @RestClientTest"]
+  UNIT["Most: plain unit tests, JUnit 5 + Mockito + AssertJ, no Spring at all"]
+  E2E --- INT --- SLICE --- UNIT
+</pre>
+<pre><code class="language-java">// 1. Unit test: no Spring, milliseconds
+class PriceServiceTest {
+    PriceRepository repo = mock(PriceRepository.class);
+    PriceService service = new PriceService(repo);         // constructor injection makes this trivial
+    @Test void appliesDiscount() {
+        when(repo.basePrice("A")).thenReturn(new BigDecimal("100"));
+        assertThat(service.quote("A", 10)).isEqualByComparingTo("90");
+    }
+}
+
+// 2. Web slice: only MVC beans (controllers, advice, converters), service mocked
+@WebMvcTest(OrderController.class)
+class OrderControllerTest {
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService service;                     // Spring 6.2+ (replaces the old @MockBean)
+    @Test void returns404() throws Exception {
+        when(service.get(1L)).thenThrow(new OrderNotFoundException(1L));
+        mvc.perform(get("/orders/1"))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath("$.title").value("Order not found"));
+    }
+}
+
+// 3. JPA slice: repositories + embedded/real DB, each test rolled back
+@DataJpaTest
+class OrderRepositoryTest {
+    @Autowired OrderRepository repo;
+    @Test void findsByCustomer() { ... }
+}
+
+// 4. Full integration test with a real PostgreSQL in Docker
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Testcontainers
+class OrderFlowIT {
+    @Container @ServiceConnection                         // Boot wires spring.datasource.* automatically
+    static PostgreSQLContainer&lt;?&gt; db = new PostgreSQLContainer&lt;&gt;("postgres:17");
+    @Autowired TestRestTemplate http;                     // Boot 4: also add @AutoConfigureTestRestTemplate (or use RestTestClient)
+    @Test void createAndRead() { ... }
+}</code></pre>
+<ul>
+<li>WebFlux: <code>@WebFluxTest</code> + <code>WebTestClient</code>, <code>StepVerifier</code> for Mono/Flux.</li>
+<li>External HTTP: <b>WireMock</b> (stub responses, simulate timeouts/500s); <code>@RestClientTest</code> + <code>MockRestServiceServer</code>.</li>
+<li>Security: <code>@WithMockUser</code>, <code>jwt()</code> post-processor.</li>
+<li>Async code: <b>Awaitility</b> (<code>await().atMost(5, SECONDS).until(...)</code>) instead of <code>Thread.sleep</code>.</li>
+<li>Context caching: Spring reuses the application context between tests with identical configuration; many different <code>@MockitoBean</code> combinations create many contexts and slow the suite.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q45"><summary><span class="qn">Q45.</span>What is the N+1 problem in JPA, and how do you fix it?</summary><div class="ans">
+<p>You run <b>1</b> query to load N parents, then Hibernate runs <b>N</b> more queries to load each parent's lazy association when you touch it. 100 orders → 101 queries.</p>
+<pre><code class="language-java">@Entity class Order {
+    @Id Long id;
+    @ManyToOne(fetch = FetchType.LAZY) Customer customer;
+    @OneToMany(mappedBy = "order") List&lt;OrderLine&gt; lines;     // LAZY by default
+}
+
+List&lt;Order&gt; orders = orderRepository.findAll();           // 1 query: select * from orders
+for (Order o : orders) {
+    o.getLines().size();                                   // N queries: select * from order_line where order_id = ?
+}</code></pre>
+<pre class="mermaid">
+sequenceDiagram
+  participant App
+  participant DB
+  App->>DB: SELECT * FROM orders   (returns 100)
+  loop for each of the 100 orders
+    App->>DB: SELECT * FROM order_line WHERE order_id = ?
+  end
+  Note over App,DB: 101 round trips instead of 1 or 2
+</pre>
+<p>Detect it: enable SQL logging (<code>spring.jpa.show-sql</code> or <code>logging.level.org.hibernate.SQL=debug</code>), Hibernate statistics, or assert query counts in tests.</p>
+<h4>Fixes</h4>
+<pre><code class="language-java">// 1. JOIN FETCH in JPQL: one query
+@Query("select distinct o from Order o join fetch o.lines where o.status = :s")
+List&lt;Order&gt; findWithLines(@Param("s") Status s);
+
+// 2. Entity graph: same effect, declarative
+@EntityGraph(attributePaths = {"lines", "customer"})
+List&lt;Order&gt; findByStatus(Status s);
+
+// 3. Batch fetching: N queries become N/size queries (where order_id in (?, ?, ... 50))
+@BatchSize(size = 50) @OneToMany(mappedBy = "order") List&lt;OrderLine&gt; lines;
+// or globally: spring.jpa.properties.hibernate.default_batch_fetch_size=50
+
+// 4. DTO projection: load exactly what the screen needs, no entities at all
+@Query("select new com.shop.OrderSummary(o.id, c.name, count(l)) from Order o join o.customer c join o.lines l group by o.id, c.name")
+List&lt;OrderSummary&gt; summaries();</code></pre>
+<ul>
+<li>JOIN FETCH of a collection + pagination: Hibernate paginates in memory (warning HHH90003004). Fetch IDs page first, then fetch details for those IDs, or use batch fetching.</li>
+<li>Don't fetch two <code>List</code> collections at once with JOIN FETCH (<code>MultipleBagFetchException</code>, and a Cartesian product).</li>
+<li>Don't "fix" it with <code>FetchType.EAGER</code>: eager is applied everywhere and can cause N+1 itself.</li>
+</ul>
+</div></details>
+</main>
+</body>
+</html>

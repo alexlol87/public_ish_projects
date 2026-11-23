@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NoSQL, Elasticsearch, SQL and Oracle</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs></svg>
+<main>
+<h1>Q66–Q80: NoSQL, Elasticsearch, SQL & Oracle</h1>
+<p class="lead">NoSQL families, how Elasticsearch searches so fast, mappings and queries, Spring integration; then joins, indexes, query tuning, ACID and isolation, Oracle vs PostgreSQL, PL/SQL, window functions and concurrent updates.</p>
+
+<h2>NoSQL & Elasticsearch</h2>
+
+<details class="qa" id="q66"><summary><span class="qn">Q66.</span>SQL vs NoSQL: what's the difference, and what NoSQL types exist?</summary><div class="ans">
+<table>
+<tr><th></th><th>SQL (relational: Oracle, PostgreSQL, MySQL)</th><th>NoSQL</th></tr>
+<tr><td>Data model</td><td>tables, rows, fixed schema, relations via foreign keys, normalized</td><td>documents, key-value, wide columns, graphs; flexible schema, often denormalized</td></tr>
+<tr><td>Query</td><td>SQL, joins, ad-hoc queries</td><td>per-database API; joins limited or absent; design for your access patterns</td></tr>
+<tr><td>Transactions</td><td>ACID across many rows/tables</td><td>often per document/key; some support multi-document transactions (MongoDB)</td></tr>
+<tr><td>Scaling</td><td>mostly vertical + read replicas; sharding is hard</td><td>built for horizontal scaling/sharding</td></tr>
+<tr><td>Consistency</td><td>strong</td><td>often tunable / eventual (BASE)</td></tr>
+<tr><td>Best for</td><td>complex relations, integrity, reporting, money</td><td>huge volume, flexible/semistructured data, simple high-speed access, specific shapes (graphs, search)</td></tr>
+</table>
+<h4>NoSQL families</h4>
+<table>
+<tr><th>Type</th><th>Model</th><th>Examples</th><th>Use cases</th></tr>
+<tr><td><b>Key-value</b></td><td>key → opaque value</td><td>Redis, DynamoDB, Memcached</td><td>cache, sessions, counters</td></tr>
+<tr><td><b>Document</b></td><td>key → JSON-like document, queryable fields</td><td>MongoDB, Couchbase, Firestore</td><td>product catalogs, user profiles, content</td></tr>
+<tr><td><b>Wide-column</b></td><td>rows with dynamic columns grouped in families, partitioned by key</td><td>Cassandra, HBase, ScyllaDB</td><td>time series, IoT, massive write volume</td></tr>
+<tr><td><b>Graph</b></td><td>nodes + edges with properties</td><td>Neo4j, Amazon Neptune</td><td>social networks, fraud rings, recommendations</td></tr>
+<tr><td><b>Search engine</b></td><td>documents + inverted index</td><td>Elasticsearch, OpenSearch, Solr</td><td>full-text search, log analytics</td></tr>
+<tr><td><b>Time series</b></td><td>timestamped measurements</td><td>InfluxDB, TimescaleDB, Prometheus</td><td>metrics, monitoring</td></tr>
+</table>
+<p>It's not either/or: "polyglot persistence" means e.g. Oracle as source of truth, Redis cache, Elasticsearch for search.</p>
+</div></details>
+
+<details class="qa" id="q67"><summary><span class="qn">Q67.</span>What is Elasticsearch, and what are its core concepts?</summary><div class="ans">
+<p>Elasticsearch (ES) is a distributed <b>search and analytics engine</b> built on Apache <b>Lucene</b>, with a JSON REST API. It stores JSON documents and makes them searchable in near real time: full-text search with relevance ranking, filters, aggregations (analytics), geo queries, and (newer) vector search. It is the "E" in the ELK stack (<a href="q-tools.html#q89">Q89</a>).</p>
+<pre class="mermaid">
+flowchart TB
+  subgraph Cluster[Cluster: prod-search]
+    subgraph N1[Node 1]
+      P0[products shard P0 primary]
+      R1[products shard R1 replica]
+    end
+    subgraph N2[Node 2]
+      P1[products shard P1 primary]
+      R0[products shard R0 replica]
+    end
+  end
+  C[Client: GET /products/_search] --> N1
+  N1 -- scatter --> P0
+  N1 -- scatter --> P1
+  P0 & P1 -- gather, merge, rank --> N1
+</pre>
+<table>
+<tr><th>Concept</th><th>Meaning (rough SQL analogy)</th></tr>
+<tr><td><b>Cluster</b></td><td>a group of nodes working together</td></tr>
+<tr><td><b>Node</b></td><td>one ES server process (roles: master, data, ingest, coordinating…)</td></tr>
+<tr><td><b>Index</b></td><td>a collection of documents (≈ table)</td></tr>
+<tr><td><b>Document</b></td><td>a JSON object with an <code>_id</code> (≈ row)</td></tr>
+<tr><td><b>Field</b> / <b>Mapping</b></td><td>a property / the schema: field types and how text is analyzed (≈ columns + types)</td></tr>
+<tr><td><b>Shard</b></td><td>an index is split into primary shards (each a Lucene index) spread over nodes → horizontal scale</td></tr>
+<tr><td><b>Replica</b></td><td>copy of a primary shard on another node → high availability and more read throughput</td></tr>
+<tr><td><b>Segment</b></td><td>immutable file inside a shard; new docs go to new segments, merged in the background</td></tr>
+<tr><td><b>Analyzer</b></td><td>turns text into searchable terms (<a href="#q68">Q68</a>)</td></tr>
+<tr><td><b>Refresh</b></td><td>makes recently indexed docs searchable, every 1 s by default → <b>near real-time</b></td></tr>
+<tr><td><b>Query DSL</b>, <b>aggregations</b></td><td>JSON query language; group-by/stats (≈ WHERE + GROUP BY)</td></tr>
+<tr><td><b>Alias</b>, <b>index template</b>, <b>ILM</b>, <b>data stream</b></td><td>an index's alternate name (zero-downtime reindex); default settings for new indices; lifecycle (hot → warm → delete); append-only time-series indices for logs</td></tr>
+</table>
+<pre><code class="language-bash"># index a document
+PUT /products/_doc/42
+{ "name": "Wireless Noise Cancelling Headphones", "brand": "Acme", "price": 199.0, "tags": ["audio"] }
+
+# search
+GET /products/_search
+{ "query": { "match": { "name": "noise headphones" } } }</code></pre>
+</div></details>
+
+<details class="qa" id="q68"><summary><span class="qn">Q68.</span>What is an inverted index, and why is Elasticsearch fast at search?</summary><div class="ans">
+<p>A normal (forward) index maps <b>document → words</b>. An <b>inverted index</b> maps <b>term → list of documents containing it</b> (a "posting list"), like the index at the back of a book.</p>
+<figure>
+<svg viewBox="0 0 760 270" role="img" aria-label="Documents analyzed into terms that point to document ids">
+  <text x="10" y="20" font-weight="700">Documents</text>
+  <rect class="box" x="10" y="30" width="250" height="34" rx="6"/><text x="20" y="52" font-size="13">1: "The quick brown Fox"</text>
+  <rect class="box" x="10" y="72" width="250" height="34" rx="6"/><text x="20" y="94" font-size="13">2: "Quick foxes jump"</text>
+  <rect class="box" x="10" y="114" width="250" height="34" rx="6"/><text x="20" y="136" font-size="13">3: "A brown dog"</text>
+  <rect class="box2" x="290" y="60" width="160" height="70" rx="8"/><text x="370" y="84" text-anchor="middle" font-weight="600">Analyzer</text><text x="370" y="102" text-anchor="middle" font-size="12">lowercase, split,</text><text x="370" y="118" text-anchor="middle" font-size="12">stopwords, stem</text>
+  <line class="line" x1="260" y1="90" x2="288" y2="95" marker-end="url(#ah)"/>
+  <line class="line" x1="450" y1="95" x2="478" y2="95" marker-end="url(#ah)"/>
+  <text x="490" y="20" font-weight="700">Inverted index (sorted terms)</text>
+  <g font-size="13">
+  <rect class="box3" x="490" y="30" width="110" height="28"/><text x="500" y="49">brown</text><rect class="box3" x="600" y="30" width="150" height="28"/><text x="610" y="49">→ 1, 3</text>
+  <rect class="box3" x="490" y="58" width="110" height="28"/><text x="500" y="77">dog</text><rect class="box3" x="600" y="58" width="150" height="28"/><text x="610" y="77">→ 3</text>
+  <rect class="box3" x="490" y="86" width="110" height="28"/><text x="500" y="105">fox</text><rect class="box3" x="600" y="86" width="150" height="28"/><text x="610" y="105">→ 1, 2</text>
+  <rect class="box3" x="490" y="114" width="110" height="28"/><text x="500" y="133">jump</text><rect class="box3" x="600" y="114" width="150" height="28"/><text x="610" y="133">→ 2</text>
+  <rect class="box3" x="490" y="142" width="110" height="28"/><text x="500" y="161">quick</text><rect class="box3" x="600" y="142" width="150" height="28"/><text x="610" y="161">→ 1, 2</text>
+  </g>
+  <text x="10" y="205" font-size="13">Search "quick fox" → analyze to [quick, fox] → look up both posting lists → {1,2} ∩/∪ {1,2}</text>
+  <text x="10" y="227" font-size="13">→ score with BM25 (term frequency, rarity of the term, field length) → doc 1 and 2 ranked.</text>
+  <text x="10" y="249" font-size="13" class="muted">No table scan: cost depends on the number of matching terms, not on the number of documents.</text>
+</svg>
+</figure>
+<p>Why ES is fast:</p>
+<ul>
+<li><b>Lookup instead of scan</b>: a <code>LIKE '%fox%'</code> in SQL reads every row; ES jumps straight to the term's posting list. Term dictionaries are compressed and searched like a sorted dictionary (FST structures in Lucene).</li>
+<li><b>Analysis at index time</b>: the expensive text processing is done once when writing.</li>
+<li><b>Immutable segments</b>: no locking for reads, OS file cache friendly, heavily compressed.</li>
+<li><b>Doc values</b> (columnar storage) make sorting and aggregations fast.</li>
+<li><b>Filter caching</b>: yes/no filters are cached as bitsets (<a href="#q70">Q70</a>).</li>
+<li><b>Distribution</b>: shards are searched in parallel on several nodes and results merged.</li>
+</ul>
+<p>The trade-offs: writes are heavier (analysis, segment merges), updates are delete + reinsert, it's near real-time (≈ 1 s), and it is not a transactional primary store.</p>
+</div></details>
+
+<details class="qa" id="q69"><summary><span class="qn">Q69.</span>What's the difference between text and keyword fields in a mapping?</summary><div class="ans">
+<table>
+<tr><th></th><th><code>text</code></th><th><code>keyword</code></th></tr>
+<tr><td>Indexed as</td><td>analyzed: split into lowercase terms (<code>"New York City"</code> → <code>new</code>, <code>york</code>, <code>city</code>)</td><td>one exact term: <code>"New York City"</code></td></tr>
+<tr><td>For</td><td>full-text search (descriptions, names, log messages)</td><td>exact match, filtering, sorting, aggregations (status, ids, emails, tags, enum values)</td></tr>
+<tr><td>Query with</td><td><code>match</code></td><td><code>term</code>, <code>terms</code></td></tr>
+<tr><td>Sort / aggregate</td><td>no (by default)</td><td>yes (doc values)</td></tr>
+</table>
+<pre><code class="language-json">PUT /products
+{
+  "mappings": {
+    "properties": {
+      "name":   { "type": "text", "analyzer": "english",
+                  "fields": { "raw": { "type": "keyword" } } },   // multi-field: search on name, sort on name.raw
+      "status": { "type": "keyword" },
+      "brand":  { "type": "keyword" },
+      "sku":    { "type": "keyword" },
+      "price":  { "type": "scaled_float", "scaling_factor": 100 },
+      "createdAt": { "type": "date" }
+    }
+  }
+}</code></pre>
+<p>If you don't define a mapping, <b>dynamic mapping</b> maps every string to <code>text</code> with a <code>.keyword</code> sub-field. That's why you often see <code>status.keyword</code> in queries. In production, define explicit mappings: a field's type cannot be changed later without reindexing.</p>
+<div class="callout warn">Classic bug: a <code>term</code> query for <code>"Shipped"</code> on a <code>text</code> field finds nothing, because the index contains the lowercased term <code>shipped</code>.</div>
+</div></details>
+
+<details class="qa" id="q70"><summary><span class="qn">Q70.</span>Explain match vs term queries, and query vs filter context.</summary><div class="ans">
+<div class="grid2">
+<div class="card"><h4><code>match</code> (full text)</h4><p>Analyzes the <b>search text</b> with the field's analyzer, then searches the resulting terms. "Quick Foxes" → <code>quick</code> OR <code>fox</code> (operator configurable). Use on <code>text</code> fields.</p></div>
+<div class="card"><h4><code>term</code> (exact)</h4><p>No analysis: looks up the exact term as given. Use on <code>keyword</code>, numbers, dates, booleans. <code>terms</code> = any of a list; <code>range</code> for numbers/dates.</p></div>
+</div>
+<div class="grid2">
+<div class="card"><h4>Query context</h4><p>"<b>How well</b> does this document match?" Computes a relevance <code>_score</code> (BM25). Used in <code>must</code> and <code>should</code> of a <code>bool</code> query.</p></div>
+<div class="card"><h4>Filter context</h4><p>"<b>Does</b> it match, yes/no?" No scoring → faster, and results are <b>cached</b>. Used in <code>filter</code> and <code>must_not</code>.</p></div>
+</div>
+<pre><code class="language-json">GET /products/_search
+{
+  "query": {
+    "bool": {
+      "must":   [ { "match": { "name": "noise cancelling headphones" } } ],   // scored
+      "should": [ { "match": { "tags": "bestseller" } } ],                   // boosts score if present
+      "filter": [                                                            // not scored, cached
+        { "term":  { "status": "ACTIVE" } },
+        { "range": { "price": { "gte": 50, "lte": 300 } } }
+      ],
+      "must_not": [ { "term": { "brand": "NoName" } } ]
+    }
+  },
+  "sort": [ "_score", { "price": "asc" } ],
+  "aggs": { "by_brand": { "terms": { "field": "brand" } } }
+}</code></pre>
+<p>Rule: put everything that is yes/no (status, dates, ranges, tenant, permissions) in <b>filter</b>; only the user's free-text in <b>must/should</b>.</p>
+</div></details>
+
+<details class="qa" id="q71"><summary><span class="qn">Q71.</span>When would you use Elasticsearch instead of a relational database?</summary><div class="ans">
+<p>Usually <b>in addition to</b>, not instead of: the relational DB stays the <b>source of truth</b>, ES is a <b>read model</b> optimized for search.</p>
+<div class="grid2">
+<div class="callout ok"><b class="t">Use Elasticsearch for</b><ul>
+<li>Full-text search with relevance ranking, typo tolerance (fuzzy), synonyms, stemming, highlighting, autocomplete.</li>
+<li>Faceted search: filter + counts per brand/price bucket in one call.</li>
+<li>Logs, metrics and events: huge append-only volume, time-based queries, dashboards (ELK).</li>
+<li>Search across many fields of denormalized documents with sub-second latency at large scale.</li>
+<li>Geo search, vector/semantic search.</li></ul></div>
+<div class="callout bad"><b class="t">Keep the RDBMS for</b><ul>
+<li>Transactions and strong consistency (money, orders, stock).</li>
+<li>Relational integrity, joins, constraints.</li>
+<li>Data that must be visible immediately after write.</li>
+<li>Frequent updates to the same records.</li>
+<li>Being the durable system of record (ES can lose recent writes in some failure modes; re-indexing must be possible).</li></ul></div>
+</div>
+</div></details>
+
+<details class="qa" id="q72"><summary><span class="qn">Q72.</span>How would you integrate Elasticsearch into a Spring application?</summary><div class="ans">
+<p><b>Reading/writing</b>: Spring Data Elasticsearch (<code>spring-boot-starter-data-elasticsearch</code>), built on the official Elasticsearch Java client (the old <code>RestHighLevelClient</code> is gone).</p>
+<pre><code class="language-java">@Document(indexName = "products")
+public class ProductDoc {
+    @Id private String id;
+    @Field(type = FieldType.Text, analyzer = "english") private String name;
+    @Field(type = FieldType.Keyword) private String status;
+    @Field(type = FieldType.Double) private double price;
+    // getters/setters
+}
+
+public interface ProductSearchRepository extends ElasticsearchRepository&lt;ProductDoc, String&gt; {
+    List&lt;ProductDoc&gt; findByNameAndStatus(String name, String status);      // derived query
+}
+
+@Service
+class ProductSearch {
+    private final ElasticsearchOperations ops;
+    ProductSearch(ElasticsearchOperations ops) { this.ops = ops; }
+
+    SearchHits&lt;ProductDoc&gt; search(String text, double maxPrice) {
+        NativeQuery q = NativeQuery.builder()
+            .withQuery(qb -&gt; qb.bool(b -&gt; b
+                .must(m -&gt; m.match(mt -&gt; mt.field("name").query(text)))
+                .filter(f -&gt; f.term(t -&gt; t.field("status").value("ACTIVE")))
+                .filter(f -&gt; f.range(r -&gt; r.number(n -&gt; n.field("price").lte(maxPrice))))))
+            .withPageable(PageRequest.of(0, 20))
+            .build();
+        return ops.search(q, ProductDoc.class);
+    }
+}</code></pre>
+<pre><code class="language-yaml">spring.elasticsearch:
+  uris: https://es.internal:9200
+  username: app
+  password: ${ES_PASSWORD}</code></pre>
+<p><b>Keeping ES in sync with the database</b> is the real design question:</p>
+<pre class="mermaid">
+flowchart LR
+  A[Service] -->|1. write| DB[(Oracle / Postgres)]
+  A -.->|"dual write (fragile)"| ES[(Elasticsearch)]
+  DB -->|2. outbox / CDC Debezium| MQ{{RabbitMQ / Kafka}}
+  MQ --> IDX[Indexer service] -->|bulk index| ES
+  UI[Search API] -->|query| ES
+</pre>
+<ul>
+<li><b>Dual writes</b> (save to DB, then to ES in the same request): simple but inconsistent when one of the two fails.</li>
+<li><b>Event-driven</b> (recommended): outbox or CDC → message → indexer uses the bulk API, retries, and is idempotent (index by DB id).</li>
+<li>Rebuild path: a batch job that reindexes everything into a new index and switches an <b>alias</b> (zero downtime mapping changes).</li>
+<li>Test with Testcontainers <code>ElasticsearchContainer</code>.</li>
+</ul>
+</div></details>
+
+<h2>SQL & Oracle</h2>
+
+<details class="qa" id="q73"><summary><span class="qn">Q73.</span>Explain the types of SQL joins.</summary><div class="ans">
+<figure>
+<svg viewBox="0 0 760 160" role="img" aria-label="Venn diagrams of inner, left, right and full outer joins">
+  <defs>
+    <clipPath id="ja"><circle cx="70" cy="70" r="45"/></clipPath>
+  </defs>
+  <g>
+    <circle cx="105" cy="70" r="45" class="box3" clip-path="url(#ja)"/>
+    <circle cx="70" cy="70" r="45" fill="none" class="line"/><circle cx="105" cy="70" r="45" fill="none" class="line"/>
+    <text x="88" y="140" text-anchor="middle" font-weight="600">INNER</text><text x="50" y="74" font-size="12">A</text><text x="120" y="74" font-size="12">B</text>
+  </g>
+  <g>
+    <circle cx="255" cy="70" r="45" class="box3"/>
+    <circle cx="290" cy="70" r="45" fill="none" class="line"/>
+    <text x="272" y="140" text-anchor="middle" font-weight="600">LEFT</text><text x="235" y="74" font-size="12">A</text><text x="305" y="74" font-size="12">B</text>
+  </g>
+  <g>
+    <circle cx="475" cy="70" r="45" class="box3"/>
+    <circle cx="440" cy="70" r="45" fill="none" class="line"/>
+    <text x="458" y="140" text-anchor="middle" font-weight="600">RIGHT</text><text x="420" y="74" font-size="12">A</text><text x="490" y="74" font-size="12">B</text>
+  </g>
+  <g>
+    <circle cx="620" cy="70" r="45" class="box3"/><circle cx="655" cy="70" r="45" class="box3"/>
+    <circle cx="620" cy="70" r="45" fill="none" class="line"/>
+    <text x="638" y="140" text-anchor="middle" font-weight="600">FULL OUTER</text><text x="600" y="74" font-size="12">A</text><text x="670" y="74" font-size="12">B</text>
+  </g>
+</svg>
+<figcaption>Green = rows returned. Outer joins fill the missing side with NULLs.</figcaption>
+</figure>
+<p>Example data: <code>customers</code> (1 Ana, 2 Bob, 3 Cris) and <code>orders</code> (o1 → customer 1, o2 → customer 1, o3 → customer 9 which doesn't exist).</p>
+<pre><code class="language-sql">-- INNER JOIN: only matching pairs → Ana-o1, Ana-o2
+SELECT c.name, o.id FROM customers c JOIN orders o ON o.customer_id = c.id;
+
+-- LEFT (OUTER) JOIN: all customers, orders if any → Ana-o1, Ana-o2, Bob-NULL, Cris-NULL
+SELECT c.name, o.id FROM customers c LEFT JOIN orders o ON o.customer_id = c.id;
+
+-- RIGHT JOIN: all orders, customer if any → Ana-o1, Ana-o2, NULL-o3
+-- FULL OUTER JOIN: everything from both → Ana-o1, Ana-o2, Bob-NULL, Cris-NULL, NULL-o3
+
+-- CROSS JOIN: every combination (3 × 3 = 9 rows), e.g. generate all size × colour variants
+SELECT s.size, c.colour FROM sizes s CROSS JOIN colours c;
+
+-- SELF JOIN: a table with itself, e.g. employee and their manager
+SELECT e.name, m.name AS manager FROM employees e LEFT JOIN employees m ON e.manager_id = m.id;
+
+-- ANTI JOIN: customers WITHOUT orders → Bob, Cris
+SELECT c.* FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id);
+-- SEMI JOIN: customers WITH at least one order (each once) → Ana
+SELECT c.* FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id);</code></pre>
+<ul>
+<li>A condition on the right table in <code>WHERE</code> turns a LEFT JOIN into an INNER JOIN (NULLs are filtered out); put it in the <code>ON</code> clause instead.</li>
+<li>Oracle's old outer join syntax: <code>WHERE o.customer_id(+) = c.id</code>; prefer ANSI <code>LEFT JOIN</code>.</li>
+<li>Physical join algorithms the optimizer picks: <b>nested loops</b> (small inputs, indexed), <b>hash join</b> (large, equality), <b>merge join</b> (sorted inputs).</li>
+<li>Beware <code>NOT IN</code> with a subquery that can return NULL: returns no rows at all. Use <code>NOT EXISTS</code>.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q74"><summary><span class="qn">Q74.</span>How do indexes work, and when can they hurt?</summary><div class="ans">
+<p>An index is a separate sorted data structure that maps column values to row locations (Oracle: <code>ROWID</code>), so the DB can find rows without scanning the whole table. The default is a <b>B-tree</b> (balanced tree): finding a value takes a few page reads even for billions of rows.</p>
+<pre class="mermaid">
+flowchart TB
+  R["root: &lt; 500 | &gt;= 500"] --> B1["branch: &lt; 200 | 200-499"]
+  R --> B2["branch: 500-799 | &gt;= 800"]
+  B1 --> L1["leaf: 1 … 199 → rowids"]
+  B1 --> L2["leaf: 200 … 499 → rowids"]
+  B2 --> L3["leaf: 500 … 799 → rowids"]
+  B2 --> L4["leaf: 800 … → rowids"]
+  L1 --- L2 --- L3 --- L4
+</pre>
+<p>Leaves are linked, so range scans (<code>BETWEEN</code>, <code>&gt;</code>, <code>ORDER BY</code>) are efficient too.</p>
+<h4>Kinds of indexes</h4>
+<ul>
+<li><b>Unique</b> (enforces uniqueness; created for primary keys).</li>
+<li><b>Composite</b> <code>(customer_id, created_at)</code>: usable for queries on <code>customer_id</code>, or <code>customer_id</code> + <code>created_at</code>, but generally not on <code>created_at</code> alone (leftmost-prefix rule; Oracle has "skip scan" as a partial exception). Put equality columns first, then range columns.</li>
+<li><b>Covering</b>: contains all columns the query needs → no table access (index-only scan).</li>
+<li><b>Function-based</b> (Oracle) / expression index (Postgres): <code>CREATE INDEX users_email_upper ON users (UPPER(email))</code>.</li>
+<li><b>Bitmap</b> (Oracle): low-cardinality columns in data warehouses; terrible for concurrent OLTP updates.</li>
+<li>Postgres extras: GIN (JSONB, full text, arrays), GiST, BRIN (huge naturally ordered tables), partial indexes (<code>WHERE status = 'OPEN'</code>).</li>
+</ul>
+<h4>When indexes hurt or don't help</h4>
+<ul>
+<li><b>Writes get slower</b>: every INSERT/UPDATE/DELETE must update every index; more redo/WAL, more locking.</li>
+<li><b>Storage and memory</b>: indexes compete for buffer cache.</li>
+<li><b>Low selectivity</b>: <code>WHERE gender = 'F'</code> returning 50 % of rows: a full scan is faster than millions of random index lookups; the optimizer ignores the index (or wrongly uses it with stale stats).</li>
+<li><b>Index not usable</b> because of the query: function on the column (<code>WHERE TRUNC(created) = …</code>, <code>UPPER(name)</code>), implicit type conversion (<code>varchar_col = 123</code>), leading wildcard (<code>LIKE '%abc'</code>), <code>OR</code> across columns, <code>!=</code>, wrong column order in a composite index.</li>
+<li><b>Redundant / unused</b> indexes: cost without benefit (find them with usage monitoring).</li>
+<li>Indexes on columns that are updated constantly, and sequence-based keys causing "hot" right-most leaf blocks under heavy concurrent inserts (Oracle: reverse key indexes, hash partitioning).</li>
+<li>Missing index on <b>foreign key</b> columns: slow joins, and in Oracle table-level locks on the child when the parent is updated/deleted.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q75"><summary><span class="qn">Q75.</span>How do you investigate and optimize a slow query?</summary><div class="ans">
+<pre class="mermaid">
+flowchart TD
+  A[1. Find it: APM / slow query log / AWR, ASH, V$SQL / pg_stat_statements] --> B[2. Reproduce with real bind values and data volume]
+  B --> C[3. Read the ACTUAL execution plan]
+  C --> D{Where is the time?}
+  D --> E[Full scan of a big table → missing / unusable index]
+  D --> F[Estimated rows far from actual rows → stale statistics, skewed data]
+  D --> G[Nested loops over huge sets → wrong join method / order]
+  D --> H[Sorts / temp spills → memory, missing index for ORDER BY]
+  D --> I[Fine per execution, called 10 000× → N+1 from the application]
+  E & F & G & H & I --> J[4. Change ONE thing, measure again, compare plans]
+</pre>
+<pre><code class="language-sql">-- Oracle: actual plan with real row counts of the last execution
+SELECT /*+ GATHER_PLAN_STATISTICS */ * FROM orders WHERE customer_id = :id AND status = 'OPEN';
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST'));
+-- estimated plan only:
+EXPLAIN PLAN FOR SELECT ...;  SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);
+-- refresh statistics
+EXEC DBMS_STATS.GATHER_TABLE_STATS('SHOP', 'ORDERS');
+
+-- PostgreSQL: runs the query and shows real timings and buffers
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM orders WHERE customer_id = 42 AND status = 'OPEN';</code></pre>
+<p>Typical fixes:</p>
+<ul>
+<li>Add or fix an index (right columns, right order, covering), or rewrite the predicate so the index is usable (<code>created &gt;= DATE '2026-11-23' AND created &lt; DATE '2026-11-24'</code> instead of <code>TRUNC(created) = …</code>).</li>
+<li>Gather statistics / histograms so the optimizer estimates correctly.</li>
+<li>Select only needed columns; paginate with keyset pagination (<code>WHERE id &gt; :last ORDER BY id FETCH FIRST 50 ROWS ONLY</code>) instead of huge <code>OFFSET</code>s.</li>
+<li>Rewrite: <code>EXISTS</code> instead of <code>IN</code> with large subqueries, avoid <code>SELECT DISTINCT</code> hiding a bad join, avoid correlated subqueries per row, use window functions.</li>
+<li>Fix the application side: N+1 (<a href="q-spring.html#q45">Q45</a>), missing batching, fetch size (Oracle JDBC default fetch size is 10 rows → many round trips: set <code>hibernate.jdbc.fetch_size</code>).</li>
+<li>Use <b>bind variables</b> (JDBC <code>?</code>) so Oracle reuses plans instead of hard-parsing each literal. Watch for bind peeking issues with skewed data.</li>
+<li>Bigger levers: partitioning, materialized views, caching, archiving old data.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q76"><summary><span class="qn">Q76.</span>Explain ACID and transaction isolation levels.</summary><div class="ans">
+<table>
+<tr><th>Letter</th><th>Property</th><th>Meaning</th><th>Mechanism</th></tr>
+<tr><td>A</td><td><b>Atomicity</b></td><td>all or nothing</td><td>undo/rollback</td></tr>
+<tr><td>C</td><td><b>Consistency</b></td><td>a transaction moves the DB from one valid state to another (constraints hold)</td><td>constraints, triggers</td></tr>
+<tr><td>I</td><td><b>Isolation</b></td><td>concurrent transactions don't see each other's intermediate states (to a chosen degree)</td><td>locks, MVCC</td></tr>
+<tr><td>D</td><td><b>Durability</b></td><td>once committed, it survives crashes</td><td>redo log / WAL flushed on commit</td></tr>
+</table>
+<h4>Read phenomena</h4>
+<ul>
+<li><b>Dirty read</b>: reading another transaction's uncommitted change (which may roll back).</li>
+<li><b>Non-repeatable read</b>: reading the same row twice gives different values because someone committed in between.</li>
+<li><b>Phantom read</b>: re-running a query returns new/missing rows because someone inserted/deleted matching rows.</li>
+<li>(Also: <b>lost update</b>, <b>write skew</b>, see <a href="#q80">Q80</a>.)</li>
+</ul>
+<table>
+<tr><th>Isolation level (SQL standard)</th><th>Dirty read</th><th>Non-repeatable read</th><th>Phantom</th></tr>
+<tr><td>READ UNCOMMITTED</td><td>possible</td><td>possible</td><td>possible</td></tr>
+<tr><td>READ COMMITTED</td><td>no</td><td>possible</td><td>possible</td></tr>
+<tr><td>REPEATABLE READ</td><td>no</td><td>no</td><td>possible</td></tr>
+<tr><td>SERIALIZABLE</td><td>no</td><td>no</td><td>no</td></tr>
+</table>
+<ul>
+<li><b>Oracle</b>: supports READ COMMITTED (default) and SERIALIZABLE (plus READ ONLY). Uses MVCC with undo: <b>readers never block writers and writers never block readers</b>; each statement sees a consistent snapshot as of its start. Dirty reads are impossible. Oracle's SERIALIZABLE is really snapshot isolation (can fail with ORA-08177 "can't serialize access").</li>
+<li><b>PostgreSQL</b>: default READ COMMITTED; REPEATABLE READ is snapshot isolation (no phantoms either); SERIALIZABLE is true serializable (SSI), may abort with serialization failures that you retry. READ UNCOMMITTED behaves like READ COMMITTED.</li>
+<li>Spring: <code>@Transactional(isolation = Isolation.SERIALIZABLE)</code>; higher isolation → more aborts/locking → handle retries.</li>
+</ul>
+<pre class="mermaid">
+sequenceDiagram
+  participant T1 as Tx 1 (READ COMMITTED)
+  participant DB
+  participant T2 as Tx 2
+  T1->>DB: SELECT balance → 100
+  T2->>DB: UPDATE balance = 50, COMMIT
+  T1->>DB: SELECT balance → 50  (non-repeatable read)
+  Note over T1: under REPEATABLE READ / snapshot it would still see 100
+</pre>
+</div></details>
+
+<details class="qa" id="q77"><summary><span class="qn">Q77.</span>What are the main differences between Oracle and PostgreSQL SQL?</summary><div class="ans">
+<table>
+<tr><th>Topic</th><th>Oracle</th><th>PostgreSQL</th></tr>
+<tr><td>Empty string</td><td><code>''</code> <b>is NULL</b></td><td><code>''</code> is an empty string, not NULL</td></tr>
+<tr><td>String type</td><td><code>VARCHAR2(n)</code>, <code>CLOB</code></td><td><code>VARCHAR(n)</code>, <code>TEXT</code></td></tr>
+<tr><td>Numbers</td><td><code>NUMBER(p,s)</code> for everything</td><td><code>INTEGER</code>, <code>BIGINT</code>, <code>NUMERIC(p,s)</code>, <code>DOUBLE PRECISION</code></td></tr>
+<tr><td>Dates</td><td><code>DATE</code> includes time (to the second); <code>TIMESTAMP</code></td><td><code>DATE</code> is date only; <code>TIMESTAMP</code>, <code>TIMESTAMPTZ</code></td></tr>
+<tr><td>Boolean</td><td>no SQL BOOLEAN until 23ai (used <code>NUMBER(1)</code>/<code>CHAR(1)</code>)</td><td><code>BOOLEAN</code></td></tr>
+<tr><td>Dummy table</td><td><code>SELECT SYSDATE FROM DUAL</code> (FROM optional from 23ai)</td><td><code>SELECT now()</code> (no FROM needed)</td></tr>
+<tr><td>Current time</td><td><code>SYSDATE</code>, <code>SYSTIMESTAMP</code></td><td><code>now()</code>, <code>CURRENT_TIMESTAMP</code></td></tr>
+<tr><td>Null handling</td><td><code>NVL(a, b)</code>, <code>NVL2</code>, <code>DECODE</code></td><td><code>COALESCE(a, b)</code> (also in Oracle), <code>CASE</code></td></tr>
+<tr><td>Row limiting</td><td><code>ROWNUM</code> (old), <code>FETCH FIRST n ROWS ONLY</code> (12c+)</td><td><code>LIMIT n OFFSET m</code>, also <code>FETCH FIRST</code></td></tr>
+<tr><td>Auto IDs</td><td>sequences (<code>seq.NEXTVAL</code>), identity columns (12c+)</td><td><code>GENERATED … AS IDENTITY</code>, <code>SERIAL</code>, sequences (<code>nextval('seq')</code>)</td></tr>
+<tr><td>Upsert</td><td><code>MERGE INTO … USING … WHEN MATCHED …</code></td><td><code>INSERT … ON CONFLICT … DO UPDATE</code> (and <code>MERGE</code> since 15)</td></tr>
+<tr><td>Hierarchies</td><td><code>CONNECT BY PRIOR</code> (also recursive <code>WITH</code>)</td><td><code>WITH RECURSIVE</code></td></tr>
+<tr><td>String concat</td><td><code>||</code> (NULL treated as empty)</td><td><code>||</code> (NULL makes the result NULL), <code>concat()</code></td></tr>
+<tr><td>DDL in transactions</td><td>DDL <b>auto-commits</b> (implicit commit before and after)</td><td>DDL is <b>transactional</b> (can be rolled back)</td></tr>
+<tr><td>Procedural language</td><td>PL/SQL, with <b>packages</b></td><td>PL/pgSQL (and others), no packages (use schemas)</td></tr>
+<tr><td>Identifier case</td><td>unquoted names folded to UPPER case</td><td>unquoted names folded to lower case</td></tr>
+<tr><td>Schemas</td><td>schema = user</td><td>schemas are namespaces inside a database</td></tr>
+<tr><td>JSON</td><td><code>JSON</code> type (21c+), <code>JSON_TABLE</code></td><td><code>JSONB</code> with GIN indexes, rich operators (<code>-&gt;</code>, <code>-&gt;&gt;</code>, <code>@&gt;</code>)</td></tr>
+<tr><td>License</td><td>commercial</td><td>open source</td></tr>
+</table>
+<p>In JPA/Hibernate code the dialect hides most of this, but native queries, ID generation, empty-string handling, and date types are the usual migration traps.</p>
+</div></details>
+
+<details class="qa" id="q78"><summary><span class="qn">Q78.</span>What is PL/SQL, and when would you put logic in the database?</summary><div class="ans">
+<p><b>PL/SQL</b> (Procedural Language/SQL) is Oracle's procedural extension of SQL: variables, <code>IF</code>, loops, exceptions, cursors, and named units stored and executed inside the database: <b>procedures</b>, <b>functions</b>, <b>packages</b> (spec + body, grouping related code and state), and <b>triggers</b>.</p>
+<pre><code class="language-sql">CREATE OR REPLACE PACKAGE billing AS
+  PROCEDURE close_month(p_month IN DATE);
+END billing;
+/
+CREATE OR REPLACE PACKAGE BODY billing AS
+  PROCEDURE close_month(p_month IN DATE) IS
+    TYPE t_ids IS TABLE OF accounts.id%TYPE;
+    l_ids t_ids;
+  BEGIN
+    SELECT id BULK COLLECT INTO l_ids                -- fetch many rows in one go
+      FROM accounts WHERE status = 'ACTIVE';
+
+    FORALL i IN 1 .. l_ids.COUNT                     -- one PL/SQL→SQL context switch for all inserts
+      INSERT INTO invoices(account_id, month, amount)
+      SELECT l_ids(i), p_month, SUM(amount) FROM usage
+       WHERE account_id = l_ids(i) AND used_at &gt;= p_month AND used_at &lt; ADD_MONTHS(p_month, 1);
+
+    COMMIT;
+  EXCEPTION
+    WHEN OTHERS THEN
+      ROLLBACK;
+      RAISE;                                         -- re-throw to the caller
+  END close_month;
+END billing;
+/</code></pre>
+<pre><code class="language-java">// Calling it from Spring
+new SimpleJdbcCall(jdbcTemplate).withCatalogName("billing").withProcedureName("close_month")
+    .execute(Map.of("p_month", LocalDate.of(2026, 11, 1)));
+// or Spring Data JPA: @Procedure(procedureName = "billing.close_month")</code></pre>
+<div class="grid2">
+<div class="callout ok"><b class="t">Logic in the DB makes sense for</b><ul>
+<li>Set-based, data-heavy processing (month-end, reconciliation, bulk transformations): moving millions of rows to the app and back is slow.</li>
+<li>Reducing network round trips for chatty sequences of statements.</li>
+<li>Integrity rules that must hold for every client of the DB (constraints first; triggers sparingly).</li>
+<li>Existing legacy systems and data warehouses / ETL.</li></ul></div>
+<div class="callout bad"><b class="t">Prefer the application for</b><ul>
+<li>Business rules that change often: Java is easier to version, review, unit test, debug and deploy.</li>
+<li>Scalability: app servers scale horizontally cheaply; the DB is the expensive shared bottleneck.</li>
+<li>Portability: PL/SQL locks you into Oracle.</li>
+<li>Calls to other systems, complex orchestration.</li>
+<li>Hidden side effects (triggers surprise developers and ORMs).</li></ul></div>
+</div>
+</div></details>
+
+<details class="qa" id="q79"><summary><span class="qn">Q79.</span>What are window (analytic) functions? Give an example.</summary><div class="ans">
+<p>A window function computes a value for each row <b>using a set of related rows</b> (the "window"), <b>without collapsing</b> rows like <code>GROUP BY</code> does. Syntax: <code>function() OVER (PARTITION BY … ORDER BY … [frame])</code>.</p>
+<figure>
+<svg viewBox="0 0 760 210" role="img" aria-label="GROUP BY collapses rows, window function keeps them">
+  <text x="10" y="20" font-weight="700">GROUP BY desk</text>
+  <rect class="box" x="10" y="30" width="300" height="28"/><text x="20" y="49" font-size="13">FX      | total 600</text>
+  <rect class="box2" x="10" y="58" width="300" height="28"/><text x="20" y="77" font-size="13">RATES   | total 250</text>
+  <text x="10" y="110" font-size="12" class="muted">5 trades collapsed into 2 rows</text>
+  <text x="360" y="20" font-weight="700">SUM(amount) OVER (PARTITION BY desk)</text>
+  <g font-size="13">
+  <rect class="box" x="360" y="30" width="390" height="28"/><text x="370" y="49">FX    | t1 | 100 | desk total 600</text>
+  <rect class="box" x="360" y="58" width="390" height="28"/><text x="370" y="77">FX    | t2 | 200 | desk total 600</text>
+  <rect class="box" x="360" y="86" width="390" height="28"/><text x="370" y="105">FX    | t3 | 300 | desk total 600</text>
+  <rect class="box2" x="360" y="114" width="390" height="28"/><text x="370" y="133">RATES | t4 | 50  | desk total 250</text>
+  <rect class="box2" x="360" y="142" width="390" height="28"/><text x="370" y="161">RATES | t5 | 200 | desk total 250</text>
+  </g>
+  <text x="360" y="196" font-size="12" class="muted">every row kept, plus a value computed over its partition</text>
+</svg>
+</figure>
+<pre><code class="language-sql">-- 1. Running total and share of the desk total per trade
+SELECT desk, trade_id, trade_time, amount,
+       SUM(amount) OVER (PARTITION BY desk ORDER BY trade_time)  AS running_total,
+       ROUND(100 * amount / SUM(amount) OVER (PARTITION BY desk), 1) AS pct_of_desk
+FROM trades;
+
+-- 2. Top 3 trades per desk (the classic "top N per group")
+SELECT * FROM (
+  SELECT t.*, ROW_NUMBER() OVER (PARTITION BY desk ORDER BY amount DESC) AS rn
+  FROM trades t
+) WHERE rn &lt;= 3;
+
+-- 3. Price change vs previous tick per instrument
+SELECT instrument, tick_time, price,
+       price - LAG(price) OVER (PARTITION BY instrument ORDER BY tick_time) AS change
+FROM prices;
+
+-- 4. Latest row per key (deduplicate)
+SELECT * FROM (
+  SELECT c.*, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY updated_at DESC) rn FROM customer_versions c
+) WHERE rn = 1;
+
+-- 5. 7-row moving average (frame clause)
+SELECT day, revenue, AVG(revenue) OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS ma7
+FROM daily_revenue;</code></pre>
+<table>
+<tr><th>Function</th><th>Gives</th><th>Ties (amounts 300, 200, 200, 100)</th></tr>
+<tr><td><code>ROW_NUMBER()</code></td><td>unique sequence</td><td>1, 2, 3, 4</td></tr>
+<tr><td><code>RANK()</code></td><td>rank with gaps</td><td>1, 2, 2, 4</td></tr>
+<tr><td><code>DENSE_RANK()</code></td><td>rank without gaps</td><td>1, 2, 2, 3</td></tr>
+<tr><td><code>LAG/LEAD(col, n)</code></td><td>value from n rows before/after</td><td></td></tr>
+<tr><td><code>FIRST_VALUE/LAST_VALUE</code>, <code>NTILE(n)</code></td><td>first/last in window, bucket number</td><td></td></tr>
+<tr><td><code>SUM/AVG/COUNT/MIN/MAX OVER</code></td><td>aggregates over the window</td><td></td></tr>
+</table>
+<p>Note: with <code>ORDER BY</code> in the window and no explicit frame, the default frame is "from the start to the current row" (<code>RANGE</code>), which is what makes running totals work, and why <code>LAST_VALUE</code> surprises people. Window functions are evaluated after <code>WHERE</code>/<code>GROUP BY</code>, so to filter on them you wrap them in a subquery.</p>
+</div></details>
+
+<details class="qa" id="q80"><summary><span class="qn">Q80.</span>How do you handle concurrent updates to the same row?</summary><div class="ans">
+<p>The problem is the <b>lost update</b>: two transactions read the same row, both compute a new value from what they read, and the second write silently overwrites the first.</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant A as Tx A (seller 1)
+  participant DB as stock row: qty = 10
+  participant B as Tx B (seller 2)
+  A->>DB: SELECT qty → 10
+  B->>DB: SELECT qty → 10
+  A->>DB: UPDATE qty = 10 - 3 = 7, COMMIT
+  B->>DB: UPDATE qty = 10 - 5 = 5, COMMIT
+  Note over DB: qty = 5, should be 2. A's update is lost.
+</pre>
+<h4>1. Atomic update in SQL (best when possible)</h4>
+<pre><code class="language-sql">UPDATE stock SET qty = qty - :n WHERE sku = :sku AND qty &gt;= :n;   -- 0 rows updated → not enough stock</code></pre>
+<p>The database does read + write under the row lock in one statement. No race, no retries.</p>
+<h4>2. Optimistic locking (version column)</h4>
+<p>Assume conflicts are rare. Each row has a <code>version</code>; updates check it hasn't changed.</p>
+<pre><code class="language-sql">UPDATE account SET balance = :newBalance, version = version + 1 WHERE id = :id AND version = :readVersion;
+-- 0 rows → someone else changed it → reload and retry, or tell the user (HTTP 409)</code></pre>
+<pre><code class="language-java">@Entity
+class Account {
+    @Id Long id;
+    BigDecimal balance;
+    @Version Long version;        // Hibernate adds "and version = ?" and increments it automatically
+}
+// conflict → ObjectOptimisticLockingFailureException → retry the whole transaction (e.g. @Retryable) or return 409</code></pre>
+<h4>3. Pessimistic locking (lock the row while you work)</h4>
+<p>Assume conflicts are frequent or retries are expensive. Others wait (or fail fast).</p>
+<pre><code class="language-sql">SELECT * FROM account WHERE id = :id FOR UPDATE;            -- waits for the lock
+SELECT * FROM account WHERE id = :id FOR UPDATE NOWAIT;     -- error immediately if locked (Oracle ORA-00054)
+SELECT * FROM account WHERE id = :id FOR UPDATE WAIT 3;     -- Oracle: wait max 3 s
+SELECT * FROM jobs WHERE status = 'NEW' ORDER BY id LIMIT 10 FOR UPDATE SKIP LOCKED;  -- PostgreSQL work-queue pattern: skip rows others hold
+-- (Oracle also has SKIP LOCKED, but not combined with FETCH FIRST: open a cursor FOR UPDATE SKIP LOCKED and fetch 10)</code></pre>
+<pre><code class="language-java">public interface AccountRepository extends JpaRepository&lt;Account, Long&gt; {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)                     // SELECT ... FOR UPDATE
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
+    @Query("select a from Account a where a.id = :id")
+    Account lockById(@Param("id") long id);
+}
+
+@Transactional          // the lock lives until the transaction commits: keep it SHORT
+public void withdraw(long id, BigDecimal amount) {
+    Account a = repo.lockById(id);
+    if (a.balance.compareTo(amount) &lt; 0) throw new InsufficientFunds();
+    a.balance = a.balance.subtract(amount);
+}</code></pre>
+<table>
+<tr><th></th><th>Optimistic</th><th>Pessimistic</th></tr>
+<tr><td>Conflicts</td><td>rare</td><td>frequent</td></tr>
+<tr><td>Cost when no conflict</td><td>almost none</td><td>locks held, others wait</td></tr>
+<tr><td>On conflict</td><td>exception → retry / 409</td><td>wait, timeout, or NOWAIT error</td></tr>
+<tr><td>Long user "think time" (edit form)</td><td>works (version travels with the form/ETag)</td><td>impossible (can't hold a lock for minutes)</td></tr>
+<tr><td>Risks</td><td>retry storms under contention</td><td>deadlocks (lock rows in a consistent order), lock waits</td></tr>
+</table>
+<h4>Other tools</h4>
+<ul>
+<li><b>Isolation level</b> SERIALIZABLE: the DB detects conflicts and aborts one transaction; retry it.</li>
+<li><b>Unique constraints</b> to prevent duplicates (instead of check-then-insert).</li>
+<li><b>Single writer</b>: route all updates for one key through one queue/consumer (<a href="q-rabbitmq.html#q61">Q61</a>).</li>
+<li>HTTP APIs: <code>ETag</code> + <code>If-Match</code> headers expose optimistic locking to clients (412 Precondition Failed).</li>
+<li>Remember: Java locks (<code>synchronized</code>) don't help with several app instances; the database is the right place to coordinate (<a href="sync-tools.html#synchronized">page 3</a>).</li>
+</ul>
+</div></details>
+</main>
+</body>
+</html>

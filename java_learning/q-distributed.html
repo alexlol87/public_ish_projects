@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distributed Systems and Caching</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<main>
+<h1>Q46–Q55: Distributed architecture & caching</h1>
+<p class="lead">Microservices trade-offs, CAP, communication styles, resilience, sagas, caching with Redis and Spring, scaling and observability.</p>
+
+<h2>Architecture</h2>
+
+<details class="qa" id="q46"><summary><span class="qn">Q46.</span>What are the pros and cons of microservices?</summary><div class="ans">
+<p>A <b>microservice</b> architecture splits an application into small services, each owning one business capability <b>and its own data</b>, deployed independently and talking over the network. The opposite is a <b>monolith</b> (one deployable); a "modular monolith" is a monolith with strict internal module boundaries.</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph Monolith
+    M[One app: orders + pricing + users + billing] --> MDB[(One DB)]
+  end
+  subgraph Microservices
+    O[orders] --> ODB[(orders DB)]
+    P[pricing] --> PDB[(pricing DB)]
+    U[users] --> UDB[(users DB)]
+    O -- REST --> P
+    O -- events --> MQ{{broker}} --> B[billing]
+  end
+</pre>
+<div class="grid2">
+<div class="callout ok"><b class="t">Pros</b><ul>
+<li>Independent deployment and release cadence per team.</li>
+<li>Scale only the hot parts (10 pricing pods, 2 user pods).</li>
+<li>Fault isolation: billing down ≠ ordering down (if designed for it).</li>
+<li>Technology freedom per service; smaller codebases easier to understand.</li>
+<li>Team autonomy and clear ownership (Conway's law).</li></ul></div>
+<div class="callout bad"><b class="t">Cons</b><ul>
+<li>Distributed system problems: network latency and failures, timeouts, retries, partial failure.</li>
+<li>No ACID transactions across services → sagas, eventual consistency.</li>
+<li>Operational cost: CI/CD per service, containers, K8s, service discovery, config.</li>
+<li>Observability becomes essential: tracing, centralized logs.</li>
+<li>Harder testing (contract tests) and API versioning.</li>
+<li>Risk of a "distributed monolith": services that must be deployed together.</li></ul></div>
+</div>
+<p><b>Interview angle</b>: microservices are an organizational scaling tool more than a technical one. Start with a well-modularized monolith unless you have several teams and clear domain boundaries.</p>
+</div></details>
+
+<details class="qa" id="q47"><summary><span class="qn">Q47.</span>Explain the CAP theorem.</summary><div class="ans">
+<p>In a distributed data store, when a <b>network Partition</b> happens (nodes can't talk to each other), you must choose between:</p>
+<ul>
+<li><b>Consistency</b>: every read gets the latest write (or an error). Formally: linearizability.</li>
+<li><b>Availability</b>: every request to a non-failing node gets a (non-error) response, possibly stale.</li>
+</ul>
+<p>Partitions <em>will</em> happen, so P is not optional: the real choice is <b>CP or AP during a partition</b>.</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph DC1
+    A[Node A<br/>client writes x=2]
+  end
+  subgraph DC2
+    B[Node B<br/>still has x=1]
+  end
+  A -. network partition X .- B
+  B --> Q{client reads x from B}
+  Q -- CP --> E[refuse / error until partition heals<br/>e.g. ZooKeeper, etcd, HBase, Mongo default majority]
+  Q -- AP --> S[answer x=1, reconcile later<br/>e.g. Cassandra, DynamoDB, Couchbase with low consistency]
+</pre>
+<ul>
+<li><b>PACELC</b> extends it: if Partition → choose A or C; <b>E</b>lse (normal operation) → choose <b>L</b>atency or <b>C</b>onsistency. E.g. synchronous replication = consistent but slower.</li>
+<li>Many systems are tunable: Cassandra's consistency level per query (<code>ONE</code>, <code>QUORUM</code>, <code>ALL</code>); <code>QUORUM</code> reads + writes give strong consistency.</li>
+<li>A single-node relational DB is not really "distributed", so CAP doesn't apply to it; with replicas, async replication reads can be stale.</li>
+<li>Don't confuse CAP's "C" with ACID's "C" (ACID C = constraints are respected).</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q48"><summary><span class="qn">Q48.</span>How do services communicate, and when do you choose sync vs async?</summary><div class="ans">
+<div class="grid2">
+<div class="card"><h4>Synchronous (request/response)</h4>
+<p>REST over HTTP (<code>RestClient</code>, <code>WebClient</code>, OpenFeign, HTTP interface clients), gRPC (HTTP/2 + Protobuf, fast, typed), GraphQL.</p>
+<p>Caller waits for the answer. Simple, immediate result, easy to reason about. But: temporal coupling (callee must be up), latency adds up along the chain, cascading failures.</p></div>
+<div class="card"><h4>Asynchronous (messaging)</h4>
+<p>Message broker: RabbitMQ (queues, commands), Kafka (event log, streams). Also HTTP 202 + callback/polling.</p>
+<p>Caller publishes and moves on. Decoupled in time, absorbs load spikes, enables fan-out to many consumers. But: eventual consistency, harder debugging, duplicates/ordering to handle, a broker to operate.</p></div>
+</div>
+<pre class="mermaid">
+sequenceDiagram
+  participant O as Orders
+  participant P as Pricing
+  participant MQ as Broker
+  participant B as Billing
+  participant N as Notifications
+  O->>P: sync: GET /price (need the answer now)
+  P-->>O: 200 price
+  O->>MQ: async: publish OrderPlaced
+  MQ-->>B: OrderPlaced
+  MQ-->>N: OrderPlaced
+</pre>
+<table>
+<tr><th>Choose sync when</th><th>Choose async when</th></tr>
+<tr><td>The caller needs the answer to continue (a query, a price, validation)</td><td>The caller only needs to know it was accepted ("order received")</td></tr>
+<tr><td>A user is waiting and the chain is short</td><td>Work is slow or can happen later (emails, reports, invoices)</td></tr>
+<tr><td>Strong consistency is required right now</td><td>Several services react to the same event (fan-out)</td></tr>
+<tr><td>Simple CRUD between two services</td><td>Load spikes must be smoothed; consumer may be down temporarily</td></tr>
+</table>
+<p>Typical systems mix both: synchronous <b>queries</b>, asynchronous <b>commands and events</b>.</p>
+</div></details>
+
+<details class="qa" id="q49"><summary><span class="qn">Q49.</span>How do you make service-to-service calls resilient?</summary><div class="ans">
+<p>Assume every remote call can be slow, fail, or fail halfway. The patterns, drawn from the caller inwards in one common layering (it is a design choice: Resilience4j's annotations apply Retry outermost by default, then CircuitBreaker, then TimeLimiter, with Bulkhead innermost, configurable via the aspect-order properties):</p>
+<pre class="mermaid">
+flowchart LR
+  C[Caller] --> BH[Bulkhead<br/>max 20 concurrent calls] --> CB[Circuit breaker<br/>open after 50% failures] --> RT[Retry<br/>3 tries, exp. backoff + jitter] --> TO[Timeout<br/>800 ms] --> S[Remote service]
+  CB -- open --> FB[Fallback: cached value,<br/>default, or fast error]
+</pre>
+<table>
+<tr><th>Pattern</th><th>What it prevents</th><th>Details</th></tr>
+<tr><td><b>Timeouts</b></td><td>threads stuck forever waiting</td><td>Always set connect + read timeouts. Default HTTP clients may wait forever.</td></tr>
+<tr><td><b>Retry</b> with exponential backoff + jitter</td><td>failures from transient glitches</td><td>Only for idempotent operations or with an idempotency key; only on transient errors (timeouts, 503), never on 400.</td></tr>
+<tr><td><b>Circuit breaker</b></td><td>hammering a dead service, cascading failure</td><td>CLOSED → (failure rate &gt; threshold) → OPEN (fail fast) → after wait → HALF_OPEN (try a few) → CLOSED or OPEN.</td></tr>
+<tr><td><b>Bulkhead</b></td><td>one slow dependency consuming all threads</td><td>Separate thread pools or semaphores per dependency.</td></tr>
+<tr><td><b>Rate limiter</b></td><td>overloading a partner / yourself</td><td>N calls per period.</td></tr>
+<tr><td><b>Fallback</b></td><td>user-facing errors</td><td>Last known value from cache, degraded response.</td></tr>
+<tr><td><b>Idempotency keys</b></td><td>double charges on retry</td><td>Client sends <code>Idempotency-Key</code>; server stores and replays the first result.</td></tr>
+</table>
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> CLOSED
+  CLOSED --> OPEN: failure rate above 50% in sliding window
+  OPEN --> HALF_OPEN: after waitDurationInOpenState (e.g. 30s)
+  HALF_OPEN --> CLOSED: trial calls succeed
+  HALF_OPEN --> OPEN: trial calls fail
+</pre>
+<pre><code class="language-java">// Resilience4j with Spring Boot (resilience4j-spring-boot3 + spring-boot-starter-aop, called spring-boot-starter-aspectj in Boot 4)
+@Service
+class PricingClient {
+    @CircuitBreaker(name = "pricing", fallbackMethod = "cachedPrice")
+    @Retry(name = "pricing")
+    @Bulkhead(name = "pricing")
+    public Price price(String sku) {
+        return restClient.get().uri("/price/{sku}", sku).retrieve().body(Price.class);
+    }
+    private Price cachedPrice(String sku, Throwable t) { return cache.lastKnown(sku); }
+}</code></pre>
+<pre><code class="language-yaml">resilience4j:
+  circuitbreaker.instances.pricing:
+    sliding-window-size: 20
+    failure-rate-threshold: 50
+    wait-duration-in-open-state: 30s
+  retry.instances.pricing:
+    max-attempts: 3
+    wait-duration: 200ms
+    enable-exponential-backoff: true
+  bulkhead.instances.pricing:
+    max-concurrent-calls: 20</code></pre>
+<p>Spring Framework 7 (Boot 4) also has built-in <code>@Retryable</code> and <code>@ConcurrencyLimit</code> (enable with <code>@EnableResilientMethods</code>) for simple cases. Remember: retries multiply load. 3 layers each retrying 3 times = 27 calls to the bottom service.</p>
+</div></details>
+
+<details class="qa" id="q50"><summary><span class="qn">Q50.</span>How do you handle a business transaction that spans several services?</summary><div class="ans">
+<p>Each service has its own database, so there is no single ACID transaction. Options:</p>
+<ul>
+<li><b>Two-phase commit (2PC / XA)</b>: a coordinator asks all participants to "prepare", then "commit". Strongly consistent, but blocking, slow, coordinator is a single point of failure, and most brokers/NoSQL/HTTP services don't support it. Rarely used in microservices.</li>
+<li><b>Saga</b>: a sequence of <b>local</b> transactions; each step publishes an event/command that triggers the next. If a step fails, previously completed steps are undone by <b>compensating transactions</b> (refund, release stock). Eventually consistent.</li>
+</ul>
+<div class="grid2">
+<div class="card"><h4>Choreography</h4><p>No central coordinator: services react to each other's events. Simple for 2–4 steps; the flow is implicit and hard to follow as it grows.</p></div>
+<div class="card"><h4>Orchestration</h4><p>A saga orchestrator (a service or a workflow engine like Temporal, Camunda) tells each service what to do and handles compensation. Explicit flow, easier monitoring.</p></div>
+</div>
+<pre class="mermaid">
+sequenceDiagram
+  participant O as Order service (orchestrator)
+  participant P as Payment
+  participant I as Inventory
+  participant S as Shipping
+  O->>O: create order PENDING (local tx)
+  O->>P: charge
+  P-->>O: charged
+  O->>I: reserve stock
+  I-->>O: OUT OF STOCK
+  Note over O: compensate the completed steps in reverse
+  O->>P: refund (compensation)
+  O->>O: order CANCELLED
+</pre>
+<h4>The outbox pattern: publish reliably</h4>
+<p>Problem: "save to DB, then publish to RabbitMQ": if the app crashes between the two, the DB says yes but nobody hears about it (or you publish and the DB rolls back). Fix: write the event to an <b>outbox table in the same local transaction</b>; a relay (polling job or CDC with Debezium) publishes it afterwards.</p>
+<pre class="mermaid">
+flowchart LR
+  S[Service] -->|one local transaction| T1[(orders table)]
+  S -->|same transaction| T2[(outbox table)]
+  R[Relay: scheduler or Debezium CDC] -->|reads unsent rows| T2
+  R -->|publish, then mark sent| MQ{{RabbitMQ / Kafka}}
+</pre>
+<ul>
+<li>Delivery becomes <b>at least once</b>, so consumers must be <b>idempotent</b> (<a href="q-rabbitmq.html#q62">Q62</a>).</li>
+<li>Design for intermediate states visible to users (PENDING) and for compensations that can themselves fail (retry them).</li>
+</ul>
+</div></details>
+
+<h2>Caching</h2>
+
+<details class="qa" id="q51"><summary><span class="qn">Q51.</span>Which caching strategies do you know? What's your Redis experience?</summary><div class="ans">
+<table>
+<tr><th>Strategy</th><th>Read path</th><th>Write path</th><th>Notes</th></tr>
+<tr><td><b>Cache-aside</b> (lazy loading)</td><td>app checks cache; on miss reads DB and puts into cache</td><td>app writes DB, then <b>deletes</b> the cache key</td><td>Most common; what <code>@Cacheable</code> does. Only requested data is cached.</td></tr>
+<tr><td><b>Read-through</b></td><td>app asks cache; cache itself loads from DB on miss</td><td>—</td><td>Loader lives in the cache library (Caffeine <code>LoadingCache</code>).</td></tr>
+<tr><td><b>Write-through</b></td><td>—</td><td>write goes to cache and DB synchronously</td><td>Cache always fresh; slower writes.</td></tr>
+<tr><td><b>Write-behind</b> (write-back)</td><td>—</td><td>write to cache; DB updated asynchronously later</td><td>Fast writes; risk of data loss.</td></tr>
+<tr><td><b>Refresh-ahead</b></td><td>entries refreshed before they expire</td><td>—</td><td>Avoids latency spikes on hot keys (Caffeine <code>refreshAfterWrite</code>).</td></tr>
+</table>
+<pre class="mermaid">
+sequenceDiagram
+  participant App
+  participant R as Redis
+  participant DB
+  App->>R: GET product:42
+  alt hit
+    R-->>App: value
+  else miss
+    R-->>App: nil
+    App->>DB: SELECT ... WHERE id = 42
+    DB-->>App: row
+    App->>R: SET product:42 value EX 600
+  end
+</pre>
+<h4>Redis essentials</h4>
+<ul>
+<li>In-memory key-value store; command execution is single-threaded (so each command is atomic), I/O threads optional since Redis 6.</li>
+<li>Data structures: <b>String</b> (cache values, counters <code>INCR</code>), <b>Hash</b> (object fields), <b>List</b>, <b>Set</b>, <b>Sorted Set</b> (leaderboards, rate limits by time), <b>Stream</b>, <b>Pub/Sub</b>, HyperLogLog, geo.</li>
+<li><b>TTL</b> per key (<code>SET k v EX 600</code>); eviction policy when memory is full (<code>maxmemory-policy allkeys-lru</code>, <code>volatile-lru</code>, <code>allkeys-lfu</code>, <code>noeviction</code>…).</li>
+<li>Persistence: RDB snapshots and/or AOF log. High availability: replicas + Sentinel, or Redis Cluster (sharding over 16 384 hash slots).</li>
+<li>Uses beyond caching: distributed locks (<code>SET key token NX PX 30000</code>, Redisson), rate limiting, session store (Spring Session), idempotency keys, leaderboards.</li>
+<li>Spring: <code>spring-boot-starter-data-redis</code> (Lettuce client), <code>RedisTemplate</code>/<code>StringRedisTemplate</code>, <code>RedisCacheManager</code> for <code>@Cacheable</code>.</li>
+</ul>
+<p>For "your Redis experience", describe a concrete use: what you cached, the key design (<code>price:{sku}</code>), TTLs, serialization (JSON vs JDK), how you invalidated, and a problem you solved (e.g. a stampede on a hot key).</p>
+</div></details>
+
+<details class="qa" id="q52"><summary><span class="qn">Q52.</span>How do you handle cache invalidation and consistency?</summary><div class="ans">
+<p>"There are only two hard things in computer science: cache invalidation and naming things." A cache is a copy; copies go stale. Decide <b>how stale is acceptable</b> per data type, then combine techniques:</p>
+<ol>
+<li><b>TTL</b>: every entry expires. The safety net: even if everything else fails, staleness is bounded.</li>
+<li><b>Delete on write</b> (cache-aside): update DB, <b>then delete</b> the key (not update it). Next read reloads. Do it <b>after commit</b> (<code>@TransactionalEventListener(phase = AFTER_COMMIT)</code>), or a concurrent reader may re-cache the old value.</li>
+<li><b>Event-driven invalidation</b>: the owning service publishes <code>ProductChanged</code>; every instance/service evicts its copy. Needed for local (in-memory) caches on many pods.</li>
+<li><b>Versioned keys</b>: <code>product:42:v7</code>; bumping the version makes old entries unreachable.</li>
+<li><b>CDC</b>: Debezium streams DB changes → invalidations, catching writes that bypass your code.</li>
+</ol>
+<h4>The classic race (why "delete" and "after commit")</h4>
+<pre class="mermaid">
+sequenceDiagram
+  participant A as Reader A
+  participant B as Writer B
+  participant C as Cache
+  participant D as DB
+  A->>C: GET (miss)
+  A->>D: read old value v1
+  B->>D: write v2 + commit
+  B->>C: DELETE key
+  A->>C: SET key = v1 (stale! A read before B's write)
+  Note over C: stale until TTL expires → keep TTLs as the safety net
+</pre>
+<p>The window is small but real; mitigations: short TTLs, "delayed double delete" (delete again a few hundred ms later), or versioned/compare-and-set writes.</p>
+<h4>Other problems to mention</h4>
+<ul>
+<li><b>Cache stampede</b> (thundering herd): a hot key expires and 1 000 requests hit the DB at once. Fix: a lock/single-flight so only one request reloads (Caffeine does this per key; <code>@Cacheable(sync = true)</code>), early probabilistic refresh, jittered TTLs.</li>
+<li><b>Cache penetration</b>: requests for keys that don't exist always miss → cache "not found" briefly, or use a Bloom filter.</li>
+<li><b>Avalanche</b>: many keys expire at once (same TTL set at startup) → add random jitter to TTLs.</li>
+<li>Never cache in a way that breaks <b>correctness-critical</b> reads (balances, stock at checkout): read those from the source of truth.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q53"><summary><span class="qn">Q53.</span>Local cache vs distributed cache? How does Spring's cache abstraction work?</summary><div class="ans">
+<table>
+<tr><th></th><th>Local (in-process): Caffeine, ConcurrentHashMap</th><th>Distributed: Redis, Hazelcast, Memcached</th></tr>
+<tr><td>Speed</td><td>nanoseconds, no network, no serialization</td><td>~0.2–1 ms network round trip + serialization</td></tr>
+<tr><td>Consistency across pods</td><td>each pod has its own copy → can disagree</td><td>one shared copy</td></tr>
+<tr><td>Size</td><td>limited by heap; adds GC pressure</td><td>separate, scalable memory</td></tr>
+<tr><td>Survives restart / deploy</td><td>no (cold start)</td><td>yes</td></tr>
+<tr><td>Ops cost</td><td>none</td><td>a cluster to run</td></tr>
+<tr><td>Good for</td><td>small, hot, rarely-changing data (reference data, config, FX codes)</td><td>larger data, shared sessions, data that must be the same on all pods</td></tr>
+</table>
+<p>A common combo is a <b>two-level cache</b>: Caffeine (L1, short TTL) in front of Redis (L2).</p>
+<h4>Spring's cache abstraction</h4>
+<p>Annotations on methods, implemented with a <b>proxy</b> (AOP): before calling your method the proxy computes a key from the arguments and looks it up in a <code>Cache</code> from the configured <code>CacheManager</code> (Caffeine, Redis, …). The provider is swappable without changing your code.</p>
+<pre class="mermaid">
+flowchart LR
+  C[Caller] --> P{Cache proxy:<br/>key = sku}
+  P -- hit --> C
+  P -- miss --> M[your method: DB call] --> P
+  P -- put result --> CM[(CacheManager → Caffeine / Redis)]
+</pre>
+<pre><code class="language-java">@Configuration
+@EnableCaching
+class CacheConfig {}   // with spring-boot-starter-cache + Caffeine/Redis on the classpath, Boot configures the CacheManager
+
+@Service
+class ProductService {
+    @Cacheable(cacheNames = "products", key = "#id", unless = "#result == null")   // note: sync = true cannot be combined with unless
+    public Product get(long id) { return repo.findById(id).orElse(null); }           // cached
+
+    @CachePut(cacheNames = "products", key = "#p.id")
+    public Product update(Product p) { return repo.save(p); }                        // always runs, refreshes cache
+
+    @CacheEvict(cacheNames = "products", key = "#id")
+    public void delete(long id) { repo.deleteById(id); }
+
+    @CacheEvict(cacheNames = "products", allEntries = true)
+    @Scheduled(fixedRate = 3_600_000)
+    public void evictAll() {}
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  cache:
+    type: redis                 # or caffeine
+    redis:
+      time-to-live: 10m
+    # caffeine:
+    #   spec: maximumSize=10000,expireAfterWrite=5m</code></pre>
+<ul>
+<li>Same proxy pitfalls as <code>@Transactional</code>: self-invocation and private methods bypass the cache.</li>
+<li>Cached objects must be serializable for Redis (configure a JSON serializer); returning a mutable cached object from a local cache lets callers modify the shared instance.</li>
+<li>The abstraction has no TTL attribute; TTL is configured on the provider.</li>
+</ul>
+</div></details>
+
+<h2>Operations</h2>
+
+<details class="qa" id="q54"><summary><span class="qn">Q54.</span>How do you scale a service horizontally?</summary><div class="ans">
+<p><b>Vertical</b> scaling = bigger machine. <b>Horizontal</b> = more instances behind a load balancer. Horizontal scaling requires the service to be <b>stateless</b>: any instance can handle any request.</p>
+<pre class="mermaid">
+flowchart LR
+  U[Clients] --> LB[Load balancer / K8s Service / Ingress]
+  LB --> P1[pod 1]
+  LB --> P2[pod 2]
+  LB --> P3[pod 3 … added by HPA]
+  P1 & P2 & P3 --> R[(Redis: sessions, cache, locks)]
+  P1 & P2 & P3 --> DB[(DB primary + read replicas)]
+  P1 & P2 & P3 --> MQ{{broker: competing consumers}}
+</pre>
+<ol>
+<li><b>Make it stateless</b>: no HTTP session in memory (use JWTs or Spring Session + Redis), no local files, no in-memory queues holding important work.</li>
+<li><b>Load balancing</b>: round robin / least connections; health checks (readiness probe) so traffic only goes to ready pods.</li>
+<li><b>Autoscaling</b>: Kubernetes HPA on CPU, or custom metrics (requests/s, queue depth with KEDA).</li>
+<li><b>Watch out for single-instance assumptions</b>: <code>@Scheduled</code> jobs run on every pod (use ShedLock), in-memory caches diverge, <code>synchronized</code> doesn't lock across pods.</li>
+<li><b>Scale the bottleneck</b>, which is usually the database: connection pool limits (pods × pool size ≤ DB max connections), read replicas, caching, partitioning/sharding, CQRS.</li>
+<li><b>Messaging</b>: consumers scale as competing consumers on a queue (watch ordering, <a href="q-rabbitmq.html#q61">Q61</a>).</li>
+<li>Graceful shutdown and fast startup so pods can come and go.</li>
+</ol>
+</div></details>
+
+<details class="qa" id="q55"><summary><span class="qn">Q55.</span>How do you make a distributed system observable?</summary><div class="ans">
+<p>Observability = being able to answer "what is going on and why?" from the outside. Three pillars, linked together by a <b>trace ID</b>:</p>
+<div class="grid2">
+<div class="card"><h4>Logs</h4><p>Structured (JSON) logs with <code>traceId</code>, <code>spanId</code>, service, level. Shipped to a central store (ELK / Kibana, Loki/Grafana, Splunk). Boot 3.4+ supports structured logging: <code>logging.structured.format.console=ecs</code>.</p></div>
+<div class="card"><h4>Metrics</h4><p>Numbers over time: request rate, error rate, latency percentiles, JVM memory, pool usage, queue depth. Micrometer → Prometheus → Grafana dashboards and alerts.</p></div>
+<div class="card"><h4>Traces</h4><p>The path of one request across services as a tree of <b>spans</b> with timings. Micrometer Tracing (successor of Spring Cloud Sleuth) + OpenTelemetry → Zipkin / Jaeger / Tempo.</p></div>
+<div class="card"><h4>Plus</h4><p>Health checks (Actuator), alerting on SLOs, dashboards per service (RED: Rate, Errors, Duration; USE: Utilization, Saturation, Errors), profiling.</p></div>
+</div>
+<pre class="mermaid">
+sequenceDiagram
+  participant GW as Gateway
+  participant O as Orders
+  participant P as Pricing
+  participant MQ as RabbitMQ
+  participant B as Billing
+  GW->>O: traceparent: 00-4bf92f...-01
+  Note over O: log: traceId=4bf92f... "creating order"
+  O->>P: HTTP + traceparent header (same traceId, new spanId)
+  O->>MQ: message header traceparent
+  MQ->>B: consume, continue the same trace
+  Note over GW,B: search traceId=4bf92f... in Kibana → every log line of this request, all services
+</pre>
+<pre><code class="language-xml">&lt;dependency&gt;&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;&lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;&lt;/dependency&gt;
+&lt;dependency&gt;&lt;groupId&gt;io.micrometer&lt;/groupId&gt;&lt;artifactId&gt;micrometer-tracing-bridge-otel&lt;/artifactId&gt;&lt;/dependency&gt;
+&lt;dependency&gt;&lt;groupId&gt;io.opentelemetry&lt;/groupId&gt;&lt;artifactId&gt;opentelemetry-exporter-otlp&lt;/artifactId&gt;&lt;/dependency&gt;
+&lt;dependency&gt;&lt;groupId&gt;io.micrometer&lt;/groupId&gt;&lt;artifactId&gt;micrometer-registry-prometheus&lt;/artifactId&gt;&lt;/dependency&gt;</code></pre>
+<pre><code class="language-yaml">management:
+  tracing:
+    sampling:
+      probability: 0.1          # trace 10 % of requests
+logging:
+  pattern:
+    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "</code></pre>
+<p>Spring Boot then propagates the W3C <code>traceparent</code> header through <code>RestClient</code>/<code>WebClient</code> built from Boot's builders (and through <code>RabbitTemplate</code>/listeners once their <code>observation-enabled</code> properties are set), and puts <code>traceId</code>/<code>spanId</code> in the MDC. Boot 4 also offers <code>spring-boot-starter-opentelemetry</code>. Return the <code>traceId</code> in error responses so a support engineer can jump straight to the logs.</p>
+</div></details>
+</main>
+</body>
+</html>

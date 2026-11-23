@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locks, Atomics, Virtual Threads</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs></svg>
+<main>
+<h1>3. synchronized, ReentrantLock, tryLock, volatile, Atomics, CompletableFuture, sealed classes, virtual threads</h1>
+<p class="lead">What each one is, how it works underneath, how to use it in a Spring Boot service, and the mistakes people make.</p>
+
+<h2 id="choose">Which tool for which problem?</h2>
+<pre class="mermaid">
+flowchart TD
+  Q{What do you need?}
+  Q -->|one flag/reference written by one thread,<br/>read by others| V[volatile]
+  Q -->|a counter or a single value updated by many threads| A[AtomicInteger / AtomicLong / LongAdder / AtomicReference]
+  Q -->|several fields changed together, simple| S[synchronized]
+  Q -->|same, but need timeout, try, fairness, interruptible,<br/>several conditions, read/write split| L[ReentrantLock / tryLock / ReadWriteLock]
+  Q -->|run things in parallel and combine results| CF[CompletableFuture or structured concurrency]
+  Q -->|thousands of blocking I/O tasks| VT[virtual threads]
+  Q -->|several instances of the service| D[database lock / optimistic locking / distributed lock<br/>JVM locks are NOT enough]
+  Q -->|model a closed set of results, messages or states| SC[sealed interfaces + records + switch]
+</pre>
+
+<h2 id="synchronized">synchronized</h2>
+<p>Every Java object has a built-in lock called a <b>monitor</b>. <code>synchronized</code> acquires it on entry and releases it on exit (also when an exception is thrown). Only one thread at a time can hold a given monitor; others wait in <code>BLOCKED</code> state.</p>
+<figure>
+<svg viewBox="0 0 760 200" role="img" aria-label="Monitor with entry set, owner and wait set">
+  <rect class="box2" x="10" y="40" width="200" height="120" rx="10"/>
+  <text x="110" y="62" text-anchor="middle" font-weight="700">Entry set (BLOCKED)</text>
+  <text x="110" y="92" text-anchor="middle" font-size="13">T2, T3 want the lock</text>
+  <rect class="box3" x="280" y="40" width="200" height="120" rx="10"/>
+  <text x="380" y="62" text-anchor="middle" font-weight="700">Owner</text>
+  <text x="380" y="92" text-anchor="middle" font-size="13">T1 runs the synchronized</text>
+  <text x="380" y="110" text-anchor="middle" font-size="13">block (only one thread)</text>
+  <rect class="box" x="550" y="40" width="200" height="120" rx="10"/>
+  <text x="650" y="62" text-anchor="middle" font-weight="700">Wait set (WAITING)</text>
+  <text x="650" y="92" text-anchor="middle" font-size="13">threads that called wait()</text>
+  <text x="650" y="110" text-anchor="middle" font-size="13">until notify()/notifyAll()</text>
+  <line class="line" x1="210" y1="100" x2="278" y2="100" marker-end="url(#ah)"/><text x="244" y="92" text-anchor="middle" font-size="12">acquire</text>
+  <path class="line" d="M480,80 L548,80" marker-end="url(#ah)"/><text x="514" y="74" text-anchor="middle" font-size="12">wait()</text>
+  <path class="line" d="M650,160 C650,195 110,195 110,162" marker-end="url(#ah)"/><text x="380" y="190" text-anchor="middle" font-size="12">notify(): back to the entry set, must re-acquire</text>
+</svg>
+</figure>
+<pre><code class="language-java">public class Inventory {
+    private final Map&lt;String, Integer&gt; stock = new HashMap&lt;&gt;();
+    private final Object lock = new Object();            // private lock object: nobody outside can lock it
+
+    public synchronized int count(String sku) {          // locks "this"
+        return stock.getOrDefault(sku, 0);
+    }
+
+    public boolean reserve(String sku, int qty) {
+        synchronized (lock) {                            // block: keep the critical section small
+            int left = stock.getOrDefault(sku, 0);
+            if (left &lt; qty) return false;
+            stock.put(sku, left - qty);                  // check + update happen atomically
+            return true;
+        }
+    }
+
+    public static synchronized void resetAll() { }       // static: locks Inventory.class
+}</code></pre>
+<ul>
+<li><b>Reentrant</b>: a thread already holding the lock can enter another synchronized method of the same object.</li>
+<li><b>Visibility</b>: releasing the monitor publishes all writes to the next thread that acquires it (happens-before).</li>
+<li>No timeout, cannot be interrupted while waiting, no fairness, one condition (<code>wait</code>/<code>notify</code>) per monitor.</li>
+<li><b>Virtual threads</b>: on Java 21–23 blocking inside <code>synchronized</code> <em>pins</em> the carrier thread. Fixed in Java 24 (JEP 491), so on Java 25 <code>synchronized</code> is fine with virtual threads.</li>
+</ul>
+<div class="callout warn"><b class="t">In Spring Boot</b>
+A <code>synchronized</code> method on a singleton bean serializes <b>all requests</b> through it, and it protects only <b>this JVM</b>. With 3 pods, three threads can be inside "the same" synchronized block at once. For data in a database use transactions with <a href="q-nosql-sql.html#q80">optimistic/pessimistic locking</a>; for cluster-wide mutual exclusion use a distributed lock (ShedLock, Redis/Redisson, DB advisory locks).</div>
+
+<h2 id="reentrantlock">ReentrantLock</h2>
+<p>An explicit lock object from <code>java.util.concurrent.locks</code> with the same semantics as <code>synchronized</code> (mutual exclusion, reentrancy, happens-before) plus extra features.</p>
+<pre><code class="language-java">private final ReentrantLock lock = new ReentrantLock();      // new ReentrantLock(true) = fair (FIFO), slower
+
+public void update() {
+    lock.lock();                 // ALWAYS lock() before try …
+    try {
+        // critical section
+    } finally {
+        lock.unlock();           // … and unlock() in finally, or a thrown exception leaves it locked forever
+    }
+}</code></pre>
+<table>
+<tr><th>Feature</th><th><code>synchronized</code></th><th><code>ReentrantLock</code></th></tr>
+<tr><td>Released automatically</td><td>yes (block scope)</td><td>no, <code>unlock()</code> in <code>finally</code></td></tr>
+<tr><td>Try without waiting / with timeout</td><td>no</td><td><code>tryLock()</code>, <code>tryLock(1, SECONDS)</code></td></tr>
+<tr><td>Interruptible wait</td><td>no</td><td><code>lockInterruptibly()</code></td></tr>
+<tr><td>Fairness</td><td>no</td><td>optional</td></tr>
+<tr><td>Multiple wait conditions</td><td>one (<code>wait/notify</code>)</td><td>many <code>Condition</code>s (<code>notFull</code>, <code>notEmpty</code>)</td></tr>
+<tr><td>Introspection</td><td>no</td><td><code>isLocked()</code>, <code>getQueueLength()</code>, <code>isHeldByCurrentThread()</code></td></tr>
+<tr><td>Thread state while waiting</td><td>BLOCKED</td><td>WAITING (parked)</td></tr>
+</table>
+<h3>Variations</h3>
+<pre><code class="language-java">// ReadWriteLock: many readers OR one writer. Good when reads vastly outnumber writes.
+private final ReentrantReadWriteLock rw = new ReentrantReadWriteLock();
+private Map&lt;String, Rate&gt; rates = Map.of();
+Rate get(String ccy) { rw.readLock().lock(); try { return rates.get(ccy); } finally { rw.readLock().unlock(); } }
+void reload(Map&lt;String, Rate&gt; fresh) { rw.writeLock().lock(); try { rates = fresh; } finally { rw.writeLock().unlock(); } }
+
+// StampedLock (Java 8): adds optimistic reads (no locking at all if no writer interfered). Not reentrant.
+private final StampedLock sl = new StampedLock();
+double distance() {
+    long stamp = sl.tryOptimisticRead();
+    double cx = x, cy = y;
+    if (!sl.validate(stamp)) {            // a writer came in: fall back to a real read lock
+        stamp = sl.readLock();
+        try { cx = x; cy = y; } finally { sl.unlockRead(stamp); }
+    }
+    return Math.hypot(cx, cy);
+}</code></pre>
+<p>Note: for the <code>reload</code> example above, a <code>volatile</code> reference to an immutable map is simpler and faster than a ReadWriteLock (see <a href="#volatile">volatile</a>).</p>
+
+<h2 id="trylock">tryLock</h2>
+<p><code>tryLock()</code> returns immediately: <code>true</code> if it got the lock, <code>false</code> if someone else holds it. <code>tryLock(timeout, unit)</code> waits at most that long (and is interruptible). This lets a thread <b>give up</b> instead of waiting forever, which prevents deadlocks and lets you degrade gracefully.</p>
+<pre class="mermaid">
+flowchart LR
+  A[tryLock 200ms] -->|true| B[do work] --> C[unlock in finally]
+  A -->|false| D[fallback: return cached value,<br/>skip, retry later with jitter, or 409/429]
+</pre>
+<pre><code class="language-java">@Service
+public class FxRateService {
+    private final ReentrantLock refreshLock = new ReentrantLock();
+    private volatile Rates cached = Rates.EMPTY;           // readers never lock
+    private final RatesClient client;
+
+    public FxRateService(RatesClient client) { this.client = client; }
+
+    public Rates current() {
+        if (cached.isStale() &amp;&amp; refreshLock.tryLock()) {   // only ONE request thread refreshes…
+            try {
+                if (cached.isStale()) cached = client.fetch();   // re-check inside the lock
+            } finally {
+                refreshLock.unlock();
+            }
+        }
+        return cached;                                     // …everybody else gets the current value immediately
+    }
+}
+
+// Deadlock-free money transfer with timeouts
+boolean transfer(Account a, Account b, BigDecimal amt) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+    while (System.nanoTime() &lt; deadline) {
+        if (a.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+            try {
+                if (b.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+                    try { a.debit(amt); b.credit(amt); return true; }
+                    finally { b.lock.unlock(); }
+                }
+            } finally { a.lock.unlock(); }
+        }
+        Thread.sleep(ThreadLocalRandom.current().nextInt(5, 20));   // random backoff avoids livelock
+    }
+    return false;
+}</code></pre>
+<div class="callout warn">Only call <code>unlock()</code> if <code>tryLock</code> returned <code>true</code>; unlocking a lock you don't hold throws <code>IllegalMonitorStateException</code>.</div>
+
+<h2 id="volatile">volatile</h2>
+<p><code>volatile</code> guarantees <b>visibility</b> and <b>ordering</b> for one variable: every read sees the latest write (from any thread), and writes before a volatile write cannot be reordered after it. It does <b>not</b> make compound actions atomic.</p>
+<div class="grid2">
+<div class="callout ok"><b class="t">Good uses</b>
+<ul><li>Stop/enable flags written by one thread.</li>
+<li>Publishing an immutable object: <code>volatile Config current;</code> then <code>current = newConfig;</code></li>
+<li>Double-checked locking for lazy singletons.</li></ul></div>
+<div class="callout bad"><b class="t">Not enough for</b>
+<ul><li><code>count++</code> (read-modify-write) → use Atomic.</li>
+<li>check-then-act on several fields → use a lock.</li>
+<li>Making the <em>contents</em> of a mutable object thread-safe (volatile is about the reference only).</li></ul></div>
+</div>
+<pre><code class="language-java">@Component
+public class MaintenanceMode {
+    private volatile boolean enabled;          // set by an admin endpoint, read by every request thread
+    public boolean isEnabled() { return enabled; }
+    public void set(boolean on) { enabled = on; }
+}
+
+@Component
+public class PricingRules {
+    // copy-on-write publishing: build a new immutable snapshot, swap the reference
+    private volatile List&lt;Rule&gt; rules = List.of();
+    public List&lt;Rule&gt; rules() { return rules; }
+    @Scheduled(fixedDelay = 60_000)
+    void reload() { rules = List.copyOf(repository.loadRules()); }   // readers see the old OR the new list, never half
+}
+
+// Double-checked locking: the volatile is essential (without it another thread could see a half-constructed object)
+class Lazy {
+    private static volatile ExpensiveClient instance;
+    static ExpensiveClient get() {
+        var local = instance;
+        if (local == null) {
+            synchronized (Lazy.class) {
+                local = instance;
+                if (local == null) instance = local = new ExpensiveClient();
+            }
+        }
+        return local;
+    }
+}</code></pre>
+<p>In Spring you rarely need double-checked locking: beans are already singletons created once at startup.</p>
+
+<h2 id="atomic">Atomic classes</h2>
+<p><code>AtomicInteger</code>, <code>AtomicLong</code>, <code>AtomicBoolean</code>, <code>AtomicReference&lt;V&gt;</code>, the array variants, and the accumulators <code>LongAdder</code>/<code>LongAccumulator</code>. They are <b>lock-free</b>: built on CPU <b>compare-and-swap (CAS)</b>.</p>
+<figure>
+<svg viewBox="0 0 760 170" role="img" aria-label="CAS retry loop">
+  <rect class="box" x="10" y="60" width="150" height="44" rx="8"/><text x="85" y="87" text-anchor="middle">read current = 5</text>
+  <rect class="box" x="200" y="60" width="150" height="44" rx="8"/><text x="275" y="87" text-anchor="middle">compute next = 6</text>
+  <rect class="box2" x="390" y="50" width="200" height="64" rx="8"/><text x="490" y="77" text-anchor="middle">CAS(expected 5, new 6)</text><text x="490" y="97" text-anchor="middle" font-size="12">one CPU instruction</text>
+  <rect class="box3" x="630" y="60" width="120" height="44" rx="8"/><text x="690" y="87" text-anchor="middle">success</text>
+  <line class="line" x1="160" y1="82" x2="198" y2="82" marker-end="url(#ah)"/><line class="line" x1="350" y1="82" x2="388" y2="82" marker-end="url(#ah)"/><line class="line" x1="590" y1="82" x2="628" y2="82" marker-end="url(#ah)"/>
+  <path class="line" d="M490,114 C490,160 85,160 85,106" marker-end="url(#ah)"/>
+  <text x="290" y="156" text-anchor="middle" font-size="13">value changed meanwhile (another thread won) → retry</text>
+</svg>
+</figure>
+<pre><code class="language-java">AtomicLong requests = new AtomicLong();
+requests.incrementAndGet();                         // ++x atomically
+requests.getAndAdd(5);                              // x += 5, returns the old value
+requests.updateAndGet(v -&gt; Math.max(v, 100));       // any function (must be side-effect free: it may run several times)
+requests.accumulateAndGet(7, Long::sum);
+
+AtomicBoolean started = new AtomicBoolean();
+if (started.compareAndSet(false, true)) { initOnce(); }   // exactly one thread wins
+
+// AtomicReference: swap whole immutable snapshots atomically
+record Stats(long count, long totalMs) { Stats add(long ms) { return new Stats(count + 1, totalMs + ms); } }
+AtomicReference&lt;Stats&gt; stats = new AtomicReference&lt;&gt;(new Stats(0, 0));
+stats.updateAndGet(s -&gt; s.add(elapsedMs));          // both fields change together, consistently
+
+// LongAdder: many threads incrementing a hot counter (metrics). Spreads updates over cells, sums on read.
+LongAdder hits = new LongAdder();
+hits.increment();
+long total = hits.sum();                             // not an atomic snapshot while updates continue</code></pre>
+<ul>
+<li><b>AtomicLong vs LongAdder</b>: under heavy contention CAS retries pile up; <code>LongAdder</code> avoids them. Use AtomicLong when you need <code>compareAndSet</code> or an exact value on every read (e.g. ID generation).</li>
+<li><b>ABA problem</b>: CAS sees A, someone changes A→B→A, CAS succeeds wrongly. Rarely matters in Java (GC means references aren't reused while you hold them); <code>AtomicStampedReference</code> adds a version if it does.</li>
+<li>In Spring Boot, prefer <b>Micrometer</b> counters for metrics (<code>meterRegistry.counter("orders.created").increment()</code>), which are thread-safe and exported to Prometheus.</li>
+</ul>
+
+<h2 id="cf">CompletableFuture</h2>
+<p>A <code>Future</code> you can <b>compose</b>: describe "when this finishes, do that", combine several, handle errors, without blocking a thread in between.</p>
+<pre class="mermaid">
+flowchart LR
+  A[supplyAsync: load customer] --> C{thenCombine}
+  B[supplyAsync: load orders] --> C
+  C --> D[thenApply: build view]
+  D --> E[exceptionally / handle: fallback]
+  E --> F[join or return to Spring]
+</pre>
+<pre><code class="language-java">@Service
+public class DashboardService {
+    private final CustomerClient customers;
+    private final OrderClient orders;
+    private final ExecutorService io = Executors.newVirtualThreadPerTaskExecutor();   // or an injected Spring TaskExecutor
+
+    public DashboardService(CustomerClient customers, OrderClient orders) { this.customers = customers; this.orders = orders; }
+
+    public Dashboard load(long id) {
+        CompletableFuture&lt;Customer&gt; c = CompletableFuture.supplyAsync(() -&gt; customers.find(id), io);
+        CompletableFuture&lt;List&lt;Order&gt;&gt; o = CompletableFuture.supplyAsync(() -&gt; orders.recent(id), io)
+                .completeOnTimeout(List.of(), 500, TimeUnit.MILLISECONDS);      // fallback after 500 ms
+
+        return c.thenCombine(o, Dashboard::new)                                  // both in parallel: ~max, not sum, of the 2 latencies
+                .exceptionally(ex -&gt; Dashboard.unavailable(id))                  // any failure → fallback
+                .join();                                                         // wait here (fine on a virtual / request thread)
+    }
+}</code></pre>
+<table>
+<tr><th>Method</th><th>Meaning</th><th>Stream analogy</th></tr>
+<tr><td><code>supplyAsync(supplier, executor)</code> / <code>runAsync</code></td><td>start async work</td><td></td></tr>
+<tr><td><code>thenApply(fn)</code></td><td>transform the result</td><td><code>map</code></td></tr>
+<tr><td><code>thenCompose(fn → CF)</code></td><td>chain another async call that depends on the result</td><td><code>flatMap</code></td></tr>
+<tr><td><code>thenCombine(other, fn)</code></td><td>combine two independent futures</td><td><code>zip</code></td></tr>
+<tr><td><code>thenAccept</code> / <code>thenRun</code></td><td>consume the result / run after</td><td><code>forEach</code></td></tr>
+<tr><td><code>allOf(...)</code> / <code>anyOf(...)</code></td><td>wait for all / the first</td><td></td></tr>
+<tr><td><code>exceptionally</code>, <code>handle</code>, <code>whenComplete</code></td><td>errors: recover / see result+error / side effect</td><td><code>catch</code> / <code>finally</code></td></tr>
+<tr><td><code>orTimeout</code>, <code>completeOnTimeout</code></td><td>fail / default after a timeout (Java 9+)</td><td></td></tr>
+<tr><td><code>join()</code> / <code>get()</code></td><td>block for the result (<code>join</code> throws unchecked <code>CompletionException</code>)</td><td></td></tr>
+<tr><td><code>xxxAsync</code> variants</td><td>run the stage on an executor instead of the completing thread</td><td></td></tr>
+</table>
+<pre><code class="language-java">// Fan out to N calls and collect
+List&lt;CompletableFuture&lt;Price&gt;&gt; futures = skus.stream()
+        .map(sku -&gt; CompletableFuture.supplyAsync(() -&gt; pricing.price(sku), io)).toList();
+List&lt;Price&gt; prices = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+        .thenApply(v -&gt; futures.stream().map(CompletableFuture::join).toList())
+        .join();
+
+// Dependent calls
+CompletableFuture&lt;Invoice&gt; inv = findOrder(id)              // CF&lt;Order&gt;
+        .thenCompose(order -&gt; billing.invoiceFor(order));  // CF&lt;Invoice&gt; (not CF&lt;CF&lt;Invoice&gt;&gt;)</code></pre>
+<div class="callout warn"><b class="t">Pitfalls</b>
+<ul>
+<li>Without an executor, <code>supplyAsync</code> uses <code>ForkJoinPool.commonPool()</code> (cores − 1 threads), shared by the whole JVM including parallel streams. Blocking I/O there starves everyone. <b>Always pass an executor for I/O.</b></li>
+<li>Exceptions are wrapped in <code>CompletionException</code>; use <code>ex.getCause()</code>.</li>
+<li>A future whose exception nobody handles fails <b>silently</b>.</li>
+<li><code>cancel(true)</code> does not interrupt the running task (unlike <code>FutureTask</code>).</li>
+<li>ThreadLocal context (transactions, security, MDC) is not propagated; see <a href="multithreading.html#threadlocal">page 1</a>.</li>
+<li>Spring MVC controllers may return <code>CompletableFuture&lt;T&gt;</code>: the request thread is released and the response is written when the future completes.</li>
+</ul></div>
+
+<h2 id="sealed">Sealed classes (not concurrency, but asked)</h2>
+<p>A <b>sealed</b> class or interface lists exactly which classes may extend/implement it (final since Java 17). Combined with <b>records</b> and <b>pattern matching for switch</b> (final in Java 21), the compiler knows every possible subtype, so a <code>switch</code> can be <b>exhaustive</b> without a <code>default</code>: add a new subtype and every switch that forgot it stops compiling.</p>
+<pre class="mermaid">
+classDiagram
+  class PaymentResult {
+    &lt;&lt;sealed interface&gt;&gt;
+  }
+  class Approved {
+    &lt;&lt;record&gt;&gt;
+    String transactionId
+  }
+  class Declined {
+    &lt;&lt;record&gt;&gt;
+    String reason
+  }
+  class Pending {
+    &lt;&lt;record&gt;&gt;
+    Duration retryAfter
+  }
+  PaymentResult <|.. Approved
+  PaymentResult <|.. Declined
+  PaymentResult <|.. Pending
+</pre>
+<pre><code class="language-java">public sealed interface PaymentResult permits Approved, Declined, Pending {}
+public record Approved(String transactionId) implements PaymentResult {}   // records are implicitly final
+public record Declined(String reason)        implements PaymentResult {}
+public record Pending(Duration retryAfter)   implements PaymentResult {}
+// Subclasses must be final, sealed, or non-sealed (= open again for extension).
+
+@Service
+class PaymentService {
+    PaymentResult pay(Order o) { ... }
+}
+
+@RestController
+class PaymentController {
+    private final PaymentService service;
+    PaymentController(PaymentService service) { this.service = service; }
+
+    @PostMapping("/payments")
+    ResponseEntity&lt;?&gt; pay(@RequestBody Order o) {
+        return switch (service.pay(o)) {                                     // exhaustive: no default needed
+            case Approved(String txId)       -&gt; ResponseEntity.ok(Map.of("tx", txId));            // record pattern
+            case Declined(String reason)     -&gt; ResponseEntity.unprocessableEntity().body(reason);
+            case Pending(Duration after)     -&gt; ResponseEntity.accepted()
+                                                     .header("Retry-After", String.valueOf(after.toSeconds())).build();
+        };
+    }
+}</code></pre>
+<p><b>Why it is useful around concurrency</b>: async code passes <em>messages</em> and <em>results</em> between threads. Sealed hierarchies of immutable records are ideal for that: thread-safe by construction, and the compiler checks every handler covers every case.</p>
+<pre><code class="language-java">sealed interface Command permits Deposit, Withdraw, Shutdown {}
+record Deposit(long cents) implements Command {}
+record Withdraw(long cents) implements Command {}
+record Shutdown() implements Command {}
+
+// One consumer thread owns the balance: no locks needed at all (the "actor" style)
+void loop(BlockingQueue&lt;Command&gt; inbox) throws InterruptedException {
+    long balance = 0;
+    while (true) {
+        switch (inbox.take()) {
+            case Deposit d  -&gt; balance += d.cents();
+            case Withdraw w -&gt; balance -= w.cents();
+            case Shutdown s -&gt; { return; }
+        }
+    }
+}</code></pre>
+<p>For JSON, Jackson needs to know the subtypes: <code>@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")</code> + <code>@JsonSubTypes</code> on the sealed interface.</p>
+
+<h2 id="virtual">Virtual threads in depth</h2>
+<p>Virtual threads (final in Java 21, JEP 444) are <code>java.lang.Thread</code> instances scheduled by the JVM onto a small pool of <b>carrier</b> platform threads (a <code>ForkJoinPool</code> with parallelism = CPU cores). When a virtual thread blocks on I/O, a lock, <code>sleep</code> or a <code>BlockingQueue</code>, the JVM <b>unmounts</b> it (its stack frames move to the heap) and the carrier runs another one. See the picture on <a href="multithreading.html#virtual">page 1</a>.</p>
+<pre><code class="language-java">try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    IntStream.range(0, 100_000).forEach(i -&gt;
+        executor.submit(() -&gt; { Thread.sleep(Duration.ofSeconds(1)); return i; }));
+}   // ≈ 1 second total with 100 000 virtual threads; with a 200-thread pool it would take ≈ 500 s
+
+Thread vt = Thread.ofVirtual().name("import-", 0).start(task);
+vt.isVirtual();   // true</code></pre>
+<h3>Do's and don'ts</h3>
+<table>
+<tr><th>Do</th><th>Don't</th></tr>
+<tr><td>Create one per task; they are cheap.</td><td><b>Pool</b> them (a pool of virtual threads makes no sense).</td></tr>
+<tr><td>Write plain blocking code (JDBC, <code>RestClient</code>, <code>Thread.sleep</code>).</td><td>Use them for <b>CPU-bound</b> work: they don't add cores; use a fixed pool or parallel streams.</td></tr>
+<tr><td>Limit access to scarce resources with a <code>Semaphore</code> or the connection pool size.</td><td>Use thread pool size as a rate limiter: there is no pool any more.</td></tr>
+<tr><td>Use <code>ReentrantLock</code> or (Java 24+) <code>synchronized</code>.</td><td>Store big objects in ThreadLocals: there may be millions of threads (prefer <code>ScopedValue</code>).</td></tr>
+<tr><td>Find pinning with JFR event <code>jdk.VirtualThreadPinned</code>.</td><td>Expect lower latency for a single request: they improve <b>throughput</b>, not speed.</td></tr>
+</table>
+<h3>Pinning</h3>
+<p>A virtual thread is <b>pinned</b> when it cannot unmount while blocked, so it blocks its carrier too. Since there are only ~cores carriers, a few pinned threads can stall the app.</p>
+<ul>
+<li>Java 21–23: blocking inside <code>synchronized</code> (or in <code>Object.wait()</code>) pinned. Common workaround: replace with <code>ReentrantLock</code>.</li>
+<li>Java 24+ (so Java 25): fixed by JEP 491; <code>synchronized</code> no longer pins.</li>
+<li>Still pins on all versions: blocking while a <b>native</b> method (JNI) or a foreign function call is on the stack, and class initialization.</li>
+</ul>
+<h3>In Spring Boot</h3>
+<pre><code class="language-yaml">spring.threads.virtual.enabled: true   # Boot 3.2+, needs Java 21+</code></pre>
+<ul>
+<li>Tomcat (and Jetty) handle each request on a new virtual thread.</li>
+<li><code>@Async</code>, <code>@Scheduled</code>, Spring AMQP / Kafka listeners and others use virtual-thread executors (<code>SimpleAsyncTaskExecutor</code>/<code>SimpleAsyncTaskScheduler</code>).</li>
+<li>Because virtual threads are daemon threads, set <code>spring.main.keep-alive=true</code> if the app has no web server and only scheduled jobs, or the JVM may exit.</li>
+<li>Your bottleneck moves to the DB connection pool and downstream services: protect them (Hikari pool size, <code>Semaphore</code>, Spring Framework 7's <code>@ConcurrencyLimit</code>, Resilience4j bulkheads).</li>
+</ul>
+<pre><code class="language-java">@Service
+class ExternalApi {
+    private final Semaphore permits = new Semaphore(20);     // at most 20 concurrent calls to the partner API
+    Response call(Request r) throws InterruptedException {
+        permits.acquire();
+        try { return client.send(r); } finally { permits.release(); }
+    }
+}</code></pre>
+
+<h2 id="summary">Summary table</h2>
+<table>
+<tr><th>Tool</th><th>Atomicity</th><th>Visibility</th><th>Blocks?</th><th>Typical Spring use</th></tr>
+<tr><td><code>volatile</code></td><td>single read/write only</td><td>yes</td><td>no</td><td>flags, swapping immutable config snapshots</td></tr>
+<tr><td>Atomic*</td><td>single variable, CAS</td><td>yes</td><td>no (spins)</td><td>counters, one-time init, sequence numbers</td></tr>
+<tr><td><code>synchronized</code></td><td>whole block</td><td>yes</td><td>yes</td><td>small in-memory critical sections</td></tr>
+<tr><td><code>ReentrantLock</code> / <code>tryLock</code></td><td>whole block</td><td>yes</td><td>yes / optional</td><td>refresh-once, timeouts, avoid deadlock</td></tr>
+<tr><td><code>CompletableFuture</code></td><td>—</td><td>completion → get</td><td>only on <code>join/get</code></td><td>parallel calls to several services</td></tr>
+<tr><td>Virtual threads</td><td>—</td><td>—</td><td>blocking is cheap</td><td>request handling, I/O fan-out</td></tr>
+<tr><td>Sealed + records</td><td>immutable</td><td>final fields</td><td>—</td><td>results, messages, events, states</td></tr>
+</table>
+</main>
+</body>
+</html>
