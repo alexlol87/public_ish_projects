@@ -17,6 +17,7 @@ Things that others can use.
 | [`local_memory/`](local_memory/) | **Local Memory** (older, file-based): memory and learned habits ("instincts") for GitHub Copilot in VS Code when Copilot Memory is turned off, as plain files managed by one Python script, two skills and four hooks. | `./install.sh` |
 | [`claude_statusline/`](claude_statusline/) | **Claude Code status line**: Victor Rentea's [victor-statusline](https://github.com/victorrentea/victor-statusline) with a Dracula colour theme and calendar days for the weekly reset, self-contained (script, `install.sh` that merges only the `statusLine` setting, my previous bar to switch back). | `./install.sh` |
 | [`ai_presentation/`](ai_presentation/) | **AI at work presentation**: a single-file HTML slide deck (HTML, CSS and JS in one file) with a TL;DR on GitHub Copilot and AI agents: choosing a model (cheap GPT-6 Luna / Claude Haiku 5.5 vs. frontier GPT-6.1 Sol / Claude Opus 5.5, with Artificial Analysis Intelligence Index scores, price, cost and time per task), reasoning effort, permissions, hooks, MD instruction files, custom agents and skills. Keyboard, click and swipe navigation, `F` for fullscreen. | Open `ai_presentation/index.html` in a browser |
+| [`java_learning/`](java_learning/) | **Java & Spring learning site**: a static GitHub Pages site (several HTML pages, Mermaid and SVG diagrams, code examples) on multithreading in Java 25 + Spring Boot, reactive WebFlux and Netty (Java 21), `synchronized` / `ReentrantLock` / `tryLock` / `volatile` / Atomics / `CompletableFuture` / sealed classes / virtual threads, producer-consumer and the concurrency utilities, plus full answers to 60 interview questions (Spring, distributed architecture and caching, RabbitMQ, NoSQL and Elasticsearch, SQL and Oracle, Maven, Jenkins, Git, SonarQube, Kibana, DeployIT). Spring Boot basics and every abbreviation explained. | [Website](https://alexlol87.github.io/public_ish_projects/) (or open `java_learning/index.html`) |
 
 ## Window Borders
 
@@ -51,3 +52,6 @@ README lists them all.
 
 `agents.yml` checks that ReviewAgent's and TesterAgent's custom agents have a name and a description, use only
 known tools that can't edit existing files, and have valid handoffs.
+
+`java-learning-pages.yml` publishes `java_learning/` to GitHub Pages on every push to `main` that changes it. One-time
+setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.

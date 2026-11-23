@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multithreading in Java 25</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs></svg>
+<main>
+<h1>1. Multithreading in Java 25 & Spring Boot</h1>
+<p class="lead">From "what is a thread" to the Java Memory Model, thread pools, ScopedValue and structured concurrency, and how all of it shows up in a Spring Boot service.</p>
+
+<h2 id="basics">Process, thread, core</h2>
+<figure>
+<svg viewBox="0 0 760 260" role="img" aria-label="A JVM process with shared heap and several threads each with own stack">
+  <rect class="box" x="10" y="10" width="520" height="240" rx="12"/>
+  <text x="24" y="34" font-weight="700">JVM process (java -jar app.jar)</text>
+  <rect class="box3" x="30" y="50" width="480" height="60" rx="8"/>
+  <text x="270" y="76" text-anchor="middle" font-weight="600">Heap: shared by ALL threads</text>
+  <text x="270" y="96" text-anchor="middle" font-size="13">objects, beans, static fields, caches → needs synchronization</text>
+  <g font-size="13">
+  <rect class="box2" x="30" y="130" width="110" height="105" rx="8"/><text x="85" y="150" text-anchor="middle" font-weight="600">Thread 1</text><text x="85" y="172" text-anchor="middle">own stack:</text><text x="85" y="190" text-anchor="middle">local vars,</text><text x="85" y="208" text-anchor="middle">call frames</text>
+  <rect class="box2" x="153" y="130" width="110" height="105" rx="8"/><text x="208" y="150" text-anchor="middle" font-weight="600">Thread 2</text><text x="208" y="172" text-anchor="middle">own stack</text>
+  <rect class="box2" x="276" y="130" width="110" height="105" rx="8"/><text x="331" y="150" text-anchor="middle" font-weight="600">Thread 3</text><text x="331" y="172" text-anchor="middle">own stack</text>
+  <rect class="box2" x="399" y="130" width="110" height="105" rx="8"/><text x="454" y="150" text-anchor="middle" font-weight="600">GC, JIT…</text><text x="454" y="172" text-anchor="middle">JVM threads</text>
+  </g>
+  <rect class="box4" x="580" y="40" width="170" height="190" rx="10"/>
+  <text x="665" y="64" text-anchor="middle" font-weight="700">CPU</text>
+  <rect class="box" x="600" y="80" width="60" height="50" rx="6"/><text x="630" y="110" text-anchor="middle">core 1</text>
+  <rect class="box" x="670" y="80" width="60" height="50" rx="6"/><text x="700" y="110" text-anchor="middle">core 2</text>
+  <rect class="box" x="600" y="145" width="60" height="50" rx="6"/><text x="630" y="175" text-anchor="middle">core 3</text>
+  <rect class="box" x="670" y="145" width="60" height="50" rx="6"/><text x="700" y="175" text-anchor="middle">core 4</text>
+  <path class="dash" d="M530,180 L578,150" marker-end="url(#ah)"/>
+  <text x="665" y="220" text-anchor="middle" font-size="12" class="muted">OS scheduler picks</text>
+</svg>
+<figcaption>A process has one memory space (the heap). Each thread has its own stack and runs code independently. The OS decides which thread runs on which core.</figcaption>
+</figure>
+<ul>
+<li><b>Process</b>: a running program with its own memory. Your Spring Boot app is one process.</li>
+<li><b>Thread</b>: a path of execution inside a process. All threads share the heap; each has its own <b>stack</b> (local variables, method calls).</li>
+<li><b>Platform thread</b>: a Java <code>Thread</code> backed 1:1 by an OS thread. Costly: ~1 MB of reserved stack, slow to create, a few thousand per machine is the practical limit.</li>
+<li><b>Virtual thread</b> (Java 21+): a lightweight thread managed by the JVM, not the OS. Millions are fine. See <a href="#virtual">below</a> and <a href="sync-tools.html#virtual">page 3</a>.</li>
+</ul>
+
+<h3>Concurrency vs. parallelism</h3>
+<figure>
+<svg viewBox="0 0 760 200" role="img" aria-label="Timeline comparison of concurrency on one core and parallelism on two cores">
+  <text x="10" y="24" font-weight="700">Concurrency: 1 core, tasks interleave (dealing with many things)</text>
+  <text x="10" y="58" font-size="13">core 1</text>
+  <rect class="box" x="70" y="40" width="80" height="28"/><rect class="box2" x="150" y="40" width="60" height="28"/><rect class="box" x="210" y="40" width="70" height="28"/><rect class="box3" x="280" y="40" width="80" height="28"/><rect class="box2" x="360" y="40" width="90" height="28"/><rect class="box3" x="450" y="40" width="60" height="28"/><rect class="box" x="510" y="40" width="70" height="28"/>
+  <text x="10" y="114" font-weight="700">Parallelism: 3 cores, tasks really run at the same instant (doing many things)</text>
+  <text x="10" y="148" font-size="13">core 1</text><rect class="box" x="70" y="130" width="300" height="22"/>
+  <text x="10" y="172" font-size="13">core 2</text><rect class="box2" x="70" y="156" width="240" height="22"/>
+  <text x="10" y="196" font-size="13">core 3</text><rect class="box3" x="70" y="180" width="270" height="18"/>
+  <text x="620" y="58" font-size="13"><tspan class="muted">blue = task A</tspan></text>
+  <text x="620" y="78" font-size="13"><tspan class="muted">orange = task B</tspan></text>
+  <text x="620" y="98" font-size="13"><tspan class="muted">green = task C</tspan></text>
+</svg>
+</figure>
+<p>A web server is mainly about <b>concurrency</b>: thousands of requests in flight that mostly <em>wait</em> (on the database, on other services). Number crunching (image processing, big reports) is about <b>parallelism</b>: keep every core busy.</p>
+
+<h2 id="create">Creating and running threads</h2>
+<pre><code class="language-java">// 1. The raw way (fine for learning, rarely right in production code)
+Thread t = new Thread(() -&gt; System.out.println("hi from " + Thread.currentThread().getName()));
+t.start();       // start() creates the new thread; calling run() would just run it on the CURRENT thread
+t.join();        // wait until it finishes
+
+// 2. Builders (Java 21+)
+Thread p = Thread.ofPlatform().name("worker-", 0).start(() -&gt; work());   // worker-0
+Thread v = Thread.ofVirtual().name("v-", 0).start(() -&gt; work());         // virtual thread
+Thread.startVirtualThread(() -&gt; work());                                   // shortcut
+
+// 3. The normal way: give tasks to an ExecutorService (a thread pool) and get Futures back
+try (ExecutorService pool = Executors.newFixedThreadPool(4)) {      // ExecutorService is AutoCloseable since Java 19
+    Future&lt;Integer&gt; f = pool.submit(() -&gt; expensiveCalc());         // Callable&lt;Integer&gt;: returns a value, may throw
+    pool.execute(() -&gt; fireAndForget());                            // Runnable: no result
+    Integer result = f.get(2, TimeUnit.SECONDS);                    // blocks up to 2s; throws TimeoutException
+}                                                                   // close() waits for submitted tasks to finish
+
+// 4. One virtual thread per task (Java 21+): the modern default for blocking I/O work
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    List&lt;Future&lt;String&gt;&gt; pages = urls.stream().map(u -&gt; exec.submit(() -&gt; http.get(u))).toList();
+}</code></pre>
+<table>
+<tr><th>Interface</th><th>Method</th><th>Returns</th><th>Can throw checked?</th></tr>
+<tr><td><code>Runnable</code></td><td><code>void run()</code></td><td>nothing</td><td>no</td></tr>
+<tr><td><code>Callable&lt;V&gt;</code></td><td><code>V call()</code></td><td>a value</td><td>yes</td></tr>
+<tr><td><code>Future&lt;V&gt;</code></td><td><code>get()</code>, <code>cancel()</code>, <code>isDone()</code>, <code>state()</code> (19+)</td><td>handle to a pending result</td><td>—</td></tr>
+<tr><td><code>CompletableFuture&lt;V&gt;</code></td><td><code>thenApply</code>, <code>thenCompose</code>, <code>allOf</code>…</td><td>composable future</td><td>see <a href="sync-tools.html#cf">page 3</a></td></tr>
+</table>
+
+<h2 id="states">Thread lifecycle (Thread.State)</h2>
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> NEW: new Thread(...)
+  NEW --> RUNNABLE: start()
+  RUNNABLE --> BLOCKED: wants a synchronized monitor held by another thread
+  BLOCKED --> RUNNABLE: monitor acquired
+  RUNNABLE --> WAITING: wait() / join() / LockSupport.park() (also lock.lock() on a held ReentrantLock)
+  WAITING --> BLOCKED: notify() woke a wait(), must re-acquire the monitor
+  WAITING --> RUNNABLE: joined thread ended / unpark()
+  RUNNABLE --> TIMED_WAITING: sleep(ms) / wait(ms) / join(ms) / parkNanos
+  TIMED_WAITING --> RUNNABLE: time elapsed or notified
+  RUNNABLE --> TERMINATED: run() returns or throws
+  TERMINATED --> [*]
+</pre>
+<div class="callout"><b class="t">Good to know when reading a thread dump</b>
+<code>RUNNABLE</code> does not mean "on a CPU right now"; it means "ready or running" (a thread blocked in native socket read also shows as RUNNABLE). <code>BLOCKED</code> only happens with <code>synchronized</code>; a thread waiting for a <code>ReentrantLock</code> shows as <code>WAITING</code> (parked).</div>
+
+<h2 id="pools">Thread pools in depth</h2>
+<p>Creating a platform thread is expensive, so we reuse them: a <b>pool</b> of worker threads takes tasks from a <b>queue</b>. Every <code>Executors.newXxx</code> factory is a pre-configured <code>ThreadPoolExecutor</code>:</p>
+<pre><code class="language-java">ThreadPoolExecutor pool = new ThreadPoolExecutor(
+    4,                                   // corePoolSize: threads kept alive even when idle
+    16,                                  // maximumPoolSize: upper limit
+    60, TimeUnit.SECONDS,                // extra (non-core) threads die after 60s idle
+    new ArrayBlockingQueue&lt;&gt;(100),       // bounded work queue
+    Thread.ofPlatform().name("report-", 0).factory(),
+    new ThreadPoolExecutor.CallerRunsPolicy()   // when everything is full: run the task on the caller (natural backpressure)
+);</code></pre>
+<p>What happens when you <code>submit()</code> a task. This order surprises many people: <b>the queue fills up before extra threads are created</b>.</p>
+<pre class="mermaid">
+flowchart TD
+  S[submit task] --> A{running threads &lt; corePoolSize?}
+  A -- yes --> N1[start a new core thread for it]
+  A -- no --> B{queue has space?}
+  B -- yes --> Q[put task in queue]
+  B -- no --> C{running threads &lt; maximumPoolSize?}
+  C -- yes --> N2[start an extra thread]
+  C -- no --> R[RejectedExecutionHandler]
+  R --> R1[AbortPolicy: throw RejectedExecutionException - default]
+  R --> R2[CallerRunsPolicy: caller thread runs it]
+  R --> R3[DiscardPolicy / DiscardOldestPolicy: drop a task]
+</pre>
+<table>
+<tr><th>Factory</th><th>Core / max</th><th>Queue</th><th>Watch out</th></tr>
+<tr><td><code>newFixedThreadPool(n)</code></td><td>n / n</td><td>unbounded <code>LinkedBlockingQueue</code></td><td>queue can grow until OutOfMemoryError</td></tr>
+<tr><td><code>newCachedThreadPool()</code></td><td>0 / unbounded</td><td><code>SynchronousQueue</code> (no capacity)</td><td>can create thousands of threads under load</td></tr>
+<tr><td><code>newSingleThreadExecutor()</code></td><td>1 / 1</td><td>unbounded</td><td>tasks run strictly in order</td></tr>
+<tr><td><code>newScheduledThreadPool(n)</code></td><td>n</td><td>delay queue</td><td>for periodic / delayed tasks</td></tr>
+<tr><td><code>newWorkStealingPool()</code></td><td>ForkJoinPool</td><td>per-thread deques</td><td>for CPU-bound divide-and-conquer</td></tr>
+<tr><td><code>newVirtualThreadPerTaskExecutor()</code></td><td>no pool</td><td>none</td><td>a new virtual thread per task; limit concurrency with a <code>Semaphore</code> if needed</td></tr>
+</table>
+<h4>How big should a pool be?</h4>
+<ul>
+<li><b>CPU-bound</b> work: about <code>Runtime.getRuntime().availableProcessors()</code> threads. More only adds context switching.</li>
+<li><b>I/O-bound</b> work (Brian Goetz's formula): <code>threads ≈ cores × (1 + waitTime / computeTime)</code>. 8 cores, requests that wait 90 ms and compute 10 ms → 8 × 10 = 80 threads.</li>
+<li>Or skip the maths for I/O-bound work and use virtual threads, limiting the <em>resource</em> (DB connections, a <code>Semaphore</code>) instead of the threads.</li>
+</ul>
+
+<h2 id="race">Race conditions: why shared state breaks</h2>
+<p><code>count++</code> looks like one step, but it is three: <b>read</b> count, <b>add</b> 1, <b>write</b> back. Two threads can interleave:</p>
+<figure>
+<svg viewBox="0 0 760 230" role="img" aria-label="Two threads both read 5 and both write 6, losing an update">
+  <text x="130" y="22" text-anchor="middle" font-weight="700">Thread A</text>
+  <text x="380" y="22" text-anchor="middle" font-weight="700">memory: count</text>
+  <text x="630" y="22" text-anchor="middle" font-weight="700">Thread B</text>
+  <rect class="box3" x="330" y="34" width="100" height="26" rx="5"/><text x="380" y="52" text-anchor="middle">5</text>
+  <rect class="box" x="40" y="70" width="180" height="26" rx="5"/><text x="130" y="88" text-anchor="middle" font-size="13">read count → 5</text>
+  <rect class="box2" x="540" y="104" width="180" height="26" rx="5"/><text x="630" y="122" text-anchor="middle" font-size="13">read count → 5</text>
+  <rect class="box" x="40" y="138" width="180" height="26" rx="5"/><text x="130" y="156" text-anchor="middle" font-size="13">5 + 1, write 6</text>
+  <rect class="box2" x="540" y="172" width="180" height="26" rx="5"/><text x="630" y="190" text-anchor="middle" font-size="13">5 + 1, write 6</text>
+  <rect class="box4" x="330" y="190" width="100" height="26" rx="5"/><text x="380" y="208" text-anchor="middle">6 (should be 7!)</text>
+  <line class="dash" x1="220" y1="151" x2="328" y2="200"/><line class="dash" x1="540" y1="185" x2="432" y2="200"/>
+</svg>
+<figcaption>A <b>lost update</b>: both threads read 5, both write 6. One increment vanished.</figcaption>
+</figure>
+<pre><code class="language-java">class Counter {
+    private int count;
+    void increment() { count++; }          // NOT thread-safe
+    int get() { return count; }
+}
+
+var c = new Counter();
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (int i = 0; i &lt; 10_000; i++) exec.submit(c::increment);
+}
+System.out.println(c.get());   // often 9 9xx, rarely 10 000
+
+// Fixes (details on page 3):
+synchronized void increment() { count++; }        // mutual exclusion
+private final AtomicInteger count = new AtomicInteger(); count.incrementAndGet();   // lock-free CAS
+private final LongAdder hits = new LongAdder(); hits.increment();                  // best under heavy contention</code></pre>
+<p>Typical race conditions in real code:</p>
+<ul>
+<li><b>Check-then-act</b>: <code>if (!map.containsKey(k)) map.put(k, v);</code> → use <code>map.putIfAbsent</code> / <code>computeIfAbsent</code> on a <code>ConcurrentHashMap</code>.</li>
+<li><b>Read-modify-write</b>: counters, balances → atomics, locks, or let the database do it (<code>UPDATE … SET qty = qty - 1</code>, see <a href="q-nosql-sql.html#q80">Q80</a>).</li>
+<li><b>Non-thread-safe objects shared in a singleton</b>: <code>SimpleDateFormat</code>, <code>HashMap</code>, <code>ArrayList</code>. Use <code>DateTimeFormatter</code> (immutable) and concurrent collections.</li>
+</ul>
+
+<h2 id="jmm">The Java Memory Model (JMM): visibility and ordering</h2>
+<p>Even without lost updates there is a second problem: <b>visibility</b>. Each core has its own caches and the JIT compiler and CPU may <b>reorder</b> instructions. A value written by one thread may not be seen by another thread, ever, unless there is a <b>happens-before</b> relationship.</p>
+<figure>
+<svg viewBox="0 0 760 220" role="img" aria-label="Two cores each with its own cache in front of main memory">
+  <rect class="box" x="40" y="20" width="200" height="50" rx="8"/><text x="140" y="50" text-anchor="middle">Core 1: Thread A writes running=false</text>
+  <rect class="box" x="520" y="20" width="200" height="50" rx="8"/><text x="620" y="50" text-anchor="middle">Core 2: Thread B reads running</text>
+  <rect class="box2" x="40" y="95" width="200" height="40" rx="8"/><text x="140" y="120" text-anchor="middle">L1/L2 cache: false</text>
+  <rect class="box2" x="520" y="95" width="200" height="40" rx="8"/><text x="620" y="120" text-anchor="middle">L1/L2 cache (or register): true</text>
+  <rect class="box3" x="200" y="165" width="360" height="40" rx="8"/><text x="380" y="190" text-anchor="middle">Main memory (RAM)</text>
+  <line class="line" x1="140" y1="70" x2="140" y2="93" marker-end="url(#ah)"/><line class="line" x1="620" y1="93" x2="620" y2="72" marker-end="url(#ah)"/>
+  <path class="dash" d="M140,135 L260,163" marker-end="url(#ah)"/><path class="dash" d="M500,163 L620,137" marker-end="url(#ah)"/>
+  <text x="380" y="150" text-anchor="middle" font-size="13" class="muted">no guarantee WHEN (or if) B's view is refreshed</text>
+</svg>
+</figure>
+<pre><code class="language-java">class Worker implements Runnable {
+    private boolean running = true;           // add volatile to fix
+    public void run() { while (running) { /* work */ } }   // JIT may hoist the read: while(true)
+    public void stop() { running = false; }   // may never be seen by the worker thread
+}</code></pre>
+<h4>Happens-before rules you need to know</h4>
+<p>If action X <em>happens-before</em> Y, then everything X (and anything before X in its thread) wrote is visible to Y.</p>
+<ul>
+<li><b>Monitor lock</b>: unlocking a <code>synchronized</code> block / <code>Lock</code> happens-before every later lock of the same monitor.</li>
+<li><b>volatile</b>: a write to a volatile field happens-before every later read of it.</li>
+<li><b>Thread start / join</b>: <code>t.start()</code> happens-before anything in <code>t</code>; everything in <code>t</code> happens-before <code>t.join()</code> returns.</li>
+<li><b>Executors & concurrent collections</b>: submitting a task happens-before it runs; putting into a <code>BlockingQueue</code> / <code>ConcurrentHashMap</code> happens-before the take/get that sees it; completing a <code>Future</code> happens-before <code>get()</code> returns.</li>
+<li><b>final fields</b>: correctly constructed objects' final fields are visible to all threads without synchronization (that is why immutable objects and records are thread-safe for free).</li>
+</ul>
+<div class="callout ok"><b class="t">Rule of thumb</b>
+Shared mutable state must be either (1) guarded by a lock, (2) volatile (if only one thread writes, or writes don't depend on the old value), (3) atomic, or (4) not shared/not mutable at all. Option 4 (immutable records, local variables, message passing) is the easiest to get right.</div>
+
+<h2 id="liveness">Deadlock, livelock, starvation</h2>
+<pre class="mermaid">
+flowchart LR
+  T1[Thread 1] -- holds --> LA((Lock A))
+  T1 -. waits for .-> LB((Lock B))
+  T2[Thread 2] -- holds --> LB
+  T2 -. waits for .-> LA
+</pre>
+<pre><code class="language-java">// Classic deadlock: two transfers in opposite directions
+void transfer(Account from, Account to, BigDecimal amount) {
+    synchronized (from) {
+        synchronized (to) {        // T1: A→B locks A then B; T2: B→A locks B then A → both stuck forever
+            from.debit(amount); to.credit(amount);
+        }
+    }
+}
+// Fix 1: always lock in a global order (e.g. by id)
+Account first = from.id() &lt; to.id() ? from : to, second = first == from ? to : from;
+synchronized (first) { synchronized (second) { ... } }
+// Fix 2: tryLock with timeout, back off and retry (page 3)</code></pre>
+<table>
+<tr><th>Problem</th><th>What happens</th><th>Typical fix</th></tr>
+<tr><td><b>Deadlock</b></td><td>Threads wait on each other forever. CPU at 0 %.</td><td>Lock ordering, <code>tryLock</code> with timeout, fewer/larger locks, no calls to foreign code while holding a lock.</td></tr>
+<tr><td><b>Livelock</b></td><td>Threads keep reacting to each other and retrying, nobody progresses. CPU busy.</td><td>Random backoff (jitter) before retrying.</td></tr>
+<tr><td><b>Starvation</b></td><td>A thread never gets the lock/CPU because others always win.</td><td>Fair locks (<code>new ReentrantLock(true)</code>), bounded work per lock hold.</td></tr>
+<tr><td><b>Thread pool starvation deadlock</b></td><td>Tasks in a pool wait for other tasks submitted to the same full pool.</td><td>Separate pools, or don't block inside pool tasks; virtual threads.</td></tr>
+</table>
+<p>Find deadlocks with a thread dump: <code>jcmd &lt;pid&gt; Thread.print</code> (or <code>jstack</code>) prints "Found one Java-level deadlock" at the bottom. In Spring Boot, <code>GET /actuator/threaddump</code> returns the same as JSON.</p>
+
+<h2 id="threadlocal">ThreadLocal and ScopedValue</h2>
+<p>A <code>ThreadLocal</code> gives every thread its own copy of a variable. Spring uses it everywhere, and that is why understanding it explains many Spring "mysteries":</p>
+<ul>
+<li><code>SecurityContextHolder</code>: the logged-in user of the current request.</li>
+<li><code>TransactionSynchronizationManager</code>: the current transaction / DB connection.</li>
+<li><code>RequestContextHolder</code>: the current HTTP request.</li>
+<li>SLF4J/Logback <code>MDC</code>: <code>traceId</code> and other fields printed in every log line.</li>
+</ul>
+<div class="callout warn"><b class="t">Consequence: context does not follow you to another thread</b>
+If you call <code>@Async</code>, <code>CompletableFuture.supplyAsync</code> or start a thread, the new thread has <b>no</b> transaction, <b>no</b> security context and <b>no</b> MDC unless something copies them (Spring's <code>TaskDecorator</code>, Micrometer context propagation, <code>DelegatingSecurityContextExecutor</code>). And in a pool, always <code>remove()</code> a ThreadLocal after use, or the next task on that thread sees stale data.</div>
+<pre><code class="language-java">private static final ThreadLocal&lt;String&gt; TENANT = new ThreadLocal&lt;&gt;();
+try {
+    TENANT.set("acme");
+    service.handle();       // anything down the call stack can call TENANT.get()
+} finally {
+    TENANT.remove();        // essential in pooled threads
+}</code></pre>
+<h3>ScopedValue (final in Java 25, JEP 506)</h3>
+<p>The modern replacement for many ThreadLocal uses: an <b>immutable</b> value bound for the duration of a call, automatically unbound afterwards, cheap with millions of virtual threads, and inherited by subtasks of structured concurrency.</p>
+<pre><code class="language-java">static final ScopedValue&lt;String&gt; TENANT = ScopedValue.newInstance();
+
+void handle(Request req) {
+    ScopedValue.where(TENANT, req.tenant())     // bind
+               .run(() -&gt; service.process());   // visible only inside this call (and its forked subtasks)
+}                                               // unbound here automatically: no leaks, no remove()
+
+// anywhere down the stack:
+String tenant = TENANT.get();                   // NoSuchElementException if not bound; TENANT.isBound() to check</code></pre>
+<table>
+<tr><th></th><th>ThreadLocal</th><th>ScopedValue</th></tr>
+<tr><td>Mutability</td><td><code>set()</code> anytime</td><td>immutable within a scope (re-bind in a nested scope)</td></tr>
+<tr><td>Lifetime</td><td>until <code>remove()</code> or thread dies</td><td>exactly the <code>run</code>/<code>call</code> block</td></tr>
+<tr><td>Child threads</td><td>only with <code>InheritableThreadLocal</code> (copies)</td><td>inherited by <code>StructuredTaskScope</code> subtasks (no copy)</td></tr>
+<tr><td>Cost with millions of virtual threads</td><td>memory per thread</td><td>very small</td></tr>
+</table>
+
+<h2 id="interrupt">Interruption and cancellation</h2>
+<p>Java has no safe way to "kill" a thread. Instead you <b>ask</b> it to stop with <code>interrupt()</code>; blocking methods (<code>sleep</code>, <code>wait</code>, <code>BlockingQueue.take</code>, <code>Future.get</code>…) then throw <code>InterruptedException</code>.</p>
+<pre><code class="language-java">public void run() {
+    while (!Thread.currentThread().isInterrupted()) {
+        try {
+            Job job = queue.take();       // throws InterruptedException when interrupted
+            process(job);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();   // restore the flag so callers know
+            return;                               // and stop
+        }
+    }
+}
+// Never: catch (InterruptedException e) { }   ← swallows the stop request</code></pre>
+<p><code>ExecutorService.shutdownNow()</code> and <code>Future.cancel(true)</code> interrupt the worker threads. Spring calls <code>shutdown</code> on its executors when the context closes (graceful shutdown: <code>server.shutdown=graceful</code> is the default since Boot 3.4).</p>
+
+<h2 id="virtual">Virtual threads (Java 21+) in one picture</h2>
+<figure>
+<svg viewBox="0 0 760 250" role="img" aria-label="Many virtual threads mounted on few carrier platform threads">
+  <text x="10" y="22" font-weight="700">Many virtual threads …</text>
+  <g font-size="12">
+  <rect class="box2" x="10" y="34" width="70" height="26" rx="5"/><text x="45" y="52" text-anchor="middle">VT 1</text>
+  <rect class="box2" x="88" y="34" width="70" height="26" rx="5"/><text x="123" y="52" text-anchor="middle">VT 2</text>
+  <rect class="box2" x="166" y="34" width="70" height="26" rx="5"/><text x="201" y="52" text-anchor="middle">VT 3</text>
+  <rect class="box2" x="244" y="34" width="70" height="26" rx="5"/><text x="279" y="52" text-anchor="middle">VT 4</text>
+  <rect class="box2" x="322" y="34" width="70" height="26" rx="5"/><text x="357" y="52" text-anchor="middle">…</text>
+  <rect class="box2" x="400" y="34" width="90" height="26" rx="5"/><text x="445" y="52" text-anchor="middle">VT 1 000 000</text>
+  </g>
+  <text x="10" y="110" font-weight="700">… mounted on a few carrier (platform) threads (a ForkJoinPool, size = cores)</text>
+  <rect class="box" x="10" y="122" width="150" height="34" rx="6"/><text x="85" y="144" text-anchor="middle">carrier 1 runs VT 2</text>
+  <rect class="box" x="175" y="122" width="150" height="34" rx="6"/><text x="250" y="144" text-anchor="middle">carrier 2 runs VT 4</text>
+  <rect class="box" x="340" y="122" width="150" height="34" rx="6"/><text x="415" y="144" text-anchor="middle">carrier 3 idle</text>
+  <line class="line" x1="123" y1="60" x2="85" y2="120" marker-end="url(#ah)"/><line class="line" x1="279" y1="60" x2="250" y2="120" marker-end="url(#ah)"/>
+  <rect class="box3" x="520" y="34" width="230" height="200" rx="10"/>
+  <text x="635" y="56" text-anchor="middle" font-weight="700">VT blocks on I/O</text>
+  <text x="535" y="82" font-size="13">1. VT 1 calls socket.read()</text>
+  <text x="535" y="104" font-size="13">2. JVM unmounts it: its stack</text>
+  <text x="550" y="122" font-size="13">is copied to the heap</text>
+  <text x="535" y="144" font-size="13">3. carrier picks another VT</text>
+  <text x="535" y="166" font-size="13">4. data arrives → VT 1 is</text>
+  <text x="550" y="184" font-size="13">scheduled again, maybe on</text>
+  <text x="550" y="202" font-size="13">a different carrier</text>
+  <text x="10" y="200" font-size="13" class="muted">Blocking code stays simple (no callbacks), but a blocked VT costs</text>
+  <text x="10" y="218" font-size="13" class="muted">a few hundred bytes of heap instead of an OS thread.</text>
+</svg>
+</figure>
+<p>Details, pinning, and do's and don'ts are on <a href="sync-tools.html#virtual">page 3</a>. In Spring Boot (3.2+, Java 21+) one property switches Tomcat, <code>@Async</code>, <code>@Scheduled</code> and more to virtual threads:</p>
+<pre><code class="language-yaml">spring:
+  threads:
+    virtual:
+      enabled: true</code></pre>
+
+<h2 id="structured">Structured concurrency (preview in Java 25)</h2>
+<p>Problem: you fan out to 2 services in parallel. If one fails, the other should be cancelled; if the caller is cancelled, both should be. With plain executors this is easy to get wrong (leaked threads that keep running). <code>StructuredTaskScope</code> treats subtasks like a code block: they start and end inside the <code>try</code>.</p>
+<pre><code class="language-java">// Java 25: javac --release 25 --enable-preview ; java --enable-preview   (API changed in JEP 505: open() + Joiner)
+Dashboard load(long userId) throws InterruptedException {
+    try (var scope = StructuredTaskScope.open()) {              // default: all must succeed
+        Subtask&lt;User&gt; user          = scope.fork(() -&gt; userClient.find(userId));      // each fork = new virtual thread
+        Subtask&lt;List&lt;Order&gt;&gt; orders = scope.fork(() -&gt; orderClient.recent(userId));
+        scope.join();       // waits for both. If one fails: the other is cancelled and join() throws FailedException
+        return new Dashboard(user.get(), orders.get());
+    }                       // leaving the block guarantees no subtask is still running
+}
+
+// "First successful answer wins" (e.g. query 2 replicas, take the fastest)
+try (var scope = StructuredTaskScope.open(StructuredTaskScope.Joiner.&lt;Price&gt;anySuccessfulResultOrThrow())) {
+    scope.fork(() -&gt; replicaA.price(sku));
+    scope.fork(() -&gt; replicaB.price(sku));
+    return scope.join();    // the first result; the slower subtask is cancelled
+}</code></pre>
+<pre class="mermaid">
+flowchart LR
+  P[load userId] --> F1[fork: userClient.find]
+  P --> F2[fork: orderClient.recent]
+  F1 --> J{join}
+  F2 --> J
+  J -- both OK --> R[return Dashboard]
+  J -- one fails --> X[cancel the other, throw]
+</pre>
+
+<h2 id="spring">Threads in a Spring Boot application</h2>
+<pre class="mermaid">
+flowchart TB
+  subgraph Tomcat[Embedded Tomcat]
+    ACC[Acceptor thread: accepts TCP connections] --> POLL[Poller thread: NIO selector]
+    POLL --> EXEC[Worker pool http-nio-8080-exec-1..200<br/>or one virtual thread per request]
+  end
+  EXEC --> CTRL[Your controller → service → repository<br/>runs on the request thread]
+  CTRL -- "@Async" --> ASYNC[applicationTaskExecutor<br/>task-1, task-2 ...]
+  SCHED[taskScheduler scheduling-1<br/>runs @Scheduled methods] --> JOB[Your scheduled jobs]
+  CTRL --> HIK[HikariCP connection pool<br/>default 10 DB connections]
+  ASYNC --> HIK
+</pre>
+<table>
+<tr><th>Thread(s)</th><th>Default (platform threads)</th><th>Property</th></tr>
+<tr><td>Tomcat request workers</td><td>max 200, min spare 10</td><td><code>server.tomcat.threads.max</code></td></tr>
+<tr><td>@Async executor <code>applicationTaskExecutor</code></td><td><code>ThreadPoolTaskExecutor</code>, core 8, unbounded queue (so in practice 8 threads)</td><td><code>spring.task.execution.pool.*</code></td></tr>
+<tr><td>@Scheduled scheduler</td><td><b>1 thread</b>: a slow job delays every other job</td><td><code>spring.task.scheduling.pool.size</code></td></tr>
+<tr><td>DB connections (HikariCP)</td><td>10</td><td><code>spring.datasource.hikari.maximum-pool-size</code></td></tr>
+</table>
+<div class="callout"><b class="t">The real bottleneck is usually the connection pool</b>
+200 Tomcat threads (or 10 000 virtual threads) but only 10 DB connections means at most 10 queries at once; the rest wait in Hikari (default <code>connection-timeout</code> 30 s). Tune both together.</div>
+
+<h3>@Async</h3>
+<pre><code class="language-java">@Configuration
+@EnableAsync                                   // turns on the @Async proxy
+class AsyncConfig {
+    @Bean
+    ThreadPoolTaskExecutor reportExecutor() {  // a dedicated, bounded pool for one kind of work
+        var ex = new ThreadPoolTaskExecutor();
+        ex.setCorePoolSize(4);
+        ex.setMaxPoolSize(8);
+        ex.setQueueCapacity(100);
+        ex.setThreadNamePrefix("report-");
+        ex.setTaskDecorator(new MdcTaskDecorator());   // copy MDC (traceId) to the worker thread
+        ex.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        return ex;   // Spring calls initialize() and shutdown() for you
+    }
+}
+
+@Service
+class ReportService {
+    @Async("reportExecutor")                    // runs on report-N, the caller returns immediately
+    public CompletableFuture&lt;Report&gt; build(long id) {
+        return CompletableFuture.completedFuture(heavyWork(id));
+    }
+    @Async                                     // void: exceptions go to AsyncUncaughtExceptionHandler (logged)
+    public void sendEmail(String to) { ... }
+}
+
+class MdcTaskDecorator implements TaskDecorator {
+    public Runnable decorate(Runnable task) {
+        Map&lt;String, String&gt; mdc = MDC.getCopyOfContextMap();          // captured on the caller thread
+        return () -&gt; {
+            if (mdc != null) MDC.setContextMap(mdc);
+            try { task.run(); } finally { MDC.clear(); }              // runs on the worker thread
+        };
+    }
+}</code></pre>
+<p>Remember the <a href="spring-basics.html#proxies">proxy rules</a>: <code>@Async</code> does nothing on <code>this.method()</code> calls or on private methods, and the async method does <b>not</b> share the caller's transaction.</p>
+
+<h3>@Scheduled</h3>
+<pre><code class="language-java">@Configuration @EnableScheduling class SchedulingConfig {}
+
+@Component
+class Jobs {
+    @Scheduled(fixedRate = 5_000)              // every 5 s, start to start; on the default 1-thread scheduler a run never overlaps itself: if it takes longer, the next one starts late
+    void pollPrices() { ... }
+
+    @Scheduled(fixedDelay = 10_000, initialDelay = 2_000)   // 10 s after the previous run ENDS
+    void cleanup() { ... }
+
+    @Scheduled(cron = "0 0 2 * * MON-FRI", zone = "Europe/Bucharest")  // sec min hour day month weekday
+    void nightlyReport() { ... }
+}</code></pre>
+<div class="callout warn"><b class="t">Scheduled jobs with several instances</b>
+With 3 pods, every <code>@Scheduled</code> method runs 3 times. Use a distributed lock (ShedLock with a DB table, a Redis lock) or a single scheduler service. <code>synchronized</code> only protects inside one JVM.</div>
+
+<h2 id="timeline">What changed from Java 8 to Java 25 (concurrency)</h2>
+<table>
+<tr><th>Java</th><th>Feature</th></tr>
+<tr><td>5</td><td><code>java.util.concurrent</code>: executors, locks, atomics, concurrent collections, the modern JMM (JSR 133)</td></tr>
+<tr><td>7</td><td>ForkJoinPool, Phaser, TransferQueue</td></tr>
+<tr><td>8</td><td><code>CompletableFuture</code>, <code>LongAdder</code>, <code>StampedLock</code>, parallel streams, lambdas</td></tr>
+<tr><td>9</td><td>Flow API (Reactive Streams interfaces), <code>VarHandle</code>, <code>CompletableFuture.orTimeout</code></td></tr>
+<tr><td>19</td><td><code>ExecutorService</code> is <code>AutoCloseable</code>; <code>Future.state()</code>, <code>resultNow()</code></td></tr>
+<tr><td>21 (LTS)</td><td><b>Virtual threads final</b> (JEP 444); sequenced collections; pattern matching for switch; record patterns</td></tr>
+<tr><td>24</td><td><b><code>synchronized</code> no longer pins virtual threads</b> (JEP 491)</td></tr>
+<tr><td>25 (LTS)</td><td><b>Scoped values final</b> (JEP 506); structured concurrency 5th preview (JEP 505); flexible constructor bodies, compact source files and module imports final</td></tr>
+</table>
+</main>
+</body>
+</html>

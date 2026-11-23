@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build and Delivery Tools</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/groovy.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<main>
+<h1>Q81–Q90: Maven, Jenkins, Git, Sonar, Kibana, DeployIT</h1>
+<p class="lead">How code becomes a running service: build (Maven), integrate (Git, Jenkins, SonarQube), deploy (DeployIT), and support it in production (Kibana).</p>
+
+<pre class="mermaid">
+flowchart LR
+  DEV[Developer] -->|git push / PR| GIT[(Git: GitHub, Bitbucket)]
+  GIT -->|webhook| J[Jenkins pipeline]
+  J --> MVN[Maven: compile, test, package]
+  MVN --> SQ[SonarQube: quality gate]
+  SQ --> ART[(Artifact repo: Nexus / Artifactory)]
+  ART --> DIT[DeployIT: deploy to DEV → TEST → UAT → PROD]
+  DIT --> RUN[Running service]
+  RUN -->|logs| ELK[(Elasticsearch)] --> KIB[Kibana: support & debugging]
+</pre>
+
+<h2>Maven</h2>
+
+<details class="qa" id="q81"><summary><span class="qn">Q81.</span>Explain the Maven build lifecycle.</summary><div class="ans">
+<p>Maven has three built-in <b>lifecycles</b>: <code>clean</code> (delete <code>target/</code>), <code>default</code> (build and ship), <code>site</code> (project documentation). A lifecycle is an ordered list of <b>phases</b>; running a phase runs <b>all phases before it</b>. The work itself is done by <b>plugin goals</b> bound to phases.</p>
+<pre class="mermaid">
+flowchart LR
+  V[validate] --> C[compile] --> T[test] --> P[package] --> IT[integration-test] --> VE[verify] --> I[install] --> D[deploy]
+</pre>
+<table>
+<tr><th>Phase</th><th>What happens (default bindings for a JAR)</th></tr>
+<tr><td><code>validate</code></td><td>check the POM is correct</td></tr>
+<tr><td><code>compile</code></td><td><code>resources:resources</code> copies resources, <code>compiler:compile</code> compiles <code>src/main/java</code></td></tr>
+<tr><td><code>test</code></td><td><code>compiler:testCompile</code> then <code>surefire:test</code> runs unit tests (<code>*Test.java</code>)</td></tr>
+<tr><td><code>package</code></td><td><code>jar:jar</code> builds <code>target/app-1.0.jar</code> (Spring Boot plugin repackages it into an executable fat JAR)</td></tr>
+<tr><td><code>integration-test</code> / <code>verify</code></td><td><code>failsafe</code> runs <code>*IT.java</code>; verify checks results, coverage (JaCoCo), quality rules</td></tr>
+<tr><td><code>install</code></td><td>copy the artifact to your <b>local</b> repository <code>~/.m2/repository</code> (so other local projects can use it)</td></tr>
+<tr><td><code>deploy</code></td><td>upload to the <b>remote</b> repository (Nexus/Artifactory) for others and for deployment</td></tr>
+</table>
+<p>(The full default lifecycle has more phases, e.g. <code>generate-sources</code>, <code>process-resources</code>, <code>test-compile</code>, <code>pre-integration-test</code>.)</p>
+<pre><code class="language-bash">mvn clean verify                    # the typical CI command: clean, then everything up to verify
+mvn clean install -DskipTests       # build and install locally, skip running tests
+mvn -pl orders-service -am package  # only one module (+ the modules it depends on)
+mvn dependency:tree                 # run a single plugin goal directly
+mvn spring-boot:run                 # goal from the Spring Boot plugin</code></pre>
+</div></details>
+
+<details class="qa" id="q82"><summary><span class="qn">Q82.</span>How do you manage dependencies and resolve conflicts in Maven?</summary><div class="ans">
+<p>You declare direct dependencies by <b>coordinates</b> (<code>groupId:artifactId:version</code>) and a <b>scope</b>; Maven downloads them and their <b>transitive</b> dependencies from repositories (Maven Central, your Nexus).</p>
+<table>
+<tr><th>Scope</th><th>Compile</th><th>Test</th><th>Runtime / packaged</th><th>Example</th></tr>
+<tr><td><code>compile</code> (default)</td><td>✓</td><td>✓</td><td>✓</td><td>spring-boot-starter-web</td></tr>
+<tr><td><code>provided</code></td><td>✓</td><td>✓</td><td>✗ (the container provides it)</td><td>servlet API in a WAR, Lombok</td></tr>
+<tr><td><code>runtime</code></td><td>✗</td><td>✓</td><td>✓</td><td>JDBC driver</td></tr>
+<tr><td><code>test</code></td><td>✗</td><td>✓</td><td>✗</td><td>JUnit, Mockito, Testcontainers</td></tr>
+<tr><td><code>import</code></td><td colspan="3">only in <code>&lt;dependencyManagement&gt;</code> with type <code>pom</code>: imports a BOM</td><td>spring-cloud-dependencies</td></tr>
+</table>
+<h4>How Maven picks a version when two paths disagree ("dependency mediation")</h4>
+<pre class="mermaid">
+flowchart TB
+  APP[my-app] --> A[lib-a 1.0] --> J1[jackson-databind 2.15]
+  APP --> B[lib-b 1.0] --> C[lib-c 1.0] --> J2[jackson-databind 2.17]
+  N["Nearest wins: 2.15 (depth 2) beats 2.17 (depth 3)<br/>same depth → first declared in the POM wins<br/>NOT the newest!"]
+</pre>
+<p>This can silently pick an old version and cause <code>NoSuchMethodError</code>/<code>ClassNotFoundException</code> at runtime. Tools to control it:</p>
+<pre><code class="language-xml">&lt;!-- 1. dependencyManagement: pin versions centrally (also for transitive deps); Spring Boot's parent does this for ~hundreds of libs --&gt;
+&lt;dependencyManagement&gt;
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;com.fasterxml.jackson&lt;/groupId&gt;
+      &lt;artifactId&gt;jackson-bom&lt;/artifactId&gt;
+      &lt;version&gt;2.17.2&lt;/version&gt;
+      &lt;type&gt;pom&lt;/type&gt;
+      &lt;scope&gt;import&lt;/scope&gt;              &lt;!-- import a BOM --&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+&lt;/dependencyManagement&gt;
+
+&lt;!-- 2. exclusions: cut an unwanted transitive dependency --&gt;
+&lt;dependency&gt;
+  &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+  &lt;artifactId&gt;spring-boot-starter-web&lt;/artifactId&gt;
+  &lt;exclusions&gt;
+    &lt;exclusion&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-tomcat&lt;/artifactId&gt;   &lt;!-- e.g. to use Jetty instead --&gt;
+    &lt;/exclusion&gt;
+  &lt;/exclusions&gt;
+&lt;/dependency&gt;</code></pre>
+<pre><code class="language-bash">mvn dependency:tree -Dverbose -Dincludes=com.fasterxml.jackson.core   # who brings which version, and what was omitted
+mvn dependency:analyze                                                # used-but-undeclared / declared-but-unused
+mvn versions:display-dependency-updates                               # what can be upgraded</code></pre>
+<ul>
+<li><b>Maven Enforcer</b> plugin rules (<code>dependencyConvergence</code>, <code>requireUpperBoundDeps</code>, <code>banDuplicatePomDependencyVersions</code>) fail the build on conflicts instead of discovering them in production.</li>
+<li>With Spring Boot, don't set versions for libraries Boot manages; override via properties (<code>&lt;jackson-bom.version&gt;</code>) only when needed.</li>
+<li>Security: OWASP Dependency-Check / Dependabot / Snyk scan for vulnerable versions.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q83"><summary><span class="qn">Q83.</span>SNAPSHOT vs release versions, and multi-module projects?</summary><div class="ans">
+<div class="grid2">
+<div class="card"><h4>SNAPSHOT: <code>1.4.0-SNAPSHOT</code></h4><p>"Work in progress towards 1.4.0". Can be redeployed many times; the repository stores timestamped builds (<code>1.4.0-20261123.101500-7</code>) and Maven re-checks for newer ones (daily by default, <code>-U</code> forces). Used between developers/CI during development. <b>Never</b> depend on snapshots in a release.</p></div>
+<div class="card"><h4>Release: <code>1.4.0</code></h4><p>Immutable: once deployed to the release repository it never changes (Nexus forbids redeploy). Reproducible builds and safe deployments. Created by the Maven Release plugin (<code>release:prepare</code> / <code>release:perform</code>: removes -SNAPSHOT, tags Git, bumps to 1.4.1-SNAPSHOT) or by CI setting <code>${revision}</code>.</p></div>
+</div>
+<h4>Multi-module projects</h4>
+<pre class="mermaid">
+flowchart TB
+  P["trading-platform (parent POM, packaging pom)<br/>dependencyManagement, pluginManagement, modules"]
+  P --> API[trading-api: DTOs, contracts]
+  P --> CORE[trading-core: domain logic]
+  P --> SVC[trading-service: Spring Boot app]
+  SVC --> CORE --> API
+</pre>
+<pre><code class="language-xml">&lt;!-- parent pom.xml --&gt;
+&lt;groupId&gt;com.acme.trading&lt;/groupId&gt;
+&lt;artifactId&gt;trading-platform&lt;/artifactId&gt;
+&lt;version&gt;${revision}&lt;/version&gt;
+&lt;packaging&gt;pom&lt;/packaging&gt;
+&lt;properties&gt;&lt;revision&gt;1.4.0-SNAPSHOT&lt;/revision&gt;&lt;/properties&gt;   &lt;!-- CI-friendly: mvn -Drevision=1.4.0 deploy --&gt;
+&lt;modules&gt;
+  &lt;module&gt;trading-api&lt;/module&gt;
+  &lt;module&gt;trading-core&lt;/module&gt;
+  &lt;module&gt;trading-service&lt;/module&gt;
+&lt;/modules&gt;</code></pre>
+<ul>
+<li><b>Aggregation</b> (<code>&lt;modules&gt;</code>): one command builds all modules; the <b>reactor</b> sorts them by inter-module dependencies.</li>
+<li><b>Inheritance</b> (<code>&lt;parent&gt;</code>): children inherit properties, <code>dependencyManagement</code>, <code>pluginManagement</code>. Often the same POM does both.</li>
+<li>Build parts: <code>mvn -pl trading-service -am install</code> (<code>-am</code> = also make its dependencies), <code>-amd</code> = also modules that depend on it. Parallel: <code>mvn -T 1C</code>.</li>
+<li>All modules usually share one version and are released together. (When using <code>${revision}</code>, add the <code>flatten-maven-plugin</code> so deployed POMs contain the real version.)</li>
+</ul>
+</div></details>
+
+<h2>Jenkins & CI/CD</h2>
+
+<details class="qa" id="q84"><summary><span class="qn">Q84.</span>What is Jenkins, and how does a Jenkins pipeline work?</summary><div class="ans">
+<p>Jenkins is an open-source automation server for CI/CD. A <b>controller</b> (formerly "master") schedules jobs and serves the UI; <b>agents</b> (nodes, often Docker/Kubernetes pods) run the builds. Hundreds of plugins integrate Git, Maven, Sonar, Docker, Slack, credentials stores.</p>
+<p>A <b>pipeline</b> is defined as code in a <code>Jenkinsfile</code> in the repo (Groovy-based DSL). A <b>Multibranch Pipeline</b> job discovers branches/PRs and runs each one's Jenkinsfile, triggered by webhooks.</p>
+<pre class="mermaid">
+flowchart LR
+  GH[Git push / PR] -->|webhook| C[Jenkins controller]
+  C -->|schedules| A1[agent: maven + jdk25 pod]
+  A1 --> S1[Checkout] --> S2[Build & unit test] --> S3[Sonar + quality gate] --> S4[Publish artifact] --> S5[Deploy DEV]
+  S5 --> S6{Manual approval?} --> S7[Deploy PROD]
+  C --> UI[UI: stages, logs, test reports]
+</pre>
+<pre><code class="language-groovy">// Jenkinsfile (declarative pipeline)
+pipeline {
+    agent { label 'maven-jdk25' }
+    options { timeout(time: 30, unit: 'MINUTES'); buildDiscarder(logRotator(numToKeepStr: '20')) }
+    environment { NEXUS = credentials('nexus-deploy') }     // injects NEXUS_USR / NEXUS_PSW, masked in logs
+    stages {
+        stage('Build & test') {
+            steps { sh 'mvn -B clean verify' }
+            post { always { junit '**/target/surefire-reports/*.xml' } }
+        }
+        stage('Sonar') {
+            steps {
+                withSonarQubeEnv('sonar') { sh 'mvn -B sonar:sonar' }
+                timeout(time: 5, unit: 'MINUTES') { waitForQualityGate abortPipeline: true }
+            }
+        }
+        stage('Publish') {
+            when { branch 'main' }
+            steps { sh 'mvn -B deploy -DskipTests -Drevision=1.4.${BUILD_NUMBER}' }
+        }
+        stage('Deploy to TEST') {
+            when { branch 'main' }
+            steps { sh './deploy.sh test 1.4.${BUILD_NUMBER}' }     // e.g. triggers DeployIT
+        }
+        stage('Deploy to PROD') {
+            when { branch 'main' }
+            input { message 'Deploy to production?' }               // manual approval gate
+            steps { sh './deploy.sh prod 1.4.${BUILD_NUMBER}' }
+        }
+    }
+    post {
+        failure { slackSend channel: '#team', message: "Build failed: ${env.BUILD_URL}" }
+    }
+}</code></pre>
+<ul>
+<li>Declarative (above, structured, recommended) vs scripted (<code>node { … }</code>, plain Groovy, more flexible).</li>
+<li><b>Shared libraries</b>: reusable pipeline steps across many repos (<code>@Library('ci-lib') _</code>).</li>
+<li><code>parallel { }</code> runs stages concurrently; <code>stash/unstash</code> passes files between agents.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q85"><summary><span class="qn">Q85.</span>Describe a good CI/CD pipeline for a Java microservice.</summary><div class="ans">
+<pre class="mermaid">
+flowchart TB
+  subgraph CI["Continuous Integration: every push or PR, fast feedback under 10 min"]
+    A[Checkout] --> B[Compile + unit tests + JaCoCo coverage]
+    B --> C[Static analysis: SonarQube quality gate, Checkstyle/SpotBugs]
+    C --> D[Integration tests: Testcontainers DB, RabbitMQ; contract tests]
+    D --> E[Security: dependency CVE scan, secret scan]
+    E --> F[Build ONE immutable artifact: JAR + Docker image tagged with version / commit]
+    F --> G[Publish: Nexus / container registry, image scan]
+  end
+  subgraph CD["Continuous Delivery: promote the SAME artifact"]
+    G --> H[Deploy DEV automatically + smoke tests]
+    H --> I[Deploy TEST/UAT: DB migrations Flyway/Liquibase, e2e and performance tests]
+    I --> J{Approval / change ticket}
+    J --> K[Deploy PROD: blue-green or canary, health checks]
+    K --> L[Monitor: error rate, latency; automatic rollback]
+  end
+</pre>
+<p>Principles that make it "good":</p>
+<ul>
+<li><b>Build once, deploy many</b>: the exact artifact tested in TEST goes to PROD; only configuration differs (<a href="q-spring.html#q38">Q38</a>).</li>
+<li><b>Fast feedback</b>: unit tests and static checks first; fail fast; PR builds must pass before merge (branch protection).</li>
+<li><b>Everything as code</b>: Jenkinsfile, Dockerfile, Helm charts/K8s manifests, DB migrations versioned in Git.</li>
+<li><b>Quality gates</b>: coverage on new code, no new critical issues, no high CVEs.</li>
+<li><b>Safe database changes</b>: backward-compatible migrations (expand/contract) so old and new versions run side by side during rollout.</li>
+<li><b>Progressive delivery</b>: rolling/blue-green/canary, readiness probes, feature flags to decouple deploy from release.</li>
+<li><b>Rollback</b> is one click (redeploy previous version), and tested.</li>
+<li><b>Traceability</b>: version ↔ commit ↔ ticket ↔ deployment record (audit for regulated environments).</li>
+<li>Secrets from a vault, never in the repo or the image.</li>
+</ul>
+</div></details>
+
+<h2>Git</h2>
+
+<details class="qa" id="q86"><summary><span class="qn">Q86.</span>What Git workflow do you use? Merge vs rebase?</summary><div class="ans">
+<h4>Workflows</h4>
+<table>
+<tr><th>Workflow</th><th>How</th><th>Fits</th></tr>
+<tr><td><b>GitHub flow / trunk-based</b></td><td>short-lived feature branches off <code>main</code>, PR with review + CI, merge to <code>main</code>, deploy from <code>main</code>; feature flags for unfinished work</td><td>continuous delivery, microservices</td></tr>
+<tr><td><b>GitFlow</b></td><td><code>main</code> (released), <code>develop</code> (integration), <code>feature/*</code>, <code>release/*</code>, <code>hotfix/*</code></td><td>scheduled releases, several versions supported</td></tr>
+<tr><td><b>Release branches</b></td><td>trunk + <code>release/1.4</code> branches cut for stabilization; fixes cherry-picked</td><td>enterprise release trains</td></tr>
+</table>
+<p>A typical answer: "feature branch per Jira ticket (<code>feature/ABC-123-rfq-expiry</code>), PR with at least one reviewer and green CI, squash or rebase-merge into <code>main</code>, delete the branch".</p>
+<h4>Merge vs rebase</h4>
+<pre class="mermaid">
+gitGraph
+  commit id: "A"
+  commit id: "B"
+  branch feature
+  checkout feature
+  commit id: "F1"
+  commit id: "F2"
+  checkout main
+  commit id: "C"
+  merge feature id: "M (merge commit)"
+</pre>
+<p>Rebase instead <b>replays</b> F1, F2 on top of C as new commits F1', F2' (new hashes), giving a straight line: A → B → C → F1' → F2'.</p>
+<table>
+<tr><th></th><th><code>git merge</code></th><th><code>git rebase</code></th></tr>
+<tr><td>History</td><td>true history, with merge commits (branchy)</td><td>linear, clean, as if work started from the latest main</td></tr>
+<tr><td>Rewrites commits?</td><td>no</td><td><b>yes</b> (new hashes)</td></tr>
+<tr><td>Conflicts</td><td>resolved once in the merge commit</td><td>possibly once per replayed commit</td></tr>
+<tr><td>Safe on shared branches?</td><td>yes</td><td>only on your own branch (needs force-push)</td></tr>
+</table>
+<div class="callout warn"><b class="t">Golden rule of rebasing</b>
+Never rebase commits that others have already pulled (e.g. <code>main</code>). Rebase your own feature branch onto main to update it (<code>git pull --rebase</code>, <code>git rebase origin/main</code>), then push with <code>git push --force-with-lease</code> (refuses if someone else pushed meanwhile).</div>
+<pre><code class="language-bash">git switch -c feature/ABC-123 origin/main
+# … commits …
+git fetch origin
+git rebase origin/main          # replay my commits on the latest main
+git rebase -i origin/main       # optionally squash/reword commits before review
+git push --force-with-lease
+# PR → review → "Squash and merge" or "Rebase and merge"</code></pre>
+</div></details>
+
+<details class="qa" id="q87"><summary><span class="qn">Q87.</span>Git vs SVN?</summary><div class="ans">
+<pre class="mermaid">
+flowchart LR
+  subgraph SVN[SVN: centralized]
+    S[(central repo: full history)]
+    D1[dev 1: working copy only] <--> S
+    D2[dev 2: working copy only] <--> S
+  end
+  subgraph GIT[Git: distributed]
+    R[(remote: GitHub)]
+    G1[(dev 1: FULL repo + history)] <--> R
+    G2[(dev 2: FULL repo + history)] <--> R
+  end
+</pre>
+<table>
+<tr><th></th><th>Git</th><th>SVN (Subversion)</th></tr>
+<tr><td>Model</td><td><b>distributed</b>: every clone has the full history</td><td><b>centralized</b>: one server has history; clients have a working copy</td></tr>
+<tr><td>Offline work</td><td>commit, branch, diff, log, all offline</td><td>most operations need the server</td></tr>
+<tr><td>Commits</td><td>local first, then <code>push</code>; identified by SHA hashes</td><td><code>commit</code> goes straight to the server; global revision numbers (r1234)</td></tr>
+<tr><td>Branching</td><td>cheap pointers, fast; branch-per-feature is normal</td><td>branches are directory copies (<code>/branches/x</code>); merging historically painful</td></tr>
+<tr><td>Storage</td><td>snapshots of the whole tree, content-addressed</td><td>per-file deltas</td></tr>
+<tr><td>Partial checkout / locking</td><td>clones everything (sparse checkout and LFS exist); no file locking (LFS adds it)</td><td>check out a subfolder; file locking for binaries</td></tr>
+<tr><td>Access control</td><td>per repository</td><td>per path</td></tr>
+<tr><td>Ecosystem</td><td>GitHub/GitLab/Bitbucket, PRs, CI integrations: the industry standard</td><td>legacy, some large binary/asset-heavy shops</td></tr>
+</table>
+</div></details>
+
+<h2>Quality, support, deployment</h2>
+
+<details class="qa" id="q88"><summary><span class="qn">Q88.</span>What is SonarQube, and what does it check?</summary><div class="ans">
+<p>SonarQube is a <b>static code analysis</b> platform: it scans source code (without running it) on every build, stores results over time, and decides via a <b>quality gate</b> whether the code is acceptable. SonarQube Cloud (formerly SonarCloud) is the hosted version; SonarQube for IDE (formerly SonarLint) shows the same issues in your editor.</p>
+<table>
+<tr><th>What it reports</th><th>Examples</th></tr>
+<tr><td><b>Bugs</b> (reliability)</td><td>possible NullPointerException, resource not closed, <code>equals</code> without <code>hashCode</code>, wrong <code>BigDecimal</code> comparison</td></tr>
+<tr><td><b>Vulnerabilities</b> (security)</td><td>SQL injection via string concatenation, weak crypto, hard-coded credentials, path traversal</td></tr>
+<tr><td><b>Security hotspots</b></td><td>security-sensitive code a human must review (CORS config, regex DoS, disabled CSRF)</td></tr>
+<tr><td><b>Code smells</b> (maintainability)</td><td>high cognitive complexity, long methods, unused code, duplicated blocks, naming</td></tr>
+<tr><td><b>Coverage</b></td><td>% of lines/branches covered by tests (imported from JaCoCo reports; Sonar doesn't run tests)</td></tr>
+<tr><td><b>Duplications</b></td><td>% duplicated lines</td></tr>
+<tr><td><b>Technical debt</b></td><td>estimated time to fix all code smells; A–E ratings</td></tr>
+</table>
+<p>Newer versions classify issues by software quality (Security, Reliability, Maintainability) and severity, but the ideas are the same.</p>
+<ul>
+<li><b>Quality profile</b>: which rules are active per language (e.g. "Sonar way").</li>
+<li><b>Quality gate</b>: pass/fail conditions, by default focused on <b>new code</b> ("clean as you code"): e.g. coverage on new code ≥ 80 %, no new bugs/vulnerabilities, all new hotspots reviewed, duplication ≤ 3 %. The pipeline fails if the gate fails (<code>waitForQualityGate</code> in Jenkins, <a href="#q84">Q84</a>).</li>
+<li>PR decoration: issues shown as comments on the pull request.</li>
+</ul>
+<pre><code class="language-bash">mvn clean verify sonar:sonar -Dsonar.host.url=https://sonar.acme.com -Dsonar.token=$SONAR_TOKEN</code></pre>
+<p>The repository's own <a href="https://github.com/alexlol87/public_ish_projects/tree/main/springboot_java_utilities"><code>springboot_java_utilities</code></a> project shows SonarQube next to Checkstyle, SpotBugs and PMD on a demo Spring Boot app.</p>
+</div></details>
+
+<details class="qa" id="q89"><summary><span class="qn">Q89.</span>What is Kibana, and how would you use it for support?</summary><div class="ans">
+<p>Kibana is the web UI of the Elastic Stack: it queries and visualizes data stored in Elasticsearch. In the <b>ELK</b> stack, applications' logs are collected (Filebeat / Elastic Agent), optionally parsed and enriched (Logstash or ingest pipelines), stored in Elasticsearch, and explored in Kibana.</p>
+<pre class="mermaid">
+flowchart LR
+  A1[orders pods: JSON logs to stdout] --> FB[Filebeat / Elastic Agent]
+  A2[pricing pods] --> FB
+  FB --> LS[Logstash: parse, enrich, mask PII]
+  LS --> ES[(Elasticsearch: logs-* data streams)]
+  ES --> K[Kibana: Discover, Dashboards, Alerts]
+</pre>
+<h4>A support investigation, step by step</h4>
+<ol>
+<li>Ticket: "Client X got an error placing an RFQ around 14:05". Open <b>Discover</b>, set the time range 13:55–14:15.</li>
+<li>Filter with <b>KQL</b> (Kibana Query Language):
+<pre><code class="language-bash">service.name : "rfq-service" and log.level : "ERROR" and client.id : "X"</code></pre></li>
+<li>Find the error, copy its <code>trace.id</code>, then search <b>all services</b> by it: <code>trace.id : "4bf92f3577b34da6a3ce929d0e0e4736"</code> → the full story of that request across gateway, RFQ service, pricing, RabbitMQ consumer (<a href="q-distributed.html#q55">Q55</a>).</li>
+<li>Read the stack trace and surrounding INFO logs, check whether it is one client or everybody (remove the client filter, look at the histogram for a spike).</li>
+<li>Correlate with deployments or downstream outages (dashboards of error rate per service/version).</li>
+</ol>
+<ul>
+<li><b>Dashboards</b> (Lens visualizations): errors per service, top exception types, slowest endpoints, RFQs expired per hour.</li>
+<li><b>Alerts / rules</b>: notify Teams/Slack/email when ERROR count &gt; N in 5 minutes or a specific exception appears.</li>
+<li><b>Saved searches</b> for common support questions; <b>APM</b> and <b>Observability</b> apps if Elastic APM agents are installed.</li>
+<li>Make logs useful: structured JSON, consistent field names (ECS), <code>traceId</code>, business ids (rfqId, clientId), no secrets/PII.</li>
+</ul>
+</div></details>
+
+<details class="qa" id="q90"><summary><span class="qn">Q90.</span>What is DeployIT, and where does it fit in the delivery process?</summary><div class="ans">
+<p><b>Deployit</b> (by XebiaLabs, later renamed <b>XL Deploy</b>, now <b>Digital.ai Deploy</b>) is an <b>application release automation</b> tool. It takes the artifacts CI produced and deploys them to environments (DEV, TEST, UAT, PROD) in a repeatable, audited, <b>model-based</b> way: you describe <em>what</em> should be deployed <em>where</em>, and it computes the steps (the deployment plan), including updates and rollbacks.</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph CI[CI: Jenkins + Maven]
+    B[build, test, Sonar] --> PKG["deployment package (DAR):<br/>rfq-service 1.4.17 = JAR + config templates + SQL"]
+  end
+  PKG -->|import| XL[DeployIT / XL Deploy repository]
+  XL --> ENVD[Environment DEV<br/>hosts, app servers, K8s namespaces, dictionaries]
+  XL --> ENVT[Environment TEST]
+  XL --> ENVP[Environment PROD]
+  XL -.->|"generated plan: stop → copy → configure → start → check"| ENVP
+</pre>
+<table>
+<tr><th>Concept</th><th>Meaning</th></tr>
+<tr><td><b>Application / Deployment package</b></td><td>a versioned bundle of everything deployed (JARs, WARs, config files, SQL scripts, K8s/Helm resources); format DAR, described by <code>deployit-manifest.xml</code></td></tr>
+<tr><td><b>Infrastructure</b> (containers)</td><td>targets: hosts (SSH), Tomcat/WebLogic/JBoss servers, databases, Kubernetes, cloud</td></tr>
+<tr><td><b>Environment</b></td><td>a named group of infrastructure (e.g. UAT = 2 hosts + 1 DB)</td></tr>
+<tr><td><b>Dictionary</b></td><td>per-environment values substituted into placeholders in config (<code>{{DB_URL}}</code>): build once, configure per environment</td></tr>
+<tr><td><b>Deployment plan</b></td><td>steps generated by comparing the package with what is deployed: initial install, upgrade (only changed parts), undeploy, <b>rollback</b></td></tr>
+<tr><td><b>Permissions & audit</b></td><td>who may deploy what to which environment, full history (important for banks: change management)</td></tr>
+</table>
+<p><b>Where it fits</b>: after CI. Jenkins builds and tests, publishes the artifact to Nexus and imports a deployment package into DeployIT; deployments to each environment are triggered from Jenkins (plugin or CLI), from Digital.ai Release (orchestration of approvals and release trains), or manually by an authorized person. It separates <em>building</em> software (CI) from <em>deploying</em> it (CD) and enforces "the same package in every environment".</p>
+<p>Comparable tools: Octopus Deploy, Argo CD/Flux (GitOps for Kubernetes), Spinnaker, Ansible-based deploys, Helm.</p>
+</div></details>
+</main>
+</body>
+</html>

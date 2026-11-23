@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Java & Spring Learning</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<main>
+<h1>Java & Spring Boot learning notes</h1>
+<p class="lead">Concurrency in Java 21 / 25, Spring MVC vs. reactive WebFlux, and 60 interview questions (Spring, distributed systems, RabbitMQ, Elasticsearch, SQL/Oracle, build and delivery tools), explained from the basics up, with diagrams and runnable-style code.</p>
+
+<div class="callout"><b class="t">How to use this site</b>
+If Spring Boot itself still feels shaky, read <a href="spring-basics.html">Spring Boot basics</a> first: every other page assumes you know what a <em>bean</em>, a <em>proxy</em> and a <em>request thread</em> are. Then go through the concurrency pages in order (1 → 4). The interview pages can be read in any order; each answer is collapsible so you can quiz yourself first.</div>
+
+<h2 id="map">Map of the site</h2>
+<div class="home-cards">
+  <a class="card" href="spring-basics.html"><b>Spring Boot basics</b><p>IoC, DI, beans, starters, auto-configuration, the request flow through DispatcherServlet, proxies, profiles.</p></a>
+  <a class="card" href="multithreading.html"><b>1. Multithreading in Java 25 + Spring Boot</b><p>Threads, states, pools, the Java Memory Model, race conditions, deadlocks, ThreadLocal, ScopedValue, structured concurrency, @Async, @Scheduled.</p></a>
+  <a class="card" href="webflux.html"><b>2. Reactive WebFlux & Netty (Java 21)</b><p>Event loop vs thread-per-request, what Netty does, Mono/Flux, schedulers, backpressure, blocking pitfalls, MVC vs WebFlux.</p></a>
+  <a class="card" href="sync-tools.html"><b>3. synchronized, locks, volatile, sealed, CompletableFuture, atomics, virtual threads</b><p>What each is, when to use it, how it looks inside a Spring service.</p></a>
+  <a class="card" href="producer-consumer.html"><b>4. Producer-consumer & concurrency utilities</b><p>wait/notify, BlockingQueue, Semaphore, CountDownLatch, CyclicBarrier, Phaser, concurrent collections, ForkJoin.</p></a>
+  <a class="card" href="q-spring.html"><b>5. Interview questions Q31–Q90</b><p>Spring, distributed architecture & caching, RabbitMQ, NoSQL & Elasticsearch, SQL & Oracle, Maven, Jenkins, Git, Sonar, Kibana, DeployIT.</p></a>
+</div>
+
+<h2 id="big-picture">The big picture in one diagram</h2>
+<p>Most of what is on this site fits into the life of one request travelling through a typical microservice landscape:</p>
+<pre class="mermaid">
+flowchart LR
+  C[Client / browser] -->|HTTPS + JWT| GW[API gateway / load balancer]
+  GW --> S1[Spring Boot service A<br/>Tomcat threads or Netty event loop]
+  S1 -->|SQL over JDBC / R2DBC| DB[(Oracle / PostgreSQL)]
+  S1 -->|GET / SET| R[(Redis cache)]
+  S1 -->|publish message| MQ{{RabbitMQ}}
+  MQ -->|consume| S2[Spring Boot service B]
+  S2 -->|index documents| ES[(Elasticsearch)]
+  S1 -. logs, metrics, traces .-> OBS[ELK / Kibana, Prometheus, Grafana]
+  S2 -. logs, metrics, traces .-> OBS
+  CI[Git → Jenkins → Maven → Sonar → DeployIT] -. builds and deploys .-> S1
+  CI -. builds and deploys .-> S2
+</pre>
+
+<h2 id="glossary">Glossary of abbreviations and terms</h2>
+<p>Every abbreviation used anywhere on the site, in plain words.</p>
+
+<h3>Java & the JVM</h3>
+<dl class="gloss">
+<dt>JDK</dt><dd>Java Development Kit: compiler (<code>javac</code>), tools and the runtime. What you install to build Java code.</dd>
+<dt>JRE</dt><dd>Java Runtime Environment: just what is needed to <em>run</em> Java. Since Java 11 it is not shipped separately; you use a JDK or a trimmed runtime made with <code>jlink</code>.</dd>
+<dt>JVM</dt><dd>Java Virtual Machine: the program that loads <code>.class</code> files (bytecode) and executes them, manages memory and threads.</dd>
+<dt>JIT</dt><dd>Just-In-Time compiler: turns hot bytecode into native machine code while the program runs.</dd>
+<dt>GC</dt><dd>Garbage Collector: frees memory of objects nobody references any more (G1 is the default; ZGC and Shenandoah are low-pause collectors).</dd>
+<dt>JEP</dt><dd>JDK Enhancement Proposal: the numbered document describing a new Java feature, e.g. JEP 444 = virtual threads.</dd>
+<dt>LTS</dt><dd>Long-Term Support release. Java 17, 21 and 25 are LTS; companies standardize on them.</dd>
+<dt>Preview feature</dt><dd>A finished-but-not-final language/API feature; needs <code>--enable-preview</code> to compile and run.</dd>
+<dt>JMM</dt><dd>Java Memory Model: the rules for when a write made by one thread becomes visible to another (see <a href="multithreading.html#jmm">page 1</a>).</dd>
+<dt>CAS</dt><dd>Compare-And-Swap: a single CPU instruction "set X to new value only if it still equals expected value". The basis of Atomic classes and lock-free code.</dd>
+<dt>OS</dt><dd>Operating System (Linux, macOS, Windows). Platform threads are OS threads.</dd>
+<dt>CPU core</dt><dd>One hardware execution unit. N cores = at most N threads truly running at the same instant.</dd>
+<dt>I/O</dt><dd>Input/Output: network calls, disk reads, database queries. Waiting for I/O is where most server time goes.</dd>
+<dt>NIO</dt><dd>"New I/O" (<code>java.nio</code>): non-blocking sockets, selectors and buffers. Netty is built on it (or on Linux <code>epoll</code> directly).</dd>
+<dt>FIFO / LIFO</dt><dd>First-In-First-Out (a queue) / Last-In-First-Out (a stack).</dd>
+<dt>POJO</dt><dd>Plain Old Java Object: a normal class that does not extend any framework class.</dd>
+<dt>DTO</dt><dd>Data Transfer Object: an object used only to carry data (often a Java <code>record</code>), e.g. the JSON body of a REST call.</dd>
+</dl>
+
+<h3>Spring & web</h3>
+<dl class="gloss">
+<dt>Spring Framework</dt><dd>The core library: dependency injection container, web (MVC, WebFlux), transactions, data access helpers.</dd>
+<dt>Spring Boot</dt><dd>An opinionated layer on top of Spring: starters, auto-configuration, embedded server, <code>application.yml</code>, Actuator. Spring Boot 4 (Nov 2025) is built on Spring Framework 7; Boot 3.x on Framework 6.</dd>
+<dt>IoC</dt><dd>Inversion of Control: the framework creates and wires your objects instead of you calling <code>new</code>.</dd>
+<dt>DI</dt><dd>Dependency Injection: the way IoC is done: dependencies are handed to an object (usually through its constructor).</dd>
+<dt>Bean</dt><dd>Any object created and managed by the Spring container.</dd>
+<dt>ApplicationContext</dt><dd>The Spring container: holds all beans and wires them together.</dd>
+<dt>AOP</dt><dd>Aspect-Oriented Programming: adding behaviour (transactions, security, caching, logging) around method calls without touching the method, implemented in Spring with <em>proxies</em>.</dd>
+<dt>Proxy</dt><dd>A generated wrapper object that sits in front of your bean and runs extra logic before/after delegating to it. <code>@Transactional</code>, <code>@Async</code>, <code>@Cacheable</code> all work through proxies.</dd>
+<dt>MVC</dt><dd>Model-View-Controller. "Spring MVC" is the classic servlet-based, blocking web stack.</dd>
+<dt>Servlet</dt><dd>The Java standard API for handling HTTP in a server like Tomcat (Jakarta Servlet). One request = one thread in the classic model.</dd>
+<dt>WebFlux</dt><dd>Spring's reactive, non-blocking web stack, by default running on Netty.</dd>
+<dt>Netty</dt><dd>A Java network library with an event-loop, non-blocking I/O model. WebFlux's default server.</dd>
+<dt>Reactor</dt><dd>Project Reactor: the reactive library behind WebFlux. Types <code>Mono</code> (0..1 value) and <code>Flux</code> (0..N values).</dd>
+<dt>HTTP / HTTPS</dt><dd>HyperText Transfer Protocol (S = over TLS encryption).</dd>
+<dt>REST</dt><dd>REpresentational State Transfer: an API style using HTTP verbs (GET, POST, PUT, PATCH, DELETE) on resources (<code>/orders/42</code>).</dd>
+<dt>JSON / YAML</dt><dd>JavaScript Object Notation (data format for APIs) / "YAML Ain't Markup Language" (indentation-based format used for <code>application.yml</code>).</dd>
+<dt>JPA</dt><dd>Jakarta Persistence API: the standard for mapping Java objects to database tables. Hibernate is the implementation Spring Boot uses.</dd>
+<dt>ORM</dt><dd>Object-Relational Mapping: the general idea behind JPA/Hibernate.</dd>
+<dt>JDBC</dt><dd>Java Database Connectivity: the low-level, blocking API to talk SQL to a database.</dd>
+<dt>R2DBC</dt><dd>Reactive Relational Database Connectivity: the non-blocking equivalent of JDBC for WebFlux.</dd>
+<dt>CRUD</dt><dd>Create, Read, Update, Delete.</dd>
+<dt>JWT</dt><dd>JSON Web Token: a signed token carrying claims (who you are, scopes, expiry).</dd>
+<dt>OAuth2 / OIDC</dt><dd>OAuth 2.0 is the protocol for getting access tokens; OpenID Connect adds login (identity) on top of it.</dd>
+<dt>RBAC</dt><dd>Role-Based Access Control.</dd>
+<dt>CSRF / CORS</dt><dd>Cross-Site Request Forgery (an attack, protection is on by default in Spring Security) / Cross-Origin Resource Sharing (browser rule about which other sites may call your API).</dd>
+<dt>MDC</dt><dd>Mapped Diagnostic Context: per-thread key/values (like <code>traceId</code>) that the logger adds to every log line.</dd>
+</dl>
+
+<h3>Architecture, data & messaging</h3>
+<dl class="gloss">
+<dt>CAP</dt><dd>Consistency, Availability, Partition tolerance (see <a href="q-distributed.html#q47">Q47</a>).</dd>
+<dt>ACID</dt><dd>Atomicity, Consistency, Isolation, Durability: guarantees of a database transaction (<a href="q-nosql-sql.html#q76">Q76</a>).</dd>
+<dt>BASE</dt><dd>Basically Available, Soft state, Eventually consistent: the looser model many NoSQL systems use.</dd>
+<dt>SQL / NoSQL</dt><dd>Structured Query Language (relational databases) / "Not only SQL" (document, key-value, column, graph stores).</dd>
+<dt>PL/SQL</dt><dd>Oracle's Procedural Language extension to SQL (<a href="q-nosql-sql.html#q78">Q78</a>).</dd>
+<dt>MVCC</dt><dd>Multi-Version Concurrency Control: databases keep old row versions so readers do not block writers.</dd>
+<dt>TTL</dt><dd>Time To Live: how long a cache entry / message lives before it expires.</dd>
+<dt>AMQP</dt><dd>Advanced Message Queuing Protocol: RabbitMQ's main protocol (version 0-9-1).</dd>
+<dt>DLX / DLQ</dt><dd>Dead Letter eXchange / Dead Letter Queue: where failed or expired messages go.</dd>
+<dt>ES</dt><dd>Elasticsearch, a search engine built on Apache Lucene.</dd>
+<dt>ELK</dt><dd>Elasticsearch + Logstash + Kibana: the classic log stack (with Beats it is called the "Elastic Stack").</dd>
+<dt>KQL</dt><dd>Kibana Query Language, e.g. <code>level:ERROR and service:orders</code>.</dd>
+<dt>LB</dt><dd>Load Balancer: spreads requests over several instances.</dd>
+<dt>K8s / HPA</dt><dd>Kubernetes (container orchestrator) / Horizontal Pod Autoscaler (adds pods when CPU or another metric is high).</dd>
+<dt>SLA / SLO</dt><dd>Service Level Agreement (contract) / Objective (internal target), e.g. "99.9 % of requests under 300 ms".</dd>
+<dt>p99</dt><dd>99th percentile latency: 99 % of requests are faster than this.</dd>
+<dt>RPS / TPS</dt><dd>Requests / Transactions Per Second.</dd>
+<dt>RFQ</dt><dd>Request For Quote: a client asks for a price (the "client → sales → trader" flow in <a href="q-rabbitmq.html#q65">Q65</a>).</dd>
+</dl>
+
+<h3>Build & delivery</h3>
+<dl class="gloss">
+<dt>POM</dt><dd>Project Object Model: Maven's <code>pom.xml</code>.</dd>
+<dt>BOM</dt><dd>Bill Of Materials: a POM that only pins versions of many libraries (e.g. <code>spring-boot-dependencies</code>).</dd>
+<dt>SNAPSHOT</dt><dd>A Maven version that is still changing (<code>1.4.0-SNAPSHOT</code>); a release version never changes.</dd>
+<dt>CI / CD</dt><dd>Continuous Integration (build + test every change) / Continuous Delivery or Deployment (automatically ship it).</dd>
+<dt>SCM / VCS</dt><dd>Source Code Management / Version Control System (Git, SVN).</dd>
+<dt>SVN</dt><dd>Apache Subversion, a centralized version control system.</dd>
+<dt>PR / MR</dt><dd>Pull Request (GitHub) / Merge Request (GitLab): a request to merge a branch, with review.</dd>
+<dt>DAR</dt><dd>Deployment ARchive: the package format of DeployIT / XL Deploy / Digital.ai Deploy.</dd>
+</dl>
+</main>
+</body>
+</html>

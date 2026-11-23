@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spring Boot Basics</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script src="assets/site.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs></svg>
+<main>
+<h1>Spring Boot basics</h1>
+<p class="lead">The foundation the rest of the site builds on: what Spring actually does for you, what a bean is, how a request flows through your code, and why "proxy" and "singleton" matter so much for concurrency.</p>
+
+<h2>Spring vs. Spring Boot</h2>
+<div class="grid2">
+<div class="card"><h4>Spring Framework</h4>
+<p>A set of libraries. Its heart is the <b>IoC container</b> (the <code>ApplicationContext</code>) that creates your objects and plugs them into each other. Around it: Spring MVC and WebFlux (web), transaction management, data access, AOP, events, scheduling, caching abstraction.</p>
+<p>On its own you had to configure all of this yourself (XML or Java config, deploy a WAR into a Tomcat).</p></div>
+<div class="card"><h4>Spring Boot</h4>
+<p>Opinionated defaults on top of Spring:</p>
+<ul>
+<li><b>Starters</b>: one dependency (<code>spring-boot-starter-web</code>) pulls a whole tested set of libraries.</li>
+<li><b>Auto-configuration</b>: "Jackson is on the classpath and you didn't define an <code>ObjectMapper</code>? I'll create one."</li>
+<li><b>Embedded server</b>: Tomcat or Netty inside your JAR; you run <code>java -jar app.jar</code>.</li>
+<li><b>Externalized config</b> (<code>application.yml</code>, profiles, env vars) and <b>Actuator</b> (health, metrics).</li>
+</ul></div>
+</div>
+<table>
+<tr><th>Spring Boot</th><th>Spring Framework</th><th>Minimum Java</th><th>Notes</th></tr>
+<tr><td>3.x (2022–2025)</td><td>6.x</td><td>17</td><td><code>javax.*</code> → <code>jakarta.*</code>, virtual threads support from 3.2 (on Java 21+)</td></tr>
+<tr><td>4.x (from Nov 2025)</td><td>7.x</td><td>17 (Java 25 recommended)</td><td>Jackson 3, JSpecify null-safety, modular auto-configuration, built-in <code>@Retryable</code>/<code>@ConcurrencyLimit</code>, API versioning</td></tr>
+</table>
+
+<h2>IoC and dependency injection</h2>
+<p><b>Without</b> Spring, every class builds what it needs. It is hard to test (you cannot swap the real database for a fake) and every class knows how to construct the others:</p>
+<pre><code class="language-java">public class OrderService {
+    private final OrderRepository repo = new JdbcOrderRepository(new HikariDataSource(...)); // hard-wired
+    private final PaymentClient payments = new PaymentClient("https://pay...");             // hard-wired
+}</code></pre>
+<p><b>With</b> Spring, the class just <em>declares</em> what it needs in its constructor, and the container gives it the objects (<b>inversion of control</b>: you no longer control creation, the container does):</p>
+<pre><code class="language-java">@Service                       // "Spring, please create one instance of this and manage it"
+public class OrderService {
+    private final OrderRepository repo;
+    private final PaymentClient payments;
+
+    // Constructor injection: Spring sees one constructor and passes the beans in. No @Autowired needed.
+    public OrderService(OrderRepository repo, PaymentClient payments) {
+        this.repo = repo;
+        this.payments = payments;
+    }
+}</code></pre>
+<pre class="mermaid">
+flowchart LR
+  subgraph Container[ApplicationContext: the IoC container]
+    direction LR
+    DS[(DataSource bean)] --> REPO[OrderRepository bean]
+    REPO --> SVC[OrderService bean]
+    PAY[PaymentClient bean] --> SVC
+    SVC --> CTRL[OrderController bean]
+  end
+  YOU([Your code only declares constructors]) -.-> Container
+</pre>
+<div class="callout ok"><b class="t">Prefer constructor injection</b>
+Fields can be <code>final</code>, the object is never half-built, and in a unit test you just call <code>new OrderService(fakeRepo, fakePayments)</code>. Field injection (<code>@Autowired private Repo repo;</code>) hides dependencies and needs reflection in tests.</div>
+
+<h2>Beans and stereotype annotations</h2>
+<p>Spring finds your classes by <b>component scanning</b>: it scans the package of your <code>@SpringBootApplication</code> class and all sub-packages for these annotations:</p>
+<table>
+<tr><th>Annotation</th><th>Layer</th><th>Extra behaviour</th></tr>
+<tr><td><code>@Component</code></td><td>Generic</td><td>None. The others are specializations of it.</td></tr>
+<tr><td><code>@Service</code></td><td>Business logic</td><td>None (documentation only).</td></tr>
+<tr><td><code>@Repository</code></td><td>Data access</td><td>Translates database exceptions into Spring's <code>DataAccessException</code> hierarchy.</td></tr>
+<tr><td><code>@Controller</code> / <code>@RestController</code></td><td>Web</td><td>Methods handle HTTP requests. <code>@RestController</code> = <code>@Controller</code> + <code>@ResponseBody</code> (return values become JSON).</td></tr>
+<tr><td><code>@Configuration</code> + <code>@Bean</code></td><td>Config</td><td>Methods that return objects you want as beans, typically for third-party classes you cannot annotate.</td></tr>
+</table>
+<pre><code class="language-java">@Configuration
+public class HttpConfig {
+    @Bean // the returned object becomes a bean named "restClient"
+    RestClient restClient(RestClient.Builder builder) {   // Boot auto-configures the Builder
+        return builder.baseUrl("https://payments.example.com").build();
+    }
+}</code></pre>
+
+<h3>Typical layered application</h3>
+<pre class="mermaid">
+flowchart TB
+  HTTP[HTTP request JSON] --> C["@RestController<br/>validates input, maps DTOs"]
+  C --> S["@Service<br/>business rules, @Transactional"]
+  S --> R["@Repository / Spring Data JPA interface<br/>SQL via Hibernate"]
+  R --> DB[(Database)]
+  S --> EXT[RestClient / WebClient<br/>to other services]
+  S --> MQ[RabbitTemplate<br/>publish messages]
+</pre>
+
+<h2>A minimal but complete Spring Boot app</h2>
+<pre><code class="language-xml">&lt;!-- pom.xml (the important parts) --&gt;
+&lt;parent&gt;
+  &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+  &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+  &lt;version&gt;4.0.0&lt;/version&gt;      &lt;!-- pins versions of hundreds of libraries (a BOM) --&gt;
+&lt;/parent&gt;
+&lt;properties&gt;&lt;java.version&gt;25&lt;/java.version&gt;&lt;/properties&gt;
+&lt;dependencies&gt;
+  &lt;dependency&gt;&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;&lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;&lt;/dependency&gt; &lt;!-- "starter-web" in Boot 3 --&gt;
+  &lt;dependency&gt;&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;&lt;artifactId&gt;spring-boot-starter-data-jpa&lt;/artifactId&gt;&lt;/dependency&gt;
+  &lt;dependency&gt;&lt;groupId&gt;com.h2database&lt;/groupId&gt;&lt;artifactId&gt;h2&lt;/artifactId&gt;&lt;scope&gt;runtime&lt;/scope&gt;&lt;/dependency&gt;
+&lt;/dependencies&gt;</code></pre>
+<pre><code class="language-java">@SpringBootApplication   // = @SpringBootConfiguration + @EnableAutoConfiguration + @ComponentScan
+public class ShopApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ShopApplication.class, args); // starts the container and the embedded Tomcat
+    }
+}
+
+@Entity                               // JPA: this class maps to table "product"
+class Product {
+    @Id @GeneratedValue Long id;
+    String name;
+    BigDecimal price;
+    protected Product() {}            // JPA needs a no-arg constructor
+    Product(String name, BigDecimal price) { this.name = name; this.price = price; }
+}
+
+interface ProductRepository extends JpaRepository&lt;Product, Long&gt; {   // Spring Data writes the implementation
+    List&lt;Product&gt; findByNameContainingIgnoreCase(String part);         // query derived from the method name
+}
+
+record ProductDto(Long id, String name, BigDecimal price) {}            // what the API returns
+
+@Service
+class ProductService {
+    private final ProductRepository repo;
+    ProductService(ProductRepository repo) { this.repo = repo; }
+
+    @Transactional(readOnly = true)
+    List&lt;ProductDto&gt; search(String q) {
+        return repo.findByNameContainingIgnoreCase(q).stream()
+                   .map(p -&gt; new ProductDto(p.id, p.name, p.price)).toList();
+    }
+}
+
+@RestController
+@RequestMapping("/products")
+class ProductController {
+    private final ProductService service;
+    ProductController(ProductService service) { this.service = service; }
+
+    @GetMapping                                   // GET /products?q=phone
+    List&lt;ProductDto&gt; search(@RequestParam String q) { return service.search(q); }
+}</code></pre>
+
+<h2>What happens at startup</h2>
+<pre class="mermaid">
+flowchart TB
+  A["java -jar app.jar → main() → SpringApplication.run()"] --> B[Read config: application.yml, profiles, env vars, command line]
+  B --> C[Component scan: find @Component / @Service / @Controller / @Configuration classes]
+  C --> D[Auto-configuration: evaluate @Conditional rules, add default beans]
+  D --> E[Create bean definitions, then instantiate singletons in dependency order]
+  E --> F[BeanPostProcessors wrap beans in proxies: @Transactional, @Async, @Cacheable, security]
+  F --> G[Start embedded web server: Tomcat on port 8080 or Netty]
+  G --> H[ApplicationReadyEvent: app is serving traffic]
+</pre>
+
+<h2 id="request-flow">How one HTTP request flows through Spring MVC</h2>
+<p>This is the single most useful diagram for understanding threads in Spring MVC: <b>the same Tomcat worker thread</b> carries the request through every layer, waits on the database, and writes the response.</p>
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cl as Client
+  participant T as Tomcat (thread http-nio-8080-exec-7)
+  participant F as Filters (Security, logging)
+  participant D as DispatcherServlet
+  participant Ctl as @RestController
+  participant Svc as @Service (proxy)
+  participant DB as Database
+  Cl->>T: GET /products?q=phone
+  T->>F: same thread
+  F->>D: same thread
+  D->>D: HandlerMapping finds controller method
+  D->>Ctl: argument resolvers bind @RequestParam, @RequestBody
+  Ctl->>Svc: service.search("phone")
+  Svc->>DB: SQL (thread BLOCKS while waiting)
+  DB-->>Svc: rows
+  Svc-->>Ctl: List of DTO
+  Ctl-->>D: return value
+  D-->>T: HttpMessageConverter (Jackson) writes JSON
+  T-->>Cl: 200 OK + JSON
+</pre>
+<ul>
+<li><b>DispatcherServlet</b>: the "front controller": the single servlet that receives every request and routes it to your controller method.</li>
+<li><b>HandlerMapping</b>: finds which method matches URL + HTTP verb.</li>
+<li><b>HttpMessageConverter</b>: converts JSON ↔ Java objects (Jackson).</li>
+<li>Tomcat has a pool of worker threads (default max <b>200</b>, property <code>server.tomcat.threads.max</code>). With 200 slow requests in flight, request 201 waits in the queue. That limit is the reason virtual threads and WebFlux exist (pages <a href="multithreading.html">1</a> and <a href="webflux.html">2</a>).</li>
+</ul>
+
+<h2 id="proxies">Proxies and AOP: the magic behind the annotations</h2>
+<p>When a bean has <code>@Transactional</code>, <code>@Async</code>, <code>@Cacheable</code>, <code>@PreAuthorize</code>…, the bean other classes receive is not your object, it is a <b>proxy</b> (a generated subclass, made with CGLIB) that wraps it:</p>
+<figure>
+<svg viewBox="0 0 760 210" role="img" aria-label="Controller calls proxy, proxy opens transaction then calls the real service">
+  <rect class="box" x="10" y="70" width="150" height="60" rx="8"/><text x="85" y="105" text-anchor="middle">OrderController</text>
+  <rect class="box2" x="240" y="30" width="260" height="140" rx="10"/><text x="370" y="52" text-anchor="middle" font-weight="600">Proxy (OrderService$$SpringCGLIB)</text>
+  <text x="258" y="80" font-size="13">1. begin transaction</text>
+  <text x="258" y="150" font-size="13">3. commit / rollback</text>
+  <rect class="box3" x="580" y="70" width="170" height="60" rx="8"/><text x="665" y="96" text-anchor="middle">real OrderService</text><text x="665" y="116" text-anchor="middle" font-size="12" class="muted">your code</text>
+  <line class="line" x1="160" y1="100" x2="238" y2="100" marker-end="url(#ah)"/>
+  <line class="line" x1="500" y1="100" x2="578" y2="100" marker-end="url(#ah)"/><text x="540" y="92" text-anchor="middle" font-size="12">2. call</text>
+  <path class="dash" d="M665,130 C665,190 380,200 330,172" marker-end="url(#ah)"/>
+  <text x="560" y="200" font-size="12" class="muted" text-anchor="middle">this.otherMethod() bypasses the proxy</text>
+</svg>
+<figcaption>Calls coming <em>from outside</em> go through the proxy. Calls from inside the same object (<code>this.method()</code>) do not.</figcaption>
+</figure>
+<div class="callout warn"><b class="t">The self-invocation trap</b>
+<pre><code class="language-java">@Service
+class ReportService {
+    public void generateAll() {
+        for (var id : ids) generate(id);   // this.generate(): NO proxy → no @Async, no new transaction!
+    }
+    @Async @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void generate(long id) { ... }
+}</code></pre>
+Fix: move <code>generate</code> to another bean and inject it.</div>
+
+<h2 id="config">Configuration: application.yml, profiles, properties</h2>
+<pre><code class="language-yaml"># src/main/resources/application.yml (defaults for every environment)
+server:
+  port: 8080
+spring:
+  application:
+    name: orders
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: orders
+    password: ${DB_PASSWORD}          # from an environment variable
+shop:
+  payment:
+    base-url: https://pay.dev.example.com
+    timeout: 2s
+---
+# active only when the "prod" profile is on: SPRING_PROFILES_ACTIVE=prod
+spring:
+  config:
+    activate:
+      on-profile: prod
+shop:
+  payment:
+    base-url: https://pay.example.com</code></pre>
+<pre><code class="language-java">@ConfigurationProperties(prefix = "shop.payment")   // type-safe binding of the block above
+public record PaymentProperties(URI baseUrl, Duration timeout) {}
+
+@SpringBootApplication
+@ConfigurationPropertiesScan            // registers all @ConfigurationProperties records
+public class ShopApplication { ... }</code></pre>
+<p>Environment variables override the file using "relaxed binding": <code>SHOP_PAYMENT_TIMEOUT=5s</code> overrides <code>shop.payment.timeout</code>. More in <a href="q-spring.html#q38">Q38</a>.</p>
+
+<h2 id="singletons">Beans are singletons, so they are shared by all threads</h2>
+<p>By default there is <b>one</b> instance of each bean, and every request thread calls it at the same time. So:</p>
+<div class="grid2">
+<div class="callout bad"><b class="t">Wrong: mutable state in a singleton</b>
+<pre><code class="language-java">@Service
+class PriceService {
+    private BigDecimal lastPrice;          // shared by 200 threads!
+    BigDecimal quote(String sku) {
+        lastPrice = load(sku);             // thread A writes
+        return lastPrice.multiply(FX);     // thread B may have overwritten it
+    }
+}</code></pre></div>
+<div class="callout ok"><b class="t">Right: keep state in local variables</b>
+<pre><code class="language-java">@Service
+class PriceService {
+    private final PriceRepository repo;    // final, injected, itself thread-safe
+    BigDecimal quote(String sku) {
+        BigDecimal price = load(sku);      // local: each thread has its own stack
+        return price.multiply(FX);
+    }
+}</code></pre></div>
+</div>
+<p>When you really need shared mutable state (counters, caches), use the tools from <a href="sync-tools.html">page 3</a>.</p>
+
+<h2>Cheat sheet of annotations you will meet</h2>
+<table>
+<tr><th>Annotation</th><th>What it does</th></tr>
+<tr><td><code>@SpringBootApplication</code></td><td>Entry point: configuration + auto-configuration + component scan.</td></tr>
+<tr><td><code>@RestController</code>, <code>@GetMapping</code>, <code>@PostMapping</code>, <code>@PathVariable</code>, <code>@RequestParam</code>, <code>@RequestBody</code></td><td>Web endpoints and how parameters are bound.</td></tr>
+<tr><td><code>@Valid</code> + <code>@NotNull</code>, <code>@Size</code>…</td><td>Bean Validation of request bodies; failures → 400.</td></tr>
+<tr><td><code>@Transactional</code></td><td>Runs the method in a database transaction (<a href="q-spring.html#q34">Q34</a>).</td></tr>
+<tr><td><code>@Async</code> (+ <code>@EnableAsync</code>)</td><td>Runs the method on another thread (<a href="multithreading.html#spring">page 1</a>).</td></tr>
+<tr><td><code>@Scheduled</code> (+ <code>@EnableScheduling</code>)</td><td>Runs a method periodically (cron, fixed rate, fixed delay).</td></tr>
+<tr><td><code>@Cacheable</code>, <code>@CacheEvict</code> (+ <code>@EnableCaching</code>)</td><td>Caching abstraction (<a href="q-distributed.html#q53">Q53</a>).</td></tr>
+<tr><td><code>@Value("${x}")</code>, <code>@ConfigurationProperties</code></td><td>Inject configuration values.</td></tr>
+<tr><td><code>@Profile("prod")</code></td><td>Create the bean only when that profile is active.</td></tr>
+<tr><td><code>@ConditionalOnProperty</code>, <code>@ConditionalOnMissingBean</code>…</td><td>Conditions used by auto-configuration (<a href="q-spring.html#q32">Q32</a>).</td></tr>
+<tr><td><code>@PostConstruct</code> / <code>@PreDestroy</code></td><td>Run code after the bean is ready / before it is destroyed (<a href="q-spring.html#q33">Q33</a>).</td></tr>
+<tr><td><code>@SpringBootTest</code>, <code>@WebMvcTest</code>, <code>@DataJpaTest</code>, <code>@MockitoBean</code></td><td>Testing (<a href="q-spring.html#q44">Q44</a>).</td></tr>
+</table>
+</main>
+</body>
+</html>
