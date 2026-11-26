@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Service Map</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- The viewer is fixed; the agent writes only data/*.js. Opens from disk (double-click), no server needed. -->
+<div class="shell">
+  <aside class="side" id="side">
+    <a class="brand" href="#/"><span class="brand-mark" aria-hidden="true"></span><span id="brand-name">Service Map</span></a>
+    <label class="search">
+      <span class="visually-hidden">Search services, endpoints, tables, topics</span>
+      <input id="search" type="search" placeholder="Search  /orders, billing, outbox…" autocomplete="off">
+    </label>
+    <div id="results" class="results" hidden></div>
+    <nav id="nav" aria-label="Map"></nav>
+  </aside>
+  <main id="main" tabindex="-1"><p class="loading">Loading the map…</p></main>
+</div>
+<script src="vendor/mermaid.min.js"></script>
+<script src="vendor/cytoscape.min.js"></script>
+<script src="app.js"></script>
+<script src="data/repos.js"></script>
+<script src="data/journeys.js"></script>
+</body>
+</html>

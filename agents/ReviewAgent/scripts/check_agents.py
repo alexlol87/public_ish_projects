@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Checks the custom agents in agents/ReviewAgent/.github/agents/ before VS Code gets to ignore a mistake silently.
 
-    python3 scripts/check_agents.py [path/to/.github/agents]
+    python3 scripts/check_agents.py [path/to/.github/agents] [--may-edit]
 
 VS Code and Copilot skip an unknown tool name without a warning, and treat every .md file in .github/agents/ as an
 agent. So this checks that each file is an .agent.md with a name and a description, that every tool is a known tool
 or tool set, that no tool can edit existing files or delegate (a reviewer stays read-only; it may only create its
-report file), that the front matter has no unknown keys and the body fits GitHub's 30,000 characters, and that each
+report file; --may-edit also allows edit/editFiles, for an agent that keeps its own docs up to date), that the front matter has no unknown keys and the body fits GitHub's 30,000 characters, and that each
 handoff has a label and a target agent. Needs PyYAML.
 """
 import pathlib
@@ -15,7 +15,9 @@ import sys
 import yaml
 
 # Another agent folder's .github/agents can be passed as the first argument (TesterAgent's CI does).
-AGENTS = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else (
+ARGS = [a for a in sys.argv[1:] if a != "--may-edit"]
+MAY_EDIT = "--may-edit" in sys.argv[1:]
+AGENTS = pathlib.Path(ARGS[0]).resolve() if ARGS else (
     pathlib.Path(__file__).resolve().parent.parent / ".github" / "agents")
 
 # VS Code's tools reference (docs/agents/reference/tools-reference.md, approved 2026-09-30) plus the primary aliases
@@ -80,12 +82,14 @@ def problems(path):
     known = {t.lower() for t in KNOWN_TOOLS}
     for tool in tools:
         name = str(tool)
-        if name in WRITE_TOOLS or (name.startswith("edit/") and name != "edit/createFile"):
+        allowed = {"edit/createFile", "edit/editFiles"} if MAY_EDIT else {"edit/createFile"}
+        if name in WRITE_TOOLS or (name.startswith("edit/") and name not in allowed):
             yield f"tool {tool!r} can edit files or delegate"
         elif name.lower() not in known and "/" not in name:
             yield f"unknown tool {tool!r} (VS Code would ignore it)"
-    if "edit/createFile" in tools and not any(marker in body for marker in ("REVIEW-", "RUN-ORDER")):
-        yield "edit/createFile is only for the agent's own output files; the body must describe them (REVIEW-..., RUN-ORDER.md)"
+    if {"edit/createFile", "edit/editFiles"} & set(tools) and not any(
+            marker in body for marker in ("REVIEW-", "RUN-ORDER", "service-map/data/")):
+        yield "edit tools are only for the agent's own output files; the body must describe them (REVIEW-..., RUN-ORDER.md, service-map/data/)"
     for handoff in meta.get("handoffs") or []:
         if not isinstance(handoff, dict) or not handoff.get("label") or not handoff.get("agent"):
             yield f"handoff without a label or an agent: {handoff!r}"
